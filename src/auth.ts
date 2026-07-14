@@ -4,17 +4,20 @@ import GitHub from "next-auth/providers/github";
 import Google from "next-auth/providers/google";
 
 import { db } from "@/lib/db";
-import { serverEnv } from "@/lib/env";
+import { optionalEnv, serverEnv } from "@/lib/env";
 
 /**
- * Which social providers have a full credential pair configured.
- * Reads process.env directly (not serverEnv) so it is safe at build time
- * and usable from server components to hide the sign-in affordance.
+ * Which social providers have a full credential pair configured. Used by the
+ * sign-in affordance (M1). Build-time safe (no required-env validation), but
+ * shares optionalEnv's trim semantics with buildConfig below so "advertised"
+ * and "registered" can never disagree.
  */
 export function configuredProviders(): Array<"google" | "github"> {
   const list: Array<"google" | "github"> = [];
-  if (process.env.AUTH_GOOGLE_ID && process.env.AUTH_GOOGLE_SECRET) list.push("google");
-  if (process.env.AUTH_GITHUB_ID && process.env.AUTH_GITHUB_SECRET) list.push("github");
+  if (optionalEnv(process.env, "AUTH_GOOGLE_ID") && optionalEnv(process.env, "AUTH_GOOGLE_SECRET"))
+    list.push("google");
+  if (optionalEnv(process.env, "AUTH_GITHUB_ID") && optionalEnv(process.env, "AUTH_GITHUB_SECRET"))
+    list.push("github");
   return list;
 }
 

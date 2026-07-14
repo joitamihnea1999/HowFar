@@ -18,7 +18,25 @@ test("auth endpoint serves without OAuth credentials configured", async ({ reque
   expect(providers.status()).toBe(200);
 });
 
+test("tile route serves the pmtiles archive via byte ranges", async ({ request }) => {
+  const response = await request.get("/api/tiles", { headers: { Range: "bytes=0-127" } });
+  expect(response.status()).toBe(206);
+  expect(response.headers()["content-range"]).toMatch(/^bytes 0-127\/\d+$/);
+  const body = await response.body();
+  expect(body.length).toBe(128);
+  expect(body.subarray(0, 7).toString("ascii")).toBe("PMTiles");
+
+  const overCap = await request.get("/api/tiles", { headers: { Range: "bytes=0-" } });
+  expect(overCap.status()).toBe(416); // whole-archive range exceeds the DoS cap
+});
+
 test("landing page renders the map shell and finishes loading tiles", async ({ page }) => {
+  const consoleErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => consoleErrors.push(String(error)));
+
   await page.goto("/");
 
   await expect(page.getByRole("heading", { name: "HowFar" })).toBeVisible();
@@ -31,6 +49,10 @@ test("landing page renders the map shell and finishes loading tiles", async ({ p
 
   // OSM attribution is a ToS requirement — assert it is really in the DOM.
   await expect(page.locator(".maplibregl-ctrl-attrib")).toContainText("OpenStreetMap");
+
+  // MapLibre reports tile/source failures via console.error — a "loaded" map
+  // that errored on sources must fail here, not pass silently.
+  expect(consoleErrors).toEqual([]);
 
   await page.screenshot({ path: "e2e/artifacts/landing.png", fullPage: true });
 });

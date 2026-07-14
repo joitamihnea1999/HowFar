@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Fetch the self-hosted Bucharest basemap extract (Protomaps daily build).
 # Usage: scripts/fetch-tiles.sh [BUILD_DATE]   e.g. 20260713 (default: yesterday UTC)
+# The build date is PINNED in .github/workflows/ci.yml (TILES_BUILD) and in
+# railway.json's buildCommand — bump both together, deliberately.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

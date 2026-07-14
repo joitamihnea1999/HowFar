@@ -99,8 +99,13 @@ calls. Go/no-go bar: ≥100 fresh addresses/day headroom on every provider. **Al
   out.pmtiles --bbox=…` pulls a Bucharest-region extract efficiently over HTTP (tens of MB).
   Served by our own app (single static file + HTTP Range route) → **keyless, quota-less, zero
   client credentials**, full styling control (custom dark theme for the "visually striking"
-  goal). Not "heavy geo infra": no extra server, just a file. Basemap style + self-hosted
-  glyphs/sprites from the protomaps basemaps assets.
+  goal). Not "heavy geo infra": no extra server, just a file. Basemap style from
+  `@protomaps/basemaps`.
+  *Known gap (parked for M4):* font glyphs + sprite are still fetched by the browser from
+  `protomaps.github.io/basemaps-assets` — keyless static files, so the constraint's key-safety
+  intent holds, but the strict "all external calls happen server-side" reading does not yet;
+  self-hosting them in `public/` is the M4 polish item (also removes a third-party availability
+  dependency).
 
 ### Hosting — Railway (fixed by brief) — cost note
 - Pricing (<https://docs.railway.com/pricing/plans>): Trial = one-time $5 credit, services

@@ -1,5 +1,8 @@
-import { promises as fs } from "node:fs";
+import { createReadStream, promises as fs } from "node:fs";
 import path from "node:path";
+import { Readable } from "node:stream";
+
+import { parseByteRange } from "@/lib/byte-range";
 
 // Serves the self-hosted Protomaps archive with HTTP Range support (the
 // pmtiles client reads the archive via byte-range requests). Keyless by
@@ -8,29 +11,11 @@ import path from "node:path";
 
 const TILES_PATH = path.join(process.cwd(), "data", "tiles", "bucharest.pmtiles");
 
+// pmtiles range requests are small (header ~16KB, tile batches well under 1MB);
+// the cap keeps a hostile client from turning ranges into whole-archive buffers.
+const MAX_RANGE_BYTES = 8 * 1024 * 1024;
+
 export const dynamic = "force-dynamic";
-
-interface ByteRange {
-  start: number;
-  end: number;
-}
-
-function parseRange(header: string, size: number): ByteRange | null {
-  const explicit = /^bytes=(\d+)-(\d*)$/.exec(header);
-  if (explicit) {
-    const start = Number(explicit[1]);
-    const end = explicit[2] ? Math.min(Number(explicit[2]), size - 1) : size - 1;
-    if (start >= size || start > end) return null;
-    return { start, end };
-  }
-  const suffix = /^bytes=-(\d+)$/.exec(header);
-  if (suffix) {
-    const length = Math.min(Number(suffix[1]), size);
-    if (length === 0) return null;
-    return { start: size - length, end: size - 1 };
-  }
-  return null;
-}
 
 async function statArchive() {
   try {
@@ -65,13 +50,14 @@ export async function GET(request: Request) {
 
   const rangeHeader = request.headers.get("range");
   if (!rangeHeader) {
-    const whole = await fs.readFile(TILES_PATH);
-    return new Response(new Uint8Array(whole), {
+    // Whole-archive requests (curl, crawlers) are streamed, never buffered.
+    const stream = Readable.toWeb(createReadStream(TILES_PATH)) as ReadableStream;
+    return new Response(stream, {
       headers: { ...baseHeaders(stat), "Content-Length": String(stat.size) },
     });
   }
 
-  const range = parseRange(rangeHeader, stat.size);
+  const range = parseByteRange(rangeHeader, stat.size, MAX_RANGE_BYTES);
   if (!range) {
     return new Response(null, {
       status: 416,
@@ -83,7 +69,13 @@ export async function GET(request: Request) {
   const handle = await fs.open(TILES_PATH, "r");
   try {
     const buffer = Buffer.alloc(length);
-    await handle.read(buffer, 0, length, range.start);
+    // fs promises reads may return short on some platforms — fill the slice.
+    let filled = 0;
+    while (filled < length) {
+      const { bytesRead } = await handle.read(buffer, filled, length - filled, range.start + filled);
+      if (bytesRead === 0) return new Response(null, { status: 500 }); // file shrank mid-read
+      filled += bytesRead;
+    }
     return new Response(new Uint8Array(buffer), {
       status: 206,
       headers: {

@@ -40,10 +40,17 @@ function required(source: EnvSource, name: string, hint: string): string {
   return value;
 }
 
-function optional(source: EnvSource, name: string): string | undefined {
+/**
+ * Exported so build-time-safe callers (e.g. configuredProviders) share the
+ * exact same present/absent semantics as parseServerEnv — a whitespace-only
+ * var must never count as configured in one place and absent in another.
+ */
+export function optionalEnv(source: EnvSource, name: string): string | undefined {
   const value = source[name]?.trim();
   return value ? value : undefined;
 }
+
+const optional = optionalEnv;
 
 export function parseServerEnv(source: EnvSource = process.env): ServerEnv {
   const databaseUrl = required(
