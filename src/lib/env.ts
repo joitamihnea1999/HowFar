@@ -27,18 +27,25 @@ export class EnvError extends Error {
   }
 }
 
-function required(source: NodeJS.ProcessEnv, name: string, hint: string): string {
+/**
+ * Plain record instead of NodeJS.ProcessEnv: Next's typed-env augmentation
+ * makes ProcessEnv strict (NODE_ENV required) depending on build state, which
+ * would make callers/tests type-check differently before vs after a build.
+ */
+export type EnvSource = Record<string, string | undefined>;
+
+function required(source: EnvSource, name: string, hint: string): string {
   const value = source[name]?.trim();
   if (!value) throw new EnvError(name, hint);
   return value;
 }
 
-function optional(source: NodeJS.ProcessEnv, name: string): string | undefined {
+function optional(source: EnvSource, name: string): string | undefined {
   const value = source[name]?.trim();
   return value ? value : undefined;
 }
 
-export function parseServerEnv(source: NodeJS.ProcessEnv = process.env): ServerEnv {
+export function parseServerEnv(source: EnvSource = process.env): ServerEnv {
   const databaseUrl = required(
     source,
     "DATABASE_URL",

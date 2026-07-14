@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  # Pinned Protomaps daily build → deterministic tiles + effective caching.
+  # Bump deliberately when a fresher basemap is wanted.
+  TILES_BUILD: "20260713"
+
+jobs:
+  checks:
+    name: lint · typecheck · unit · build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  e2e:
+    name: e2e (Playwright + MySQL)
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: howfar-root
+          MYSQL_DATABASE: howfar
+          MYSQL_USER: howfar
+          MYSQL_PASSWORD: howfar
+        ports:
+          - "3307:3306"
+        # Job steps only start once the service reports healthy.
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -phowfar-root"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=20
+    env:
+      DATABASE_URL: mysql://howfar:howfar@127.0.0.1:3307/howfar
+      AUTH_SECRET: ci-only-secret-not-a-real-deployment
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Cache basemap extract
+        uses: actions/cache@v4
+        with:
+          path: data/tiles
+          key: tiles-${{ env.TILES_BUILD }}-v1
+      - name: Fetch basemap extract (if not cached)
+        run: |
+          if [ ! -f data/tiles/bucharest.pmtiles ]; then
+            npm run tiles:fetch -- "$TILES_BUILD"
+          fi
+      - name: Apply migrations to the CI database
+        run: npx prisma migrate deploy
+      - run: npm run build
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            e2e/artifacts/
+          retention-days: 7
