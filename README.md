@@ -30,10 +30,10 @@ API keys anywhere**.
 
 ## Local development
 
-Requirements: Node ≥ 22 (`.nvmrc`), Docker.
+Requirements: Node ≥ 24 (`.nvmrc`), Docker.
 
 ```bash
-nvm use                     # or any Node 22+
+nvm use                     # or any Node 24+
 npm ci                      # also runs prisma generate
 docker compose up -d db     # MySQL 8.4 on localhost:3307
 cp .env.example .env        # fill AUTH_SECRET (npx auth secret); defaults fit the compose DB
