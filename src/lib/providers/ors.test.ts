@@ -56,17 +56,51 @@ describe("walkingIsochrone", () => {
     await expect(walkingIsochrone(44.4, 26.1)).rejects.toThrow(/429/);
   });
 
-  it("filters malformed geometry and throws when no valid rings remain", async () => {
+  it("throws when the 3 requested rings (15/30/45) are not all present", async () => {
+    // one malformed → 0 valid rings
     providerFetch.mockResolvedValue(
       orsResponse([{ properties: { value: 900 }, geometry: { type: "LineString", coordinates: [] } }]),
     );
-    await expect(walkingIsochrone(44.4, 26.1)).rejects.toThrow(/no isochrone/i);
+    await expect(walkingIsochrone(44.4, 26.1)).rejects.toThrow(/unexpected rings/i);
   });
 
-  it("serves a cache hit without a second upstream fetch", async () => {
+  it("throws when a requested range is missing (only 2 rings)", async () => {
+    providerFetch.mockResolvedValue(orsResponse([poly(900), poly(1800)]));
+    await expect(walkingIsochrone(44.4, 26.1)).rejects.toThrow(/unexpected rings/i);
+  });
+
+  it("throws when a range is duplicated instead of the full 15/30/45 set", async () => {
+    providerFetch.mockResolvedValue(orsResponse([poly(900), poly(900), poly(1800)]));
+    await expect(walkingIsochrone(44.4, 26.1)).rejects.toThrow(/unexpected rings/i);
+  });
+
+  it("wraps a network/fetch failure as ProviderError (→ 502)", async () => {
+    providerFetch.mockImplementation(async () => {
+      throw new TypeError("network down");
+    });
+    await expect(walkingIsochrone(44.4, 26.1)).rejects.toThrow(/request failed/i);
+  });
+
+  it("wraps a malformed-JSON parse failure as ProviderError", async () => {
+    providerFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.reject(new SyntaxError("bad json")),
+    });
+    await expect(walkingIsochrone(44.4, 26.1)).rejects.toThrow(/request failed/i);
+  });
+
+  it("rounds a high-precision origin to 5 decimals (T9)", async () => {
     providerFetch.mockResolvedValue(orsResponse([poly(900), poly(1800), poly(2700)]));
-    await walkingIsochrone(44.4, 26.1);
-    await walkingIsochrone(44.4, 26.1);
+    const result = await walkingIsochrone(44.426812345, 26.102534567);
+    expect(result.origin).toEqual({ lat: 44.42681, lng: 26.10253 });
+  });
+
+  it("serves a cache hit without a second fetch and returns the same value", async () => {
+    providerFetch.mockResolvedValue(orsResponse([poly(900), poly(1800), poly(2700)]));
+    const first = await walkingIsochrone(44.4, 26.1);
+    const second = await walkingIsochrone(44.4, 26.1);
     expect(providerFetch).toHaveBeenCalledTimes(1);
+    expect(second).toEqual(first);
   });
 });

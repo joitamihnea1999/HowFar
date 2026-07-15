@@ -10,10 +10,11 @@ import { providerFetch, ProviderError, roundCoord } from "@/lib/providers/http";
 
 const URL = "https://api.openrouteservice.org/v2/isochrones/foot-walking";
 const HOST = "api.openrouteservice.org";
-const MIN_INTERVAL_MS = 250;
+const MIN_INTERVAL_MS = 1500; // free tier ~40 isochrone req/min (PROVIDERS.md) ⇒ ≥1.5s spacing
 const TIMEOUT_MS = 12_000;
 const TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const RANGES_SECONDS = [900, 1800, 2700]; // 15 / 30 / 45 minutes
+const EXPECTED_MINUTES = [15, 30, 45];
 
 // Loose GeoJSON typing to avoid pulling in @types/geojson; the client passes
 // these straight into a MapLibre GeoJSON source.
@@ -62,23 +63,38 @@ export async function walkingIsochrone(latRaw: number, lngRaw: number): Promise<
   const apiKey = serverEnv().orsApiKey;
   if (!apiKey) throw new ProviderError("ORS_API_KEY is not configured");
 
-  const res = await providerFetch(URL, {
-    rateHost: HOST,
-    minIntervalMs: MIN_INTERVAL_MS,
-    timeoutMs: TIMEOUT_MS,
-    init: {
-      method: "POST",
-      // ORS isochrones serves application/geo+json; do NOT send Accept: application/json (→ 406).
-      headers: { Authorization: apiKey, "Content-Type": "application/json" },
-      // ORS expects [lng, lat] order.
-      body: JSON.stringify({ locations: [[lng, lat]], range: RANGES_SECONDS }),
-    },
-  });
-  if (!res.ok) throw new ProviderError(`openrouteservice responded ${res.status}`);
+  // A stalled/unreachable/garbled upstream is a provider error (→ 502), not a 500.
+  let body: { features?: OrsFeature[] };
+  try {
+    const res = await providerFetch(URL, {
+      rateHost: HOST,
+      minIntervalMs: MIN_INTERVAL_MS,
+      timeoutMs: TIMEOUT_MS,
+      init: {
+        method: "POST",
+        // ORS isochrones serves application/geo+json; do NOT send Accept: application/json (→ 406).
+        headers: { Authorization: apiKey, "Content-Type": "application/json" },
+        // ORS expects [lng, lat] order.
+        body: JSON.stringify({ locations: [[lng, lat]], range: RANGES_SECONDS }),
+      },
+    });
+    if (!res.ok) throw new ProviderError(`openrouteservice responded ${res.status}`);
+    body = (await res.json()) as { features?: OrsFeature[] };
+  } catch (err) {
+    if (err instanceof ProviderError) throw err;
+    throw new ProviderError(`openrouteservice request failed: ${(err as Error).message}`);
+  }
 
-  const body = (await res.json()) as { features?: OrsFeature[] };
   const rings = normalize(body.features ?? []);
-  if (rings.length === 0) throw new ProviderError("openrouteservice returned no isochrone rings");
+  // Contract: exactly one valid ring per requested range (15/30/45), ascending.
+  const gotExpected =
+    rings.length === EXPECTED_MINUTES.length &&
+    EXPECTED_MINUTES.every((m, i) => rings[i]?.minutes === m);
+  if (!gotExpected) {
+    throw new ProviderError(
+      `openrouteservice returned unexpected rings: [${rings.map((r) => r.minutes).join(", ")}]`,
+    );
+  }
 
   const result: IsochroneResult = { origin: { lat, lng }, rings };
   await setCached(key, result, new Date(Date.now() + TTL_MS));

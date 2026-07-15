@@ -80,7 +80,16 @@ export default function AppMap() {
     });
     mapRef.current = map;
 
-    function renderSelection(point: GeoPoint, rings: Ring[]) {
+    // Buffer the latest selection until the style (and isochrone source/layers)
+    // exist — a search that resolves before `load` would otherwise drop its rings.
+    let styleLoaded = false;
+    let pending: { origin: { lat: number; lng: number }; label: string; rings: Ring[] } | null = null;
+
+    function renderSelection(origin: { lat: number; lng: number }, label: string, rings: Ring[]) {
+      if (!styleLoaded) {
+        pending = { origin, label, rings };
+        return;
+      }
       const source = map.getSource("isochrone") as maplibregl.GeoJSONSource | undefined;
       source?.setData({
         type: "FeatureCollection",
@@ -92,11 +101,22 @@ export default function AppMap() {
       } as GeoJSON.FeatureCollection);
 
       if (!markerRef.current) markerRef.current = new maplibregl.Marker({ color: "#2dd4bf" });
-      markerRef.current.setLngLat([point.lng, point.lat]).addTo(map);
-      map.flyTo({ center: [point.lng, point.lat], zoom: 13, essential: true });
+      // Marker sits at the isochrone's rounded origin (T9) so it matches the rings.
+      markerRef.current.setLngLat([origin.lng, origin.lat]).addTo(map);
+      map.flyTo({ center: [origin.lng, origin.lat], zoom: 13, essential: true });
 
-      el.dataset.selection = point.label;
+      el.dataset.selection = label;
       el.dataset.isochroneRings = String(rings.length);
+    }
+
+    function clearSelection() {
+      pending = null;
+      (map.getSource("isochrone") as maplibregl.GeoJSONSource | undefined)?.setData(
+        EMPTY_FC as GeoJSON.FeatureCollection,
+      );
+      markerRef.current?.remove();
+      delete el.dataset.selection;
+      delete el.dataset.isochroneRings;
     }
 
     async function select(input: SelectInput) {
@@ -113,29 +133,46 @@ export default function AppMap() {
         setMessage(msg);
       };
 
+      clearSelection(); // M7: drop the previous marker/rings the moment a new selection starts
+      setLabel(null);
       setStatus("loading");
       setMessage(null);
 
       try {
-        const pointUrl =
-          input.kind === "search"
-            ? `/api/geocode?q=${encodeURIComponent(input.query)}`
-            : `/api/reverse?lat=${input.lat}&lng=${input.lng}`;
-        const pointRes = await fetch(pointUrl, { signal });
-        if (stale()) return;
-        if (pointRes.status === 404) return fail("No place found there.");
-        if (pointRes.status === 422) return fail("That spot is outside Bucharest.");
-        if (!pointRes.ok) return fail("Could not look that up. Try again.");
-        const point = (await pointRes.json()) as GeoPoint;
+        // Resolve the origin (what ORS + the marker use) and its label.
+        let origin: { lat: number; lng: number };
+        let label: string;
 
-        const isoRes = await fetch(`/api/isochrone?lat=${point.lat}&lng=${point.lng}`, { signal });
+        if (input.kind === "search") {
+          const res = await fetch(`/api/geocode?q=${encodeURIComponent(input.query)}`, { signal });
+          if (stale()) return;
+          if (res.status === 404) return fail("No place found there.");
+          if (res.status === 422) return fail("That spot is outside Bucharest.");
+          if (!res.ok) return fail("Could not look that up. Try again.");
+          const point = (await res.json()) as GeoPoint;
+          origin = { lat: point.lat, lng: point.lng };
+          label = point.label;
+        } else {
+          // A map click: the origin IS the clicked point (not a reverse-geocoded
+          // centroid); reverse geocoding only supplies the human-readable label.
+          origin = { lat: input.lat, lng: input.lng };
+          label = "Selected point";
+          const res = await fetch(`/api/reverse?lat=${input.lat}&lng=${input.lng}`, { signal });
+          if (stale()) return;
+          if (res.status === 422) return fail("That spot is outside Bucharest.");
+          if (res.ok) label = ((await res.json()) as GeoPoint).label;
+          // 404 (no address there) → keep the generic label but still show the reach.
+        }
+
+        const isoRes = await fetch(`/api/isochrone?lat=${origin.lat}&lng=${origin.lng}`, { signal });
         if (stale()) return;
+        if (isoRes.status === 422) return fail("That spot is outside Bucharest.");
         if (!isoRes.ok) return fail("Could not compute walking reach. Try again.");
-        const iso = (await isoRes.json()) as { rings: Ring[] };
+        const iso = (await isoRes.json()) as { origin: { lat: number; lng: number }; rings: Ring[] };
         if (stale()) return;
 
-        renderSelection(point, iso.rings);
-        setLabel(point.label);
+        renderSelection(iso.origin, label, iso.rings);
+        setLabel(label);
         setStatus("idle");
       } catch (err) {
         if ((err as Error)?.name === "AbortError" || stale()) return;
@@ -163,6 +200,12 @@ export default function AppMap() {
           filter,
           paint: { "line-color": ring.line, "line-width": 1.5, "line-opacity": 0.9 },
         });
+      }
+      styleLoaded = true;
+      if (pending) {
+        const p = pending;
+        pending = null;
+        renderSelection(p.origin, p.label, p.rings);
       }
       el.dataset.mapLoaded = "true";
     });

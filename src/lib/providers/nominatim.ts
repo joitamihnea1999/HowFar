@@ -1,5 +1,11 @@
 import { getCached, setCached } from "@/lib/api-cache";
+import { BUCHAREST_BBOX } from "@/lib/bounds";
 import { providerFetch, ProviderError, roundCoord, sha256Hex, USER_AGENT } from "@/lib/providers/http";
+
+// Nominatim viewbox is x1,y1,x2,y2 (two opposite corners); with bounded=1 it
+// restricts results to the box — biasing forward geocode to Bucharest so a
+// same-name hit elsewhere in Romania can't win and cause a false out-of-area.
+const VIEWBOX = `${BUCHAREST_BBOX.minLng},${BUCHAREST_BBOX.maxLat},${BUCHAREST_BBOX.maxLng},${BUCHAREST_BBOX.minLat}`;
 
 /**
  * Nominatim geocoding (server-side, cached). ToS: identifying User-Agent + ≤1
@@ -42,15 +48,22 @@ async function cachedLookup(key: string, url: string): Promise<GeoPoint | null> 
   const hit = await getCached<{ result: GeoPoint | null }>(key);
   if (hit) return hit.result;
 
-  const res = await providerFetch(url, {
-    rateHost: HOST,
-    minIntervalMs: MIN_INTERVAL_MS,
-    timeoutMs: TIMEOUT_MS,
-    init: { headers: { "User-Agent": USER_AGENT, Accept: "application/json" } },
-  });
-  if (!res.ok) throw new ProviderError(`nominatim responded ${res.status}`);
+  // A stalled/unreachable/garbled upstream is a provider error (→ 502), not a 500.
+  let data: NominatimRow[] | NominatimRow;
+  try {
+    const res = await providerFetch(url, {
+      rateHost: HOST,
+      minIntervalMs: MIN_INTERVAL_MS,
+      timeoutMs: TIMEOUT_MS,
+      init: { headers: { "User-Agent": USER_AGENT, Accept: "application/json" } },
+    });
+    if (!res.ok) throw new ProviderError(`nominatim responded ${res.status}`);
+    data = (await res.json()) as NominatimRow[] | NominatimRow;
+  } catch (err) {
+    if (err instanceof ProviderError) throw err;
+    throw new ProviderError(`nominatim request failed: ${(err as Error).message}`);
+  }
 
-  const data = (await res.json()) as NominatimRow[] | NominatimRow;
   const row = Array.isArray(data) ? data[0] : data;
   const result = normalize(row);
 
@@ -62,7 +75,7 @@ async function cachedLookup(key: string, url: string): Promise<GeoPoint | null> 
 export function geocode(query: string): Promise<GeoPoint | null> {
   const normalized = query.trim().toLowerCase();
   const key = `geo:fwd:${sha256Hex(normalized)}`;
-  const url = `${BASE}/search?format=jsonv2&countrycodes=ro&limit=1&q=${encodeURIComponent(query.trim())}`;
+  const url = `${BASE}/search?format=jsonv2&countrycodes=ro&viewbox=${VIEWBOX}&bounded=1&limit=1&q=${encodeURIComponent(query.trim())}`;
   return cachedLookup(key, url);
 }
 

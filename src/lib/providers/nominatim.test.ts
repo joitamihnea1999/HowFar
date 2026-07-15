@@ -80,3 +80,21 @@ describe("reverseGeocode", () => {
     });
   });
 });
+
+describe("error handling", () => {
+  it("wraps a network/fetch failure as ProviderError (→ 502)", async () => {
+    providerFetch.mockImplementation(async () => {
+      throw new TypeError("network down");
+    });
+    await expect(geocode("x")).rejects.toThrow(/request failed/i);
+  });
+
+  it("wraps a malformed-JSON parse failure as ProviderError", async () => {
+    providerFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.reject(new SyntaxError("bad json")),
+    });
+    await expect(geocode("y")).rejects.toThrow(/request failed/i);
+  });
+});
