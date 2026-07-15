@@ -7,10 +7,12 @@ public data.
 
 ![HowFar — dark Bucharest basemap](docs/screenshot.png)
 
-> **Status: M0 code-complete.** Stack scaffolded, self-hosted basemap rendering, MySQL +
-> Auth.js wired, tests green, CI workflow committed. Still pending to close M0 per the brief:
-> the first hosted CI run and the Railway deploy itself (hosting accounts pending — runbook
-> below). Address search, isochrones and scoring are next (M2 is the demo milestone). See
+> **Status: M0 complete — live at
+> [howfar-production-b31c.up.railway.app](https://howfar-production-b31c.up.railway.app).**
+> Stack scaffolded, self-hosted basemap rendering, MySQL + Auth.js wired, tests green,
+> [CI green](https://github.com/joitamihnea1999/HowFar/actions), deployed on Railway
+> (app + MySQL over private networking). Custom domain: not yet attached.
+> Address search, isochrones and scoring are next (M2 is the demo milestone). See
 > [`docs/BRIEF.md`](docs/BRIEF.md) for the product brief and
 > [`docs/PROVIDERS.md`](docs/PROVIDERS.md) for verified data-provider decisions.
 
