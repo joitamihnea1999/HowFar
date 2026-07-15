@@ -33,16 +33,15 @@ export async function getCached<T>(key: string, now: Date = new Date()): Promise
 
 /**
  * Insert or replace a cached response under `key`, valid until `expiresAt`.
- * `value` must be JSON-serialisable (it lands in a MySQL `JSON` column).
+ * `value` is caller-trust (like getCached's `<T>`): it must be JSON-serialisable
+ * — it lands in a MySQL `JSON` column — but the type is `unknown` so callers can
+ * store normalized provider payloads (with loosely-typed nested geometry, etc.)
+ * without fighting Prisma's strict InputJsonValue at every seam.
  */
-export async function setCached(
-  key: string,
-  value: Prisma.InputJsonValue,
-  expiresAt: Date,
-): Promise<void> {
+export async function setCached(key: string, value: unknown, expiresAt: Date): Promise<void> {
   await db().apiCache.upsert({
     where: { cacheKey: key },
-    create: { cacheKey: key, value, expiresAt },
-    update: { value, expiresAt },
+    create: { cacheKey: key, value: value as Prisma.InputJsonValue, expiresAt },
+    update: { value: value as Prisma.InputJsonValue, expiresAt },
   });
 }
