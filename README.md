@@ -67,16 +67,20 @@ Playwright against the production build.
 ## Deploying to Railway
 
 `railway.json` is committed (build fetches tiles; start runs `prisma migrate deploy`;
-healthcheck = `/api/ready`). One-time setup:
+healthcheck = `/api/ready`). One-time setup — **order matters**: connecting the repo triggers
+an immediate deploy, and the start command's migration needs the database and env first.
 
-1. Create a Railway project from this GitHub repo (Hobby plan — the Trial pauses after 30 days).
-2. Add a **MySQL** service; on the app service set
-   `DATABASE_URL` to the MySQL service's **private-network** URL
-   (`mysql://root:<pw>@mysql.railway.internal:3306/railway`).
-3. Set `AUTH_SECRET` (`npx auth secret`). Optional: `AUTH_GOOGLE_ID/SECRET`,
+1. Create an empty Railway project (Hobby plan — the Trial pauses after 30 days).
+2. Add a **MySQL** service and wait for it to provision.
+3. Create the app service **empty** (no source) and set its variables now:
+   `DATABASE_URL` as a Railway variable *reference* to the MySQL service's
+   **private-network** URL (`${{MySQL.MYSQL_URL}}` → `mysql.railway.internal`), and
+   `AUTH_SECRET` (`npx auth secret`). Optional: `AUTH_GOOGLE_ID/SECRET`,
    `AUTH_GITHUB_ID/SECRET` (OAuth callback: `https://<domain>/api/auth/callback/<provider>`),
    `ORS_API_KEY`.
-4. Attach the custom domain, wait for the deploy to pass the `/api/ready` healthcheck.
+4. Only now connect this GitHub repo to the app service (auto-deploys `main`) and wait for
+   the deploy to pass the `/api/ready` healthcheck. Generate a public URL
+   (`railway domain`) or attach a custom domain.
 
 ## Attribution
 
