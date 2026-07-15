@@ -7,11 +7,12 @@ public data.
 
 ![HowFar — dark Bucharest basemap](docs/screenshot.png)
 
-> **Status: M0 complete — live at
+> **Status: M1 complete — live at
 > [howfar-production-b31c.up.railway.app](https://howfar-production-b31c.up.railway.app).**
-> Stack scaffolded, self-hosted basemap rendering, MySQL + Auth.js wired, tests green,
-> [CI green](https://github.com/joitamihnea1999/HowFar/actions), deployed on Railway
-> (app + MySQL over private networking). Custom domain: not yet attached.
+> M0 foundation (scaffold, self-hosted basemap rendering, MySQL + Auth.js, tests +
+> [CI green](https://github.com/joitamihnea1999/HowFar/actions), deployed on Railway over
+> private networking) plus M1: saved-search and expiring API-cache persistence, and working
+> social sign-in. Custom domain: not yet attached.
 > Address search, isochrones and scoring are next (M2 is the demo milestone). See
 > [`docs/BRIEF.md`](docs/BRIEF.md) for the product brief and
 > [`docs/PROVIDERS.md`](docs/PROVIDERS.md) for verified data-provider decisions.
@@ -30,10 +31,10 @@ API keys anywhere**.
 
 ## Local development
 
-Requirements: Node ≥ 24 (`.nvmrc`), Docker.
+Requirements: Node 24.x (`.nvmrc`), Docker.
 
 ```bash
-nvm use                     # or any Node 24+
+nvm use                     # Node 24.x (see .nvmrc)
 npm ci                      # also runs prisma generate
 docker compose up -d db     # MySQL 8.4 on localhost:3307
 cp .env.example .env        # fill AUTH_SECRET (npx auth secret); defaults fit the compose DB
