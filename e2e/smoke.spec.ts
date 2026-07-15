@@ -56,3 +56,23 @@ test("landing page renders the map shell and finishes loading tiles", async ({ p
 
   await page.screenshot({ path: "e2e/artifacts/landing.png", fullPage: true });
 });
+
+test("auth affordance renders on the landing page without errors", async ({ page }) => {
+  const consoleErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => consoleErrors.push(String(error)));
+
+  await page.goto("/");
+
+  // AuthControl renders one of two signed-out states depending on whether OAuth
+  // env is configured: a provider button (creds present) or the muted note
+  // (none — the CI case). Assert the affordance is present in whichever form so
+  // the test is deterministic regardless of local .env; the functional sign-in
+  // path stays covered by the /api/auth/providers check above.
+  const affordance = page.locator("text=/Sign in with|Sign-in unavailable/");
+  await expect(affordance.first()).toBeVisible();
+
+  expect(consoleErrors).toEqual([]);
+});

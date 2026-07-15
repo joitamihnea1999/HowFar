@@ -8,7 +8,7 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["src/**/*.test.ts"],
+    include: ["src/**/*.test.{ts,tsx}"],
     // Playwright specs live in e2e/ and must never be collected by Vitest.
     exclude: ["e2e/**", "node_modules/**"],
   },

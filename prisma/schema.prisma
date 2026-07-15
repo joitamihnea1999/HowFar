@@ -8,8 +8,9 @@ datasource db {
 }
 
 // ---- Auth.js (NextAuth) adapter models ----
-// Standard @auth/prisma-adapter shape; SavedSearch and ApiCache arrive with M1,
-// where their consumers live (brief §11).
+// Standard @auth/prisma-adapter shape. SavedSearch + ApiCache (below) arrive
+// with M1 (brief §11): user-owned saved searches and an expiring cache for
+// server-side provider responses.
 
 model User {
   id            String    @id @default(cuid())
@@ -20,8 +21,9 @@ model User {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  accounts Account[]
-  sessions Session[]
+  accounts      Account[]
+  sessions      Session[]
+  savedSearches SavedSearch[]
 }
 
 model Account {
@@ -61,4 +63,42 @@ model VerificationToken {
   expires    DateTime
 
   @@unique([identifier, token])
+}
+
+// ---- M1 foundation models ----
+
+/// A search a signed-in user chose to keep. `query` is the raw address text;
+/// lat/lng are the geocoded point. `params` is forward-compat headroom for the
+/// M2 report config (travel modes, minutes, score weights) — kept as opaque
+/// JSON so the schema need not change when M2 firms up its shape.
+model SavedSearch {
+  id        String   @id @default(cuid())
+  userId    String
+  label     String?
+  query     String   @db.Text
+  lat       Float
+  lng       Float
+  params    Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+/// Server-side cache for external provider responses (Nominatim/ORS/Overpass/
+/// Open-Meteo) so the app stays inside free-tier quotas (brief §10). `value`
+/// holds the raw JSON response; a read is a hit only while `expiresAt > now`.
+/// Expired rows are reaped by a sweep (indexed on expiresAt), not on read.
+/// `cacheKey` is capped at 191 chars (utf8mb4 unique-index limit): callers must
+/// build bounded keys — hash long canonical request strings, don't store raw URLs.
+model ApiCache {
+  id        String   @id @default(cuid())
+  cacheKey  String   @unique @db.VarChar(191)
+  value     Json
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
 }
