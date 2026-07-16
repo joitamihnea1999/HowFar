@@ -8,83 +8,83 @@ import { useEffect, useRef, useState } from "react";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 import { BUCHAREST_MAX_BOUNDS } from "@/lib/bounds";
+import {
+  buildIsochroneFeatures,
+  legendColor,
+  LEGEND_MINUTES,
+  MARKER_COLOR,
+  MODE_LABEL,
+  RING_MINUTES,
+} from "@/lib/isochrone-view";
+import {
+  comboboxReducer,
+  initialComboboxState,
+  MIN_SUGGEST_LEN,
+  shouldFetchSuggest,
+  type ComboboxAction,
+  type ComboboxState,
+  type Suggestion,
+} from "@/lib/combobox";
+import {
+  initialSelectionState,
+  isochronePath,
+  reverseIsFatal,
+  selectionReducer,
+  type Mode,
+  type Origin,
+  type Ring,
+  type SelectInput,
+  type SelectionAction,
+  type SelectionState,
+} from "@/lib/selection-flow";
 
 // Piața Unirii — the classic Bucharest reference point.
 const BUCHAREST_CENTER: [number, number] = [26.1025, 44.4268];
+const SUGGEST_DEBOUNCE_MS = 250;
 
-interface Ring {
-  minutes: number;
-  geometry: unknown;
-}
 interface GeoPoint {
   lat: number;
   lng: number;
   label: string;
 }
-interface Suggestion {
-  label: string;
-  lat: number;
-  lng: number;
-}
-
-const MIN_SUGGEST_LEN = 3;
-const SUGGEST_DEBOUNCE_MS = 250;
-
-type Mode = "walk" | "transit";
-
-// Per-mode sequential ramps (inner = brightest), drawn largest-first so the
-// 15-min core sits on top. Walk = teal, Transit = violet — a strong contrast on
-// the dark basemap so toggling modes reads instantly. Colors are carried on each
-// GeoJSON feature (see renderSelection) so one set of layers serves both modes.
-const RAMPS: Record<Mode, Record<number, { fill: string; line: string }>> = {
-  walk: {
-    45: { fill: "#0d5c55", line: "#2dd4bf" },
-    30: { fill: "#0f766e", line: "#5eead4" },
-    15: { fill: "#14b8a6", line: "#99f6e4" },
-  },
-  transit: {
-    45: { fill: "#4c1d95", line: "#a78bfa" },
-    30: { fill: "#6d28d9", line: "#c4b5fd" },
-    15: { fill: "#8b5cf6", line: "#ede9fe" },
-  },
-};
-// Draw order: largest first so smaller (brighter) rings sit on top.
-const RING_MINUTES = [45, 30, 15] as const;
-const MARKER_COLOR: Record<Mode, string> = { walk: "#2dd4bf", transit: "#a78bfa" };
-const MODE_LABEL: Record<Mode, string> = { walk: "Walking", transit: "Public transport" };
 
 const EMPTY_FC = { type: "FeatureCollection" as const, features: [] as unknown[] };
-
-type Status = "idle" | "loading" | "error";
-type SelectInput =
-  | { kind: "search"; query: string }
-  | { kind: "click"; lat: number; lng: number }
-  | { kind: "point"; lat: number; lng: number; label: string };
 
 export default function AppMap() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const markerRef = useRef<maplibregl.Marker | null>(null);
   const selectRef = useRef<((input: SelectInput) => void) | null>(null);
-  const tokenRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
-  const modeRef = useRef<Mode>("walk");
-  // The last successfully-resolved origin+label, so toggling Walk/Transit
-  // recomputes the same point in the new mode with no geocode/reverse round-trip.
-  const lastSelectionRef = useRef<{ lat: number; lng: number; label: string } | null>(null);
-  const suggestGenRef = useRef(0);
   const suggestAbortRef = useRef<AbortController | null>(null);
-  const suppressSuggestRef = useRef(false);
+  const suggestTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [query, setQuery] = useState("");
-  const [mode, setMode] = useState<Mode>("walk");
-  const [label, setLabel] = useState<string | null>(null);
-  const [status, setStatus] = useState<Status>("idle");
-  const [message, setMessage] = useState<string | null>(null);
-  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
-  const [suggestOpen, setSuggestOpen] = useState(false);
-  const [activeIndex, setActiveIndex] = useState(-1);
-  const [suggestState, setSuggestState] = useState<"idle" | "loading" | "error">("idle");
+  // The two extracted state machines drive the render via useState, but each is
+  // mirrored in a ref so a dispatch can be read back synchronously in the same
+  // tick (fresh token/generation) from the imperative fetch orchestration —
+  // see lib/selection-flow and lib/combobox. Render reads the state; callbacks
+  // read the ref.
+  const [selState, setSelState] = useState<SelectionState>(initialSelectionState);
+  const [comboState, setComboState] = useState<ComboboxState>(initialComboboxState);
+  const selRef = useRef<SelectionState>(initialSelectionState);
+  const comboRef = useRef<ComboboxState>(initialComboboxState);
+
+  function dispatchSel(action: SelectionAction): SelectionState {
+    const next = selectionReducer(selRef.current, action);
+    if (next !== selRef.current) {
+      selRef.current = next;
+      setSelState(next);
+    }
+    return next;
+  }
+  function dispatchCombo(action: ComboboxAction): ComboboxState {
+    const next = comboboxReducer(comboRef.current, action);
+    if (next !== comboRef.current) {
+      comboRef.current = next;
+      setComboState(next);
+    }
+    return next;
+  }
 
   useEffect(() => {
     const container = containerRef.current;
@@ -121,35 +121,18 @@ export default function AppMap() {
     // Buffer the latest selection until the style (and isochrone source/layers)
     // exist — a search that resolves before `load` would otherwise drop its rings.
     let styleLoaded = false;
-    let pending: { origin: { lat: number; lng: number }; label: string; rings: Ring[]; mode: Mode } | null =
-      null;
+    let pending: { origin: Origin; label: string; rings: Ring[]; mode: Mode } | null = null;
 
-    function renderSelection(
-      origin: { lat: number; lng: number },
-      label: string,
-      rings: Ring[],
-      mode: Mode,
-    ) {
+    function renderSelection(origin: Origin, label: string, rings: Ring[], mode: Mode) {
       if (!styleLoaded) {
         pending = { origin, label, rings, mode };
         return;
       }
-      const ramp = RAMPS[mode];
       const source = map.getSource("isochrone") as maplibregl.GeoJSONSource | undefined;
       source?.setData({
         type: "FeatureCollection",
-        // Carry the per-mode colors on each feature so the shared layers paint
-        // via ["get","fillColor"]/["get","lineColor"] — one layer set, two ramps.
-        features: rings.map((r) => ({
-          type: "Feature",
-          properties: {
-            minutes: r.minutes,
-            fillColor: ramp[r.minutes]?.fill,
-            lineColor: ramp[r.minutes]?.line,
-          },
-          geometry: r.geometry as GeoJSON.Geometry,
-        })),
-      } as GeoJSON.FeatureCollection);
+        features: buildIsochroneFeatures(rings, mode),
+      });
 
       // Recreate the marker so its color matches the active mode.
       markerRef.current?.remove();
@@ -175,41 +158,28 @@ export default function AppMap() {
     }
 
     async function select(input: SelectInput) {
-      // Capture the mode ONCE at the start so this response's endpoint, colors,
-      // legend and data-mode all agree even if the user toggles mid-flight.
-      const mode = modeRef.current;
-      const token = ++tokenRef.current;
+      // Snapshot the mode ONCE (from the selection machine) so this response's
+      // endpoint, colors, legend and data-mode all agree even if the user
+      // toggles mid-flight; `start` bumps the token that guards staleness.
+      const mode = selRef.current.mode;
+      const { token } = dispatchSel({ type: "start", mode });
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
       const { signal } = controller;
-      const stale = () => token !== tokenRef.current;
+      const stale = () => token !== selRef.current.token;
 
-      const fail = (msg: string) => {
-        if (stale()) return;
-        setStatus("error");
-        setMessage(msg);
-      };
-
-      clearSelection(); // M7: drop the previous marker/rings the moment a new selection starts
-      // Forget the prior resolved origin until THIS selection resolves, so a
-      // mode toggle mid-flight can't recompute a stale/previous address.
-      lastSelectionRef.current = null;
-      setLabel(null);
-      setStatus("loading");
-      setMessage(null);
+      clearSelection(); // drop the previous marker/rings the moment a new selection starts
 
       try {
-        // Resolve the origin (what ORS + the marker use) and its label.
-        let origin: { lat: number; lng: number };
+        // Resolve the origin (what the isochrone + marker use) and its label.
+        let origin: Origin;
         let label: string;
 
         if (input.kind === "search") {
           const res = await fetch(`/api/geocode?q=${encodeURIComponent(input.query)}`, { signal });
           if (stale()) return;
-          if (res.status === 404) return fail("No place found there.");
-          if (res.status === 422) return fail("That spot is outside Bucharest.");
-          if (!res.ok) return fail("Could not look that up. Try again.");
+          if (!res.ok) return void dispatchSel({ type: "failed", token, stage: "geocode", httpStatus: res.status });
           const point = (await res.json()) as GeoPoint;
           origin = { lat: point.lat, lng: point.lng };
           label = point.label;
@@ -225,27 +195,26 @@ export default function AppMap() {
           label = "Selected point";
           const res = await fetch(`/api/reverse?lat=${input.lat}&lng=${input.lng}`, { signal });
           if (stale()) return;
-          if (res.status === 422) return fail("That spot is outside Bucharest.");
+          // Only out-of-area is fatal; a missing/errored address keeps the
+          // generic label and still shows the reach.
+          if (reverseIsFatal(res.status))
+            return void dispatchSel({ type: "failed", token, stage: "reverse", httpStatus: res.status });
           if (res.ok) label = ((await res.json()) as GeoPoint).label;
-          // 404 (no address there) → keep the generic label but still show the reach.
         }
 
-        const isoPath = mode === "transit" ? "/api/transit" : "/api/isochrone";
-        const isoRes = await fetch(`${isoPath}?lat=${origin.lat}&lng=${origin.lng}`, { signal });
+        const isoRes = await fetch(`${isochronePath(mode)}?lat=${origin.lat}&lng=${origin.lng}`, { signal });
         if (stale()) return;
-        if (isoRes.status === 422) return fail("That spot is outside Bucharest.");
-        if (!isoRes.ok) return fail(`Could not compute ${mode === "transit" ? "transit" : "walking"} reach. Try again.`);
-        const iso = (await isoRes.json()) as { origin: { lat: number; lng: number }; rings: Ring[] };
+        if (!isoRes.ok) return void dispatchSel({ type: "failed", token, stage: "isochrone", httpStatus: isoRes.status });
+        const iso = (await isoRes.json()) as { origin: Origin; rings: Ring[] };
         if (stale()) return;
 
-        // Remember the resolved origin so a mode toggle recomputes it directly.
-        lastSelectionRef.current = { lat: iso.origin.lat, lng: iso.origin.lng, label };
+        // Fresh (stale() just checked): accept and paint. Reducer records the
+        // isochrone's rounded origin so a mode toggle recomputes the same point.
+        dispatchSel({ type: "resolved", token, origin: iso.origin, label });
         renderSelection(iso.origin, label, iso.rings, mode);
-        setLabel(label);
-        setStatus("idle");
       } catch (err) {
         if ((err as Error)?.name === "AbortError" || stale()) return;
-        fail("Something went wrong. Try again.");
+        dispatchSel({ type: "crash", token });
       }
     }
 
@@ -284,106 +253,81 @@ export default function AppMap() {
 
     return () => {
       abortRef.current?.abort();
+      suggestAbortRef.current?.abort();
+      if (suggestTimerRef.current) clearTimeout(suggestTimerRef.current);
       map.remove();
       maplibregl.removeProtocol("pmtiles");
       mapRef.current = null;
     };
   }, []);
 
-  // Debounced type-ahead: fetch suggestions as the user types. A generation
-  // token + AbortController make sure a slow response for an old query can't
-  // repopulate the dropdown, and <3 chars issues no request.
-  useEffect(() => {
-    const q = query.trim();
+  // --- Combobox (autocomplete) wiring: the debounce timer + AbortController are
+  // imperative; the combobox reducer owns the transitions. Every fetch tags
+  // itself with the generation current when it was scheduled so a superseded
+  // response (or one after close/pick) is dropped by the reducer.
+  function runSuggest(generation: number, q: string) {
+    // Defensive: a timer is always cleared before a new one is set, so this
+    // should already hold — but never disturb a newer request's in-flight fetch.
+    if (generation !== comboRef.current.generation) return;
+    dispatchCombo({ type: "fetchStarted", generation });
     suggestAbortRef.current?.abort();
-    // A programmatic query change (picking a suggestion) must not re-fetch.
-    if (suppressSuggestRef.current) {
-      suppressSuggestRef.current = false;
-      return;
-    }
-    if (q.length < MIN_SUGGEST_LEN) return; // clearing handled in onQueryChange
-    const gen = ++suggestGenRef.current;
     const controller = new AbortController();
     suggestAbortRef.current = controller;
-    const timer = setTimeout(async () => {
-      setSuggestState("loading");
-      setSuggestOpen(true);
-      try {
-        const res = await fetch(`/api/suggest?q=${encodeURIComponent(q)}`, { signal: controller.signal });
-        if (gen !== suggestGenRef.current) return;
-        if (!res.ok) {
-          // A provider/upstream error is NOT the same as "no matches".
-          setSuggestions([]);
-          setSuggestState("error");
-          return;
-        }
+    fetch(`/api/suggest?q=${encodeURIComponent(q)}`, { signal: controller.signal })
+      .then(async (res) => {
+        if (!res.ok) return void dispatchCombo({ type: "fetchError", generation });
         const data = (await res.json()) as { suggestions: Suggestion[] };
-        if (gen !== suggestGenRef.current) return;
-        setSuggestions(data.suggestions);
-        setActiveIndex(-1);
-        setSuggestState("idle");
-      } catch {
-        /* aborted (superseded/blur) → leave state to the newer run */
-      }
-    }, SUGGEST_DEBOUNCE_MS);
-    return () => clearTimeout(timer);
-  }, [query]);
+        dispatchCombo({ type: "suggestionsLoaded", generation, suggestions: data.suggestions });
+      })
+      .catch(() => {
+        /* aborted / superseded — the generation guard drops any late result */
+      });
+  }
+
+  function scheduleSuggest(state: ComboboxState) {
+    if (suggestTimerRef.current) clearTimeout(suggestTimerRef.current);
+    if (!shouldFetchSuggest(state)) return;
+    const generation = state.generation;
+    const q = state.query.trim();
+    suggestTimerRef.current = setTimeout(() => runSuggest(generation, q), SUGGEST_DEBOUNCE_MS);
+  }
 
   function onQueryChange(value: string) {
-    suppressSuggestRef.current = false; // a real user edit always re-enables suggesting
-    suggestGenRef.current += 1; // invalidate any in-flight response synchronously
-    suggestAbortRef.current?.abort();
-    setQuery(value);
-    if (value.trim().length < MIN_SUGGEST_LEN) {
-      setSuggestions([]);
-      setSuggestOpen(false);
-      setActiveIndex(-1);
-      setSuggestState("idle");
-    }
+    suggestAbortRef.current?.abort(); // cancel any in-flight fetch synchronously
+    scheduleSuggest(dispatchCombo({ type: "queryChanged", value }));
   }
 
   function closeSuggest() {
-    suggestGenRef.current += 1; // invalidate any in-flight response
+    if (suggestTimerRef.current) clearTimeout(suggestTimerRef.current);
     suggestAbortRef.current?.abort();
-    setSuggestOpen(false);
-    setActiveIndex(-1);
-  }
-
-  function switchMode(next: Mode) {
-    if (next === modeRef.current) return;
-    modeRef.current = next;
-    setMode(next);
-    // Invalidate any in-flight select so a walk response can't land under a
-    // transit toggle (or vice-versa) and mislabel the rings.
-    tokenRef.current += 1;
-    abortRef.current?.abort();
-    // Recompute the current point in the new mode — no geocode/reverse.
-    const last = lastSelectionRef.current;
-    if (last) {
-      selectRef.current?.({ kind: "point", lat: last.lat, lng: last.lng, label: last.label });
-    } else {
-      // No resolved selection to recompute. If we just aborted an in-flight
-      // search, don't strand the UI in "loading" — return it to idle.
-      setStatus("idle");
-      setMessage(null);
-    }
+    dispatchCombo({ type: "close" });
   }
 
   function pickSuggestion(s: Suggestion) {
-    closeSuggest();
-    setSuggestions([]);
-    suppressSuggestRef.current = true; // the setQuery below must not re-open suggestions
-    setQuery(s.label);
+    if (suggestTimerRef.current) clearTimeout(suggestTimerRef.current);
+    suggestAbortRef.current?.abort();
+    dispatchCombo({ type: "pick", suggestion: s });
     selectRef.current?.({ kind: "point", lat: s.lat, lng: s.lng, label: s.label });
+  }
+
+  function switchMode(next: Mode) {
+    if (next === selRef.current.mode) return;
+    // Invalidate any in-flight select so a walk response can't land under a
+    // transit toggle (or vice-versa); the reducer bumps the token to match.
+    abortRef.current?.abort();
+    dispatchSel({ type: "toggle", next });
+    // Recompute the current point in the new mode — no geocode/reverse. With no
+    // resolved selection the reducer already reset status to idle.
+    const last = selRef.current.lastSelection;
+    if (last) selectRef.current?.({ kind: "point", lat: last.lat, lng: last.lng, label: last.label });
   }
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (suggestOpen && activeIndex >= 0 && suggestions[activeIndex]) {
-      pickSuggestion(suggestions[activeIndex]);
-      return;
-    }
-    const q = query.trim();
+    const combo = comboRef.current;
+    const active = combo.open && combo.activeIndex >= 0 ? combo.suggestions[combo.activeIndex] : undefined;
+    if (active) return pickSuggestion(active);
+    const q = combo.query.trim();
     if (q) {
       closeSuggest();
       selectRef.current?.({ kind: "search", query: q });
@@ -391,18 +335,22 @@ export default function AppMap() {
   }
 
   function onSearchKeyDown(e: React.KeyboardEvent) {
-    if (!suggestOpen || suggestions.length === 0) return;
+    const combo = comboRef.current;
+    if (!combo.open || combo.suggestions.length === 0) return;
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setActiveIndex((i) => (i + 1) % suggestions.length);
+      dispatchCombo({ type: "arrowDown" });
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      setActiveIndex((i) => (i <= 0 ? suggestions.length - 1 : i - 1));
+      dispatchCombo({ type: "arrowUp" });
     } else if (e.key === "Escape") {
       closeSuggest();
     }
     // Enter is handled by the form's onSubmit (which picks the active option).
   }
+
+  const sel = selState;
+  const combo = comboState;
 
   return (
     <div className="absolute inset-0">
@@ -412,26 +360,26 @@ export default function AppMap() {
       <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex flex-col items-center gap-2 px-4 pt-20 sm:pt-24">
         <form onSubmit={onSubmit} className="pointer-events-auto flex w-full max-w-md gap-2">
           <input
-            value={query}
+            value={combo.query}
             onChange={(e) => onQueryChange(e.target.value)}
             onKeyDown={onSearchKeyDown}
             onBlur={closeSuggest}
-            onFocus={() => suggestions.length > 0 && setSuggestOpen(true)}
+            onFocus={() => dispatchCombo({ type: "focus" })}
             placeholder="Search a Bucharest address — or click the map"
             aria-label="Search a Bucharest address"
             role="combobox"
-            aria-expanded={suggestOpen}
+            aria-expanded={combo.open}
             aria-controls="suggest-list"
-            aria-activedescendant={activeIndex >= 0 ? `suggest-opt-${activeIndex}` : undefined}
+            aria-activedescendant={combo.activeIndex >= 0 ? `suggest-opt-${combo.activeIndex}` : undefined}
             autoComplete="off"
             className="w-full rounded-full border border-white/15 bg-black/50 px-4 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-500 backdrop-blur focus:border-teal-300/60 focus:outline-none"
           />
           <button
             type="submit"
-            disabled={status === "loading"}
+            disabled={sel.status === "loading"}
             className="rounded-full bg-teal-400/90 px-4 py-2.5 text-sm font-medium text-zinc-950 transition-colors hover:bg-teal-300 disabled:opacity-50"
           >
-            {status === "loading" ? "…" : "Go"}
+            {sel.status === "loading" ? "…" : "Go"}
           </button>
         </form>
 
@@ -446,9 +394,9 @@ export default function AppMap() {
               key={m}
               type="button"
               onClick={() => switchMode(m)}
-              aria-pressed={mode === m}
+              aria-pressed={sel.mode === m}
               className={`rounded-full px-5 py-1.5 text-sm font-medium transition-colors ${
-                mode === m
+                sel.mode === m
                   ? m === "walk"
                     ? "bg-teal-400/90 text-zinc-950"
                     : "bg-violet-400/90 text-zinc-950"
@@ -460,32 +408,32 @@ export default function AppMap() {
           ))}
         </div>
 
-        {suggestOpen && query.trim().length >= MIN_SUGGEST_LEN && (
+        {combo.open && combo.query.trim().length >= MIN_SUGGEST_LEN && (
           <ul
             id="suggest-list"
             role="listbox"
             className="pointer-events-auto w-full max-w-md overflow-hidden rounded-2xl border border-white/10 bg-black/70 backdrop-blur"
           >
-            {suggestState === "loading" ? (
+            {combo.status === "loading" ? (
               <li className="px-4 py-2.5 text-sm text-zinc-500">Searching…</li>
-            ) : suggestState === "error" ? (
+            ) : combo.status === "error" ? (
               <li className="px-4 py-2.5 text-sm text-amber-300">Couldn’t load suggestions. Try again.</li>
-            ) : suggestions.length === 0 ? (
+            ) : combo.suggestions.length === 0 ? (
               <li className="px-4 py-2.5 text-sm text-zinc-500">No matches in Bucharest</li>
             ) : (
-              suggestions.map((s, i) => (
+              combo.suggestions.map((s, i) => (
                 <li
                   key={`${s.lat},${s.lng},${i}`}
                   id={`suggest-opt-${i}`}
                   role="option"
-                  aria-selected={i === activeIndex}
+                  aria-selected={i === combo.activeIndex}
                   onPointerDown={(e) => {
                     e.preventDefault(); // keep focus so the pick runs before blur (mouse + touch)
                     pickSuggestion(s);
                   }}
-                  onMouseEnter={() => setActiveIndex(i)}
+                  onMouseEnter={() => dispatchCombo({ type: "hover", index: i })}
                   className={`cursor-pointer px-4 py-2.5 text-sm ${
-                    i === activeIndex ? "bg-teal-400/20 text-zinc-50" : "text-zinc-200"
+                    i === combo.activeIndex ? "bg-teal-400/20 text-zinc-50" : "text-zinc-200"
                   }`}
                 >
                   {s.label}
@@ -495,20 +443,20 @@ export default function AppMap() {
           </ul>
         )}
 
-        {(label || message) && (
+        {(sel.label || sel.message) && (
           <div className="pointer-events-auto flex max-w-md flex-col items-center gap-1 rounded-2xl border border-white/10 bg-black/50 px-4 py-2 text-center backdrop-blur">
-            {message ? (
-              <p className="text-sm text-amber-300">{message}</p>
+            {sel.message ? (
+              <p className="text-sm text-amber-300">{sel.message}</p>
             ) : (
               <>
-                <p className="line-clamp-2 text-sm text-zinc-200">{label}</p>
+                <p className="line-clamp-2 text-sm text-zinc-200">{sel.label}</p>
                 <div className="flex items-center gap-3 text-xs text-zinc-400">
-                  <span className="font-medium text-zinc-300">{MODE_LABEL[mode]}</span>
-                  {[15, 30, 45].map((m) => (
+                  <span className="font-medium text-zinc-300">{MODE_LABEL[sel.mode]}</span>
+                  {LEGEND_MINUTES.map((m) => (
                     <span key={m} className="flex items-center gap-1.5">
                       <span
                         className="inline-block h-2 w-2 rounded-full"
-                        style={{ background: RAMPS[mode][m].line }}
+                        style={{ background: legendColor(sel.mode, m) }}
                       />
                       {m} min
                     </span>
