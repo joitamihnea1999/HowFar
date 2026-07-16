@@ -43,8 +43,6 @@ next-env.d.ts
 # committed env template (exception to .env*)
 !.env.example
 
-/src/generated/prisma
-
 # generated code (rebuilt via postinstall: prisma generate)
 /src/generated/
 
