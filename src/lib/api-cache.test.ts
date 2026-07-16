@@ -1,19 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { getCached, setCached } from "./api-cache";
+import { getCached, getCachedSafe, setCached, setCachedSafe } from "./api-cache";
 
 // getCached/setCached compose db().apiCache with a time comparison. We back the
 // mock with an in-memory store so set→get round-trips exercise the real upsert
 // semantics, while `now` is injected so expiry is deterministic (no fake timers).
 type Row = { cacheKey: string; value: unknown; expiresAt: Date; createdAt: Date };
 
-const { store } = vi.hoisted(() => ({ store: new Map<string, Row>() }));
+const { store, state } = vi.hoisted(() => ({
+  store: new Map<string, Row>(),
+  state: { fail: false },
+}));
 
 vi.mock("@/lib/db", () => ({
   db: () => ({
     apiCache: {
-      findUnique: ({ where: { cacheKey } }: { where: { cacheKey: string } }) =>
-        Promise.resolve(store.get(cacheKey) ?? null),
+      findUnique: ({ where: { cacheKey } }: { where: { cacheKey: string } }) => {
+        if (state.fail) return Promise.reject(new Error("DB unreachable"));
+        return Promise.resolve(store.get(cacheKey) ?? null);
+      },
       upsert: ({
         where: { cacheKey },
         create,
@@ -23,6 +28,7 @@ vi.mock("@/lib/db", () => ({
         create: { cacheKey: string; value: unknown; expiresAt: Date };
         update: { value: unknown; expiresAt: Date };
       }) => {
+        if (state.fail) return Promise.reject(new Error("DB unreachable"));
         const existing = store.get(cacheKey);
         if (existing) {
           store.set(cacheKey, { ...existing, ...update });
@@ -37,6 +43,7 @@ vi.mock("@/lib/db", () => ({
 
 beforeEach(() => {
   store.clear();
+  state.fail = false;
 });
 
 describe("api-cache", () => {
@@ -67,5 +74,25 @@ describe("api-cache", () => {
     await setCached("k", { v: "old" }, past); // already expired
     await setCached("k", { v: "new" }, future); // refreshed
     await expect(getCached("k", now)).resolves.toEqual({ v: "new" });
+  });
+
+  it("strict getCached rejects when the DB is unreachable", async () => {
+    state.fail = true;
+    await expect(getCached("x", now)).rejects.toThrow(/DB unreachable/);
+  });
+});
+
+describe("best-effort cache (provider layer)", () => {
+  const future = new Date("2026-07-15T13:00:00Z");
+  const now = new Date("2026-07-15T12:00:00Z");
+
+  it("getCachedSafe returns null (cache miss) when the DB throws — flow degrades, not fails", async () => {
+    state.fail = true;
+    await expect(getCachedSafe("x", now)).resolves.toBeNull();
+  });
+
+  it("setCachedSafe swallows a DB write failure", async () => {
+    state.fail = true;
+    await expect(setCachedSafe("x", { a: 1 }, future)).resolves.toBeUndefined();
   });
 });

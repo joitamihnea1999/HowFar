@@ -45,3 +45,26 @@ export async function setCached(key: string, value: unknown, expiresAt: Date): P
     update: { value: value as Prisma.InputJsonValue, expiresAt },
   });
 }
+
+/**
+ * Best-effort cache accessors for the provider layer: the cache is an
+ * optimisation, not a hard dependency, so a cache/DB failure must degrade to
+ * "uncached" (the core map flow keeps working per brief §10) rather than fail
+ * the request. Use these from provider clients; use the strict getCached/
+ * setCached where a DB error genuinely should surface (e.g. saved searches).
+ */
+export async function getCachedSafe<T>(key: string, now: Date = new Date()): Promise<T | null> {
+  try {
+    return await getCached<T>(key, now);
+  } catch {
+    return null;
+  }
+}
+
+export async function setCachedSafe(key: string, value: unknown, expiresAt: Date): Promise<void> {
+  try {
+    await setCached(key, value, expiresAt);
+  } catch {
+    /* best-effort: a cache write failure must not fail the request */
+  }
+}

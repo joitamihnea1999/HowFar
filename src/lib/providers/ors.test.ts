@@ -6,8 +6,8 @@ const { store, providerFetch } = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/api-cache", () => ({
-  getCached: (key: string) => Promise.resolve(store.has(key) ? store.get(key) : null),
-  setCached: (key: string, value: unknown) => {
+  getCachedSafe: (key: string) => Promise.resolve(store.has(key) ? store.get(key) : null),
+  setCachedSafe: (key: string, value: unknown) => {
     store.set(key, value);
     return Promise.resolve();
   },

@@ -1,4 +1,4 @@
-import { getCached, setCached } from "@/lib/api-cache";
+import { getCachedSafe, setCachedSafe } from "@/lib/api-cache";
 import { BUCHAREST_BBOX } from "@/lib/bounds";
 import { providerFetch, ProviderError, roundCoord, sha256Hex, USER_AGENT } from "@/lib/providers/http";
 
@@ -45,7 +45,7 @@ function normalize(row: NominatimRow | undefined): GeoPoint | null {
 async function cachedLookup(key: string, url: string): Promise<GeoPoint | null> {
   // Sentinel wrapper: a cached `{ result: null }` is a real "known empty",
   // distinct from a cache miss (getCached returning null).
-  const hit = await getCached<{ result: GeoPoint | null }>(key);
+  const hit = await getCachedSafe<{ result: GeoPoint | null }>(key);
   if (hit) return hit.result;
 
   // A stalled/unreachable/garbled upstream is a provider error (→ 502), not a 500.
@@ -67,7 +67,7 @@ async function cachedLookup(key: string, url: string): Promise<GeoPoint | null> 
   const row = Array.isArray(data) ? data[0] : data;
   const result = normalize(row);
 
-  await setCached(key, { result }, new Date(Date.now() + (result ? TTL_OK_MS : TTL_EMPTY_MS)));
+  await setCachedSafe(key, { result }, new Date(Date.now() + (result ? TTL_OK_MS : TTL_EMPTY_MS)));
   return result;
 }
 

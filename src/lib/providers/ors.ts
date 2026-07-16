@@ -1,4 +1,4 @@
-import { getCached, setCached } from "@/lib/api-cache";
+import { getCachedSafe, setCachedSafe } from "@/lib/api-cache";
 import { serverEnv } from "@/lib/env";
 import { providerFetch, ProviderError, roundCoord } from "@/lib/providers/http";
 
@@ -57,7 +57,7 @@ export async function walkingIsochrone(latRaw: number, lngRaw: number): Promise<
   const lng = Number(roundCoord(lngRaw));
   const key = `iso:foot:${roundCoord(latRaw)},${roundCoord(lngRaw)}`;
 
-  const hit = await getCached<IsochroneResult>(key);
+  const hit = await getCachedSafe<IsochroneResult>(key);
   if (hit) return hit;
 
   const apiKey = serverEnv().orsApiKey;
@@ -97,6 +97,6 @@ export async function walkingIsochrone(latRaw: number, lngRaw: number): Promise<
   }
 
   const result: IsochroneResult = { origin: { lat, lng }, rings };
-  await setCached(key, result, new Date(Date.now() + TTL_MS));
+  await setCachedSafe(key, result, new Date(Date.now() + TTL_MS));
   return result;
 }
