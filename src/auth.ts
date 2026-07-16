@@ -4,22 +4,11 @@ import GitHub from "next-auth/providers/github";
 import Google from "next-auth/providers/google";
 
 import { db } from "@/lib/db";
-import { optionalEnv, serverEnv } from "@/lib/env";
+import { serverEnv } from "@/lib/env";
 
-/**
- * Which social providers have a full credential pair configured. Used by the
- * sign-in affordance (M1). Build-time safe (no required-env validation), but
- * shares optionalEnv's trim semantics with buildConfig below so "advertised"
- * and "registered" can never disagree.
- */
-export function configuredProviders(): Array<"google" | "github"> {
-  const list: Array<"google" | "github"> = [];
-  if (optionalEnv(process.env, "AUTH_GOOGLE_ID") && optionalEnv(process.env, "AUTH_GOOGLE_SECRET"))
-    list.push("google");
-  if (optionalEnv(process.env, "AUTH_GITHUB_ID") && optionalEnv(process.env, "AUTH_GITHUB_SECRET"))
-    list.push("github");
-  return list;
-}
+// Re-exported so consumers keep one auth entry point; the implementation
+// lives in lib/auth-config.ts where it is unit-testable without next-auth.
+export { configuredProviders } from "@/lib/auth-config";
 
 /**
  * Lazy config: NextAuth invokes this per request, never at `next build`,

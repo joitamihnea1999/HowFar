@@ -96,6 +96,18 @@ describe("photon suggest", () => {
     await expect(suggest("dup")).resolves.toHaveLength(1);
   });
 
+  it("throws ProviderError on a non-ok status", async () => {
+    providerFetch.mockResolvedValue({ ok: false, status: 429, json: () => Promise.resolve({}) });
+    await expect(suggest("union")).rejects.toThrow(/responded 429/);
+  });
+
+  it("drops a feature with no properties at all (label would be empty)", async () => {
+    providerFetch.mockResolvedValue(
+      res([{ geometry: { type: "Point", coordinates: [26.1, 44.43] } }, point("Kept", 26.11, 44.44)]),
+    );
+    await expect(suggest("something")).resolves.toEqual([{ label: "Kept", lat: 44.44, lng: 26.11 }]);
+  });
+
   it("wraps a fetch failure as ProviderError", async () => {
     providerFetch.mockImplementation(async () => {
       throw new TypeError("network down");

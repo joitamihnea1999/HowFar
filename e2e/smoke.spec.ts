@@ -22,12 +22,24 @@ test("tile route serves the pmtiles archive via byte ranges", async ({ request }
   const response = await request.get("/api/tiles", { headers: { Range: "bytes=0-127" } });
   expect(response.status()).toBe(206);
   expect(response.headers()["content-range"]).toMatch(/^bytes 0-127\/\d+$/);
+  expect(response.headers()["etag"]).toMatch(/^".+"$/); // cache validator present
   const body = await response.body();
   expect(body.length).toBe(128);
   expect(body.subarray(0, 7).toString("ascii")).toBe("PMTiles");
 
   const overCap = await request.get("/api/tiles", { headers: { Range: "bytes=0-" } });
   expect(overCap.status()).toBe(416); // whole-archive range exceeds the DoS cap
+});
+
+test("tile route answers HEAD and rejects malformed ranges", async ({ request }) => {
+  const head = await request.fetch("/api/tiles", { method: "HEAD" });
+  expect(head.status()).toBe(200);
+  expect(head.headers()["accept-ranges"]).toBe("bytes");
+  expect(Number(head.headers()["content-length"])).toBeGreaterThan(0);
+
+  const malformed = await request.get("/api/tiles", { headers: { Range: "bytes=abc" } });
+  expect(malformed.status()).toBe(416);
+  expect(malformed.headers()["content-range"]).toMatch(/^bytes \*\/\d+$/); // RFC 9110 unsatisfied-range form
 });
 
 test("landing page renders the map shell and finishes loading tiles", async ({ page }) => {

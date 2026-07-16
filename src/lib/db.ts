@@ -12,8 +12,11 @@ const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
  * fails fast instead of hanging pool slots. A stalled in-flight query is still
  * unbounded (MySQL lacks a safe driver-side query timeout) — the pool cap and
  * the health probe's withTimeout keep that contained.
+ *
+ * Exported for tests: a parsing regression here (credentials, port, database
+ * name) is a production outage, so the mapping is pinned by db.test.ts.
  */
-function poolConfig(databaseUrl: string) {
+export function poolConfig(databaseUrl: string) {
   const url = new URL(databaseUrl);
   return {
     host: url.hostname,

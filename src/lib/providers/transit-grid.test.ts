@@ -106,4 +106,27 @@ describe("buildRings", () => {
   it("uses the documented walk speed constant", () => {
     expect(WALK_SPEED_M_PER_MIN).toBe(80);
   });
+
+  it("yields three EMPTY MultiPolygons (still 3 rings, ascending) when nothing reaches the box", () => {
+    // Origin far outside the launch box and no stops: no cell is stamped, every
+    // threshold takes the empty-MultiPolygon fallback instead of being dropped.
+    const rings = buildRings({ lat: 50, lng: 30 }, []);
+    expect(rings.map((r) => r.minutes)).toEqual([...THRESHOLDS]);
+    for (const r of rings) expect(r.geometry.coordinates).toEqual([]);
+  });
+
+  it("a stop with zero remaining budget (dur = 45) stamps nothing; dur = 20 fills only 30/45", () => {
+    const outsideOrigin = { lat: 50, lng: 30 }; // isolates the stop's contribution
+    const stop = { lat: 44.4268, lng: 26.1025 };
+
+    const spent = buildRings(outsideOrigin, [{ ...stop, dur: 45 }]);
+    for (const r of spent) expect(r.geometry.coordinates).toEqual([]);
+
+    // dur 20: cells within a 10-min walk have reach ≤ 30 (area for the 30-ring)
+    // but nothing can be ≤ 15, so the 15-ring stays the empty fallback.
+    const [r15, r30, r45] = buildRings(outsideOrigin, [{ ...stop, dur: 20 }]);
+    expect(r15.geometry.coordinates).toEqual([]);
+    expect(r30.geometry.coordinates.length).toBeGreaterThan(0);
+    expect(r45.geometry.coordinates.length).toBeGreaterThan(0);
+  });
 });

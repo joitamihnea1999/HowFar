@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { EnvError, parseServerEnv } from "./env";
 
@@ -47,5 +47,21 @@ describe("parseServerEnv", () => {
     expect(env.githubClientId).toBe("gh-id");
     expect(env.githubClientSecret).toBe("gh-secret");
     expect(env.orsApiKey).toBe("ors-key");
+  });
+});
+
+describe("serverEnv (memoized process.env accessor)", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("parses once and keeps returning the first result (per-process cache)", async () => {
+    vi.resetModules(); // fresh module instance → empty memo
+    vi.stubEnv("DATABASE_URL", valid.DATABASE_URL);
+    vi.stubEnv("AUTH_SECRET", "first-value");
+    const { serverEnv } = await import("./env");
+    const first = serverEnv();
+    vi.stubEnv("AUTH_SECRET", "changed-later");
+    const second = serverEnv();
+    expect(second).toBe(first); // same object — env is not re-read per call
+    expect(second.authSecret).toBe("first-value");
   });
 });

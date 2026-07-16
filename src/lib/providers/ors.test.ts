@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { store, providerFetch } = vi.hoisted(() => ({
+const { store, providerFetch, serverEnv } = vi.hoisted(() => ({
   store: new Map<string, unknown>(),
   providerFetch: vi.fn(),
+  serverEnv: vi.fn(() => ({ orsApiKey: "test-key" }) as { orsApiKey?: string }),
 }));
 
 vi.mock("@/lib/api-cache", () => ({
@@ -18,7 +19,7 @@ vi.mock("@/lib/providers/http", async (importOriginal) => ({
   providerFetch,
 }));
 
-vi.mock("@/lib/env", () => ({ serverEnv: () => ({ orsApiKey: "test-key" }) }));
+vi.mock("@/lib/env", () => ({ serverEnv }));
 
 import { walkingIsochrone } from "./ors";
 
@@ -34,6 +35,7 @@ function orsResponse(features: unknown[]) {
 beforeEach(() => {
   store.clear();
   providerFetch.mockReset();
+  serverEnv.mockReturnValue({ orsApiKey: "test-key" });
 });
 
 describe("walkingIsochrone", () => {
@@ -102,5 +104,21 @@ describe("walkingIsochrone", () => {
     const second = await walkingIsochrone(44.4, 26.1);
     expect(providerFetch).toHaveBeenCalledTimes(1);
     expect(second).toEqual(first);
+  });
+
+  it("throws ProviderError without touching the network when ORS_API_KEY is missing", async () => {
+    serverEnv.mockReturnValue({});
+    await expect(walkingIsochrone(44.4, 26.1)).rejects.toThrow(/ORS_API_KEY/);
+    expect(providerFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects a well-typed ring whose coordinates are null/empty (never reaches the client)", async () => {
+    const bad = { properties: { value: 900 }, geometry: { type: "Polygon", coordinates: null } };
+    providerFetch.mockResolvedValue(orsResponse([bad, poly(1800), poly(2700)]));
+    await expect(walkingIsochrone(44.4, 26.1)).rejects.toThrow(/unexpected rings/i);
+
+    const empty = { properties: { value: 900 }, geometry: { type: "Polygon", coordinates: [] } };
+    providerFetch.mockResolvedValue(orsResponse([empty, poly(1800), poly(2700)]));
+    await expect(walkingIsochrone(44.41, 26.11)).rejects.toThrow(/unexpected rings/i);
   });
 });

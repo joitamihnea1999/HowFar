@@ -48,6 +48,16 @@ describe("geocode", () => {
     await expect(geocode("nowhere zzz")).resolves.toBeNull();
   });
 
+  it("treats non-numeric lat/lon strings as no result (NaN never escapes)", async () => {
+    providerFetch.mockResolvedValue(jsonResponse([{ lat: "abc", lon: "26.1", display_name: "Garbled" }]));
+    await expect(geocode("garbled")).resolves.toBeNull();
+  });
+
+  it("throws ProviderError on a non-ok status (ToS-friendly: the 429/5xx is surfaced, not retried)", async () => {
+    providerFetch.mockResolvedValue({ ok: false, status: 503, json: () => Promise.resolve({}) });
+    await expect(geocode("unirii")).rejects.toThrow(/responded 503/);
+  });
+
   it("treats malformed rows (no coords) as no result", async () => {
     providerFetch.mockResolvedValue(jsonResponse([{ display_name: "no coords" }]));
     await expect(geocode("bad")).resolves.toBeNull();

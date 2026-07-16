@@ -45,6 +45,10 @@ function normalize(features: OrsFeature[]): Ring[] {
       (r): r is Ring =>
         !!r.geometry &&
         (r.geometry.type === "Polygon" || r.geometry.type === "MultiPolygon") &&
+        // A right-typed feature can still carry null/empty coordinates — that
+        // must fail here (→ 502), not inside MapLibre on the client.
+        Array.isArray(r.geometry.coordinates) &&
+        r.geometry.coordinates.length > 0 &&
         r.minutes > 0,
     )
     .sort((a, b) => a.minutes - b.minutes);
