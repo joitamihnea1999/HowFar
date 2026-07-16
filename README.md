@@ -5,17 +5,21 @@ isochrones (how far 15/30/45 minutes really take you on foot and by public trans
 amenities, air quality, and a transparent 0–100 livability score — built entirely on free,
 public data.
 
-![HowFar — dark Bucharest basemap](docs/screenshot.png)
+![HowFar — public-transport reachability (15/30/45 min) for a central Bucharest address on the dark basemap](docs/screenshot.png)
 
-> **Status: M1 complete — live at
+> **Status: M2 in progress — live at
 > [howfar-production-b31c.up.railway.app](https://howfar-production-b31c.up.railway.app).**
-> M0 foundation (scaffold, self-hosted basemap rendering, MySQL + Auth.js, tests +
-> [CI green](https://github.com/joitamihnea1999/HowFar/actions), deployed on Railway over
-> private networking) plus M1: saved-search and expiring API-cache persistence, and working
-> social sign-in. Custom domain: not yet attached.
-> Address search, isochrones and scoring are next (M2 is the demo milestone). See
-> [`docs/BRIEF.md`](docs/BRIEF.md) for the product brief and
-> [`docs/PROVIDERS.md`](docs/PROVIDERS.md) for verified data-provider decisions.
+> Working today: address search with type-ahead suggestions (or click anywhere on the map),
+> then walking **and** public-transport isochrones (15/30/45 min) drawn on a self-hosted
+> dark basemap, with a Walk/Transit toggle. Transit reachability is computed in-process
+> from per-stop travel times — no provider offers transit isochrones. Foundation from
+> M0/M1 underneath: MySQL + Prisma persistence, expiring API-response cache, social
+> sign-in, tests + [CI green](https://github.com/joitamihnea1999/HowFar/actions), Railway
+> deploy over private networking. Next in M2: nearby amenities, air-quality summary, and
+> the transparent livability score. Custom domain: not yet attached.
+> Docs: [`docs/BRIEF.md`](docs/BRIEF.md) (product brief) ·
+> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (code tour, provider checklist) ·
+> [`docs/PROVIDERS.md`](docs/PROVIDERS.md) (verified data-provider decisions).
 
 ## Stack
 
@@ -48,9 +52,11 @@ npm run dev                 # http://localhost:3000
 | Command | What it does |
 | --- | --- |
 | `npm run dev` / `build` / `start` | Next.js dev / production build / serve |
+| `npm run check` | Lint + typecheck + unit suite — the sub-minute local loop |
+| `npm run check:ci` | `check` + production build (what CI gates, minus e2e) |
 | `npm run lint` · `npm run typecheck` | ESLint · `tsc --noEmit` |
-| `npm test` | Vitest unit suite |
-| `npm run test:e2e` | Playwright smoke (needs `npm run build` first + DB up) |
+| `npm test` · `npm run test:coverage` | Vitest unit suite · same with enforced coverage thresholds |
+| `npm run test:e2e` | Playwright e2e (needs `npm run build` first + DB up) |
 | `npm run tiles:fetch [YYYYMMDD]` | (Re)fetch the Bucharest basemap extract |
 
 ### Health endpoints
@@ -61,9 +67,9 @@ npm run dev                 # http://localhost:3000
 
 ## CI
 
-`.github/workflows/ci.yml` runs on every push/PR: **lint → typecheck → unit → build**, plus an
-**e2e job** with a MySQL 8.4 service, `prisma migrate deploy`, a cached basemap extract, and
-Playwright against the production build.
+`.github/workflows/ci.yml` runs on every push/PR: **lint → typecheck → unit (with coverage
+thresholds) → build**, plus an **e2e job** with a MySQL 8.4 service, `prisma migrate deploy`,
+a cached basemap extract, and Playwright against the production build.
 
 ## Deploying to Railway
 

@@ -29,9 +29,10 @@ calls. Go/no-go bar: ≥100 fresh addresses/day headroom on every provider. **Al
   on our side (we do — MySQL); attribution required.
 - No key. Apps whose *primary* function is geocoding must self-host — HowFar is not that.
 - Verdict: fine for our volume (1 call per fresh address, server-side, queued ≤1 rps).
-- Alternative noted for M2 autocomplete UX: Photon (photon.komoot.io) — keyless, "reasonable
-  limit" policy, throttling for extensive use, no SLA (<https://photon.komoot.io/>). Decision on
-  as-you-type search deferred to M2.
+- Photon (photon.komoot.io) — keyless, "reasonable limit" policy, throttling for extensive
+  use, no SLA (<https://photon.komoot.io/>). **Adopted in M2 as the autocomplete source**
+  (Nominatim's ToS forbids per-keystroke search): bbox-constrained to Bucharest, debounced
+  client-side, min 3 chars, cached. Nominatim still does submit-time geocoding + reverse.
 
 ### Walking (later bike/car) isochrones — OpenRouteService ✅ PICKED
 - Restrictions: <https://openrouteservice.org/restrictions/> — isochrones: "Locations: 5",
@@ -51,9 +52,12 @@ calls. Go/no-go bar: ≥100 fresh addresses/day headroom on every provider. **Al
   **1,436 reachable stops** with per-stop `arrival`/`duration`, 463 KB in 2.9 s. Bucharest
   coverage confirmed (Transitous `feeds/ro.json` includes Bucuresti-Ilfov mobility-database
   feeds mdb-2098 + GTFS-RT, plus national railway).
-- We build the isochrone polygons ourselves server-side: buffer each reachable stop by
-  remaining-time walking radius, union with the origin walk disc (standard access/egress
-  construction — real geospatial computation, good for the portfolio story).
+- We build the isochrone polygons ourselves server-side. *Implementation note (M2):* the
+  classic buffer-each-stop-and-union construction was prototyped and abandoned — unioning
+  thousands of overlapping walk discs took ~65 s on a real 2,509-stop payload. Shipped
+  instead: rasterize a reachability field over the launch bbox and extract the 15/30/45-min
+  contours with marching squares (~40 ms, and ring nesting is guaranteed by construction).
+  See `src/lib/providers/transit-grid.ts`.
 - Usage policy (<https://transitous.org/api/>): free, community-run; "not intended for commercial
   or for-profit purposes" (HowFar: non-commercial portfolio, no ads/subscriptions ✅); open-source
   clients must publish source (repo will be public ✅); send identifying `User-Agent` with contact
@@ -119,7 +123,7 @@ calls. Go/no-go bar: ≥100 fresh addresses/day headroom on every provider. **Al
 | §12 question | Decision |
 | --- | --- |
 | Free-tier quotas verified? | Yes — table above, evidence dated 2026-07-14 |
-| Geocoder | **Nominatim** (server-side, MySQL-cached, ≤1 rps, UA set); Photon reconsidered at M2 for autocomplete |
+| Geocoder | **Nominatim** (server-side, MySQL-cached, ≤1 rps, UA set); Photon adopted at M2 for autocomplete |
 | Map tiles | **Self-hosted Protomaps** Bucharest extract (keyless; constraint-clean) |
 | Air quality | **Open-Meteo** (also climate); OpenAQ parked as optional add-on |
 | v1 travel modes | **Walking (ORS) + public transport (Transitous one-to-all)** — confirmed feasible |
