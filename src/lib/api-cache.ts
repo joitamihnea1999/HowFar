@@ -53,10 +53,26 @@ export async function setCached(key: string, value: unknown, expiresAt: Date): P
  * the request. Use these from provider clients; use the strict getCached/
  * setCached where a DB error genuinely should surface (e.g. saved searches).
  */
+
+// Swallowed failures must stay observable — a dead cache silently forfeits the
+// free-tier protection and slows every request. Warn at most once per interval
+// so a database outage does not also flood the logs (2 lines per request).
+const WARN_INTERVAL_MS = 60_000;
+let lastWarnAt = -Infinity;
+
+function warnCacheFailure(op: "read" | "write", err: unknown): void {
+  const now = Date.now();
+  if (now - lastWarnAt < WARN_INTERVAL_MS) return;
+  lastWarnAt = now;
+  const detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+  console.warn(`[api-cache] best-effort ${op} failed; serving uncached (${detail})`);
+}
+
 export async function getCachedSafe<T>(key: string, now: Date = new Date()): Promise<T | null> {
   try {
     return await getCached<T>(key, now);
-  } catch {
+  } catch (err) {
+    warnCacheFailure("read", err);
     return null;
   }
 }
@@ -64,7 +80,7 @@ export async function getCachedSafe<T>(key: string, now: Date = new Date()): Pro
 export async function setCachedSafe(key: string, value: unknown, expiresAt: Date): Promise<void> {
   try {
     await setCached(key, value, expiresAt);
-  } catch {
-    /* best-effort: a cache write failure must not fail the request */
+  } catch (err) {
+    warnCacheFailure("write", err);
   }
 }

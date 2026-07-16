@@ -15,6 +15,6 @@ export async function GET(request: Request) {
     if (!point) return jsonError(404, "No address at this location");
     return NextResponse.json(point);
   } catch (err) {
-    return errorResponse(err);
+    return errorResponse(err, "reverse");
   }
 }

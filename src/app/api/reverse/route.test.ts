@@ -3,11 +3,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { reverseGeocode } = vi.hoisted(() => ({ reverseGeocode: vi.fn() }));
 vi.mock("@/lib/providers/nominatim", () => ({ reverseGeocode }));
 
+import { ProviderError } from "@/lib/providers/http";
+
 import { GET } from "./route";
 
 const call = (qs: string) => GET(new Request(`http://localhost/api/reverse${qs}`));
 
-beforeEach(() => reverseGeocode.mockReset());
+// Braces matter: mockReset() returns the mock, and a function returned from
+// beforeEach runs as a TEARDOWN that would call the mock after every test.
+beforeEach(() => {
+  reverseGeocode.mockReset();
+});
 
 describe("GET /api/reverse", () => {
   it("400 when lat/lng are missing or non-numeric", async () => {
@@ -35,5 +41,12 @@ describe("GET /api/reverse", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ lat: 44.4268, lng: 26.1025, label: "Somewhere" });
   });
-  // Provider-error → 502 mapping is covered in api-util.test.ts (errorResponse).
+
+  it("502 + a logged cause when the provider fails", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    reverseGeocode.mockRejectedValue(new ProviderError("nominatim responded 500"));
+    expect((await call("?lat=44.4268&lng=26.1025")).status).toBe(502);
+    expect(logged).toHaveBeenCalledExactlyOnceWith("[api:reverse] ProviderError: nominatim responded 500");
+    logged.mockRestore();
+  });
 });

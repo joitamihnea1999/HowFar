@@ -16,6 +16,6 @@ export async function GET(request: Request) {
     const suggestions = await suggest(q);
     return NextResponse.json({ suggestions });
   } catch (err) {
-    return errorResponse(err);
+    return errorResponse(err, "suggest");
   }
 }

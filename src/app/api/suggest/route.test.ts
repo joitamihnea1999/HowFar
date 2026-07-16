@@ -3,12 +3,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { suggest } = vi.hoisted(() => ({ suggest: vi.fn() }));
 vi.mock("@/lib/providers/photon", () => ({ suggest }));
 
+import { ProviderError } from "@/lib/providers/http";
+
 import { GET } from "./route";
 
 const call = (q?: string) =>
   GET(new Request(`http://localhost/api/suggest${q === undefined ? "" : `?q=${encodeURIComponent(q)}`}`));
 
-beforeEach(() => suggest.mockReset());
+// Braces matter: mockReset() returns the mock, and a function returned from
+// beforeEach runs as a TEARDOWN that would call the mock after every test.
+beforeEach(() => {
+  suggest.mockReset();
+});
 
 describe("GET /api/suggest", () => {
   it("returns empty (no upstream) for a query under 3 chars", async () => {
@@ -29,7 +35,12 @@ describe("GET /api/suggest", () => {
     expect(res.status).toBe(200);
     expect((await res.json()).suggestions).toHaveLength(1);
   });
-  // Provider-error → 502 mapping is covered in api-util.test.ts (errorResponse);
-  // the route uses that shared helper. (Rejecting-mock route tests trip vitest's
-  // unhandled-rejection check even though the route returns 502 correctly.)
+
+  it("502 + a logged cause when the provider fails", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    suggest.mockRejectedValue(new ProviderError("photon responded 503"));
+    expect((await call("union")).status).toBe(502);
+    expect(logged).toHaveBeenCalledExactlyOnceWith("[api:suggest] ProviderError: photon responded 503");
+    logged.mockRestore();
+  });
 });

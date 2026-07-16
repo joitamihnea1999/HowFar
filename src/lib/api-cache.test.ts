@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getCached, getCachedSafe, setCached, setCachedSafe } from "./api-cache";
 
@@ -85,6 +85,9 @@ describe("api-cache", () => {
 describe("best-effort cache (provider layer)", () => {
   const future = new Date("2026-07-15T13:00:00Z");
   const now = new Date("2026-07-15T12:00:00Z");
+  // Failures warn (throttled, asserted below) — silence the output here.
+  const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
+  afterEach(() => warned.mockClear());
 
   it("getCachedSafe returns null (cache miss) when the DB throws — flow degrades, not fails", async () => {
     state.fail = true;
@@ -94,5 +97,28 @@ describe("best-effort cache (provider layer)", () => {
   it("setCachedSafe swallows a DB write failure", async () => {
     state.fail = true;
     await expect(setCachedSafe("x", { a: 1 }, future)).resolves.toBeUndefined();
+  });
+
+  it("warns on the first failure, suppresses within 60s, warns again after", async () => {
+    vi.useFakeTimers();
+    try {
+      state.fail = true;
+      // Far future: warns emitted by earlier tests (real clock) can't suppress these.
+      vi.setSystemTime(new Date("2027-01-01T00:00:00Z"));
+      await getCachedSafe("a", now);
+      expect(warned).toHaveBeenCalledTimes(1);
+      expect(warned.mock.calls[0]?.[0]).toContain("[api-cache] best-effort read failed");
+
+      vi.setSystemTime(new Date("2027-01-01T00:00:30Z")); // inside the interval
+      await setCachedSafe("a", 1, future);
+      expect(warned).toHaveBeenCalledTimes(1);
+
+      vi.setSystemTime(new Date("2027-01-01T00:01:01Z")); // interval elapsed
+      await setCachedSafe("b", 2, future);
+      expect(warned).toHaveBeenCalledTimes(2);
+      expect(warned.mock.calls[1]?.[0]).toContain("best-effort write failed");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -1,16 +1,26 @@
 import { NextResponse } from "next/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { errorResponse, jsonError, outOfAreaGuard, parseLatLng } from "./api-util";
 import { ProviderError } from "./providers/http";
 
 describe("errorResponse", () => {
-  it("maps ProviderError → 502", () => {
-    expect(errorResponse(new ProviderError("upstream")).status).toBe(502);
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+  afterEach(() => logged.mockClear());
+
+  it("maps ProviderError → 502 and logs route + cause", () => {
+    expect(errorResponse(new ProviderError("nominatim responded 503"), "geocode").status).toBe(502);
+    expect(logged).toHaveBeenCalledExactlyOnceWith("[api:geocode] ProviderError: nominatim responded 503");
   });
-  it("maps any other error → 500", () => {
-    expect(errorResponse(new Error("boom")).status).toBe(500);
-    expect(errorResponse("weird").status).toBe(500);
+  it("maps any other error → 500, still logged", () => {
+    expect(errorResponse(new Error("boom"), "transit").status).toBe(500);
+    expect(errorResponse("weird", "transit").status).toBe(500);
+    expect(logged).toHaveBeenNthCalledWith(1, "[api:transit] Error: boom");
+    expect(logged).toHaveBeenNthCalledWith(2, "[api:transit] Error: weird");
+  });
+  it("logs one line — name + message only, no stack or payload", () => {
+    errorResponse(new ProviderError("openrouteservice responded 429"), "isochrone");
+    expect(logged.mock.calls[0]?.[0]).not.toMatch(/\n/);
   });
 });
 

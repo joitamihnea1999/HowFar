@@ -15,6 +15,6 @@ export async function GET(request: Request) {
     if (outside) return outside;
     return NextResponse.json(point);
   } catch (err) {
-    return errorResponse(err);
+    return errorResponse(err, "geocode");
   }
 }

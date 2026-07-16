@@ -14,6 +14,6 @@ export async function GET(request: Request) {
     const result = await walkingIsochrone(parsed.lat, parsed.lng);
     return NextResponse.json(result);
   } catch (err) {
-    return errorResponse(err);
+    return errorResponse(err, "isochrone");
   }
 }

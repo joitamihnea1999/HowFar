@@ -32,8 +32,17 @@ export function outOfAreaGuard(lat: number, lng: number): NextResponse | null {
   return inBucharest(lat, lng) ? null : jsonError(422, "Outside the Bucharest launch area");
 }
 
-/** Map a thrown provider/unknown error to a response (502 vs 500). */
-export function errorResponse(err: unknown): NextResponse {
+/**
+ * Map a thrown provider/unknown error to a response (502 vs 500), logging the
+ * cause first — the response bodies are deliberately generic, so without this
+ * line a production failure leaves no trace of which upstream broke. Logs
+ * name + message only (never stacks or upstream payloads); ProviderError
+ * messages carry the provider name + status by construction.
+ */
+export function errorResponse(err: unknown, route: string): NextResponse {
+  const name = err instanceof Error ? err.name : "Error";
+  const message = err instanceof Error ? err.message : String(err);
+  console.error(`[api:${route}] ${name}: ${message}`);
   if (err instanceof ProviderError) return jsonError(502, "Upstream provider error");
   return jsonError(500, "Internal error");
 }
