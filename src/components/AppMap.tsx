@@ -54,7 +54,7 @@ export default function AppMap() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const markerRef = useRef<maplibregl.Marker | null>(null);
-  const selectRef = useRef<((input: SelectInput) => void) | null>(null);
+  const selectRef = useRef<((input: SelectInput, opts?: { recompute?: boolean }) => void) | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const suggestAbortRef = useRef<AbortController | null>(null);
   const suggestTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -157,12 +157,14 @@ export default function AppMap() {
       delete el.dataset.mode;
     }
 
-    async function select(input: SelectInput) {
+    async function select(input: SelectInput, opts?: { recompute?: boolean }) {
       // Snapshot the mode ONCE (from the selection machine) so this response's
       // endpoint, colors, legend and data-mode all agree even if the user
-      // toggles mid-flight; `start` bumps the token that guards staleness.
+      // toggles mid-flight; `start` bumps the token that guards staleness. A
+      // toggle-driven recompute preserves lastSelection so a further toggle
+      // before it resolves can still recover the origin.
       const mode = selRef.current.mode;
-      const { token } = dispatchSel({ type: "start", mode });
+      const { token } = dispatchSel({ type: "start", mode, preserveLast: opts?.recompute });
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
@@ -199,7 +201,18 @@ export default function AppMap() {
           // generic label and still shows the reach.
           if (reverseIsFatal(res.status))
             return void dispatchSel({ type: "failed", token, stage: "reverse", httpStatus: res.status });
-          if (res.ok) label = ((await res.json()) as GeoPoint).label;
+          if (res.ok) {
+            // A malformed body is non-fatal: keep the generic label and still
+            // show the reach, matching the reverse-non-fatal contract. Guard
+            // both a parse error AND a valid-but-wrong-shape body (missing or
+            // non-string label).
+            try {
+              const body = (await res.json()) as { label?: unknown };
+              if (typeof body.label === "string" && body.label.trim()) label = body.label;
+            } catch {
+              /* keep "Selected point" */
+            }
+          }
         }
 
         const isoRes = await fetch(`${isochronePath(mode)}?lat=${origin.lat}&lng=${origin.lng}`, { signal });
@@ -276,11 +289,19 @@ export default function AppMap() {
     fetch(`/api/suggest?q=${encodeURIComponent(q)}`, { signal: controller.signal })
       .then(async (res) => {
         if (!res.ok) return void dispatchCombo({ type: "fetchError", generation });
-        const data = (await res.json()) as { suggestions: Suggestion[] };
-        dispatchCombo({ type: "suggestionsLoaded", generation, suggestions: data.suggestions });
+        const data = (await res.json()) as { suggestions?: unknown };
+        // A valid-but-wrong-shape body (no array) is an error, not "no matches" —
+        // and must not reach the render, which reads `.length`.
+        if (!Array.isArray(data.suggestions)) return void dispatchCombo({ type: "fetchError", generation });
+        dispatchCombo({ type: "suggestionsLoaded", generation, suggestions: data.suggestions as Suggestion[] });
       })
-      .catch(() => {
-        /* aborted / superseded — the generation guard drops any late result */
+      .catch((err) => {
+        // A superseded/blurred request is aborted — leave its state to the newer
+        // run. A genuine network/parse failure surfaces the error state so the
+        // dropdown does not sit forever on "Searching…" (the reducer drops it if
+        // the generation is already stale).
+        if ((err as Error)?.name === "AbortError") return;
+        dispatchCombo({ type: "fetchError", generation });
       });
   }
 
@@ -319,7 +340,8 @@ export default function AppMap() {
     // Recompute the current point in the new mode — no geocode/reverse. With no
     // resolved selection the reducer already reset status to idle.
     const last = selRef.current.lastSelection;
-    if (last) selectRef.current?.({ kind: "point", lat: last.lat, lng: last.lng, label: last.label });
+    if (last)
+      selectRef.current?.({ kind: "point", lat: last.lat, lng: last.lng, label: last.label }, { recompute: true });
   }
 
   function onSubmit(e: React.FormEvent) {

@@ -31,6 +31,18 @@ describe("selectionReducer — token accept/reject", () => {
     expect(restarted.lastSelection).toBeNull();
   });
 
+  it("start with preserveLast keeps the prior origin (toggle-recompute path); default clears it", () => {
+    const resolved = selectionReducer(start(), { type: "resolved", token: 1, origin: ORIGIN, label: "A" });
+    expect(resolved.lastSelection).toEqual({ lat: ORIGIN.lat, lng: ORIGIN.lng, label: "A" });
+    // A genuinely-new selection clears it…
+    expect(selectionReducer(resolved, { type: "start", mode: "walk" }).lastSelection).toBeNull();
+    // …but a recompute preserves it so a further toggle can still recover the origin.
+    const recompute = selectionReducer(resolved, { type: "start", mode: "transit", preserveLast: true });
+    expect(recompute.lastSelection).toEqual(resolved.lastSelection);
+    expect(recompute.status).toBe("loading");
+    expect(recompute.mode).toBe("transit");
+  });
+
   it("accepts a resolved carrying the current token", () => {
     const s = start(); // token 1
     const resolved = selectionReducer(s, { type: "resolved", token: 1, origin: ORIGIN, label: "Piața Unirii" });
@@ -115,20 +127,37 @@ describe("selectionReducer — mode snapshot & toggle", () => {
     expect(ok.label).toBe("B");
   });
 
-  it("toggle → recompute → resolved restores lastSelection in the new mode (the switchMode path)", () => {
-    // resolved(walk) → toggle(transit) [switchMode re-issues select → start(transit) → resolved]
+  it("double-toggle mid-recompute keeps the origin recoverable (B1 fix)", () => {
+    // resolved(walk) → toggle(transit) → switchMode recomputes with preserveLast →
+    // user toggles back to walk BEFORE the transit recompute resolves.
     const resolved = selectionReducer(start("walk"), { type: "resolved", token: 1, origin: ORIGIN, label: "A" });
-    const toggled = selectionReducer(resolved, { type: "toggle", next: "transit" }); // token 2
-    const recomputeStart = selectionReducer(toggled, { type: "start", mode: "transit" }); // token 3
-    expect(recomputeStart.lastSelection).toBeNull(); // cleared during the in-flight recompute (documented)
-    const recomputed = selectionReducer(recomputeStart, {
-      type: "resolved",
-      token: 3,
-      origin: ORIGIN,
-      label: "A",
-    });
-    expect(recomputed.mode).toBe("transit");
-    expect(recomputed.lastSelection).toEqual({ lat: ORIGIN.lat, lng: ORIGIN.lng, label: "A" });
+    const toTransit = selectionReducer(resolved, { type: "toggle", next: "transit" }); // token 2
+    const recompute = selectionReducer(toTransit, { type: "start", mode: "transit", preserveLast: true }); // token 3
+    // Origin survives the in-flight recompute now (the bug was it went null here).
+    expect(recompute.lastSelection).toEqual({ lat: ORIGIN.lat, lng: ORIGIN.lng, label: "A" });
+    const backToWalk = selectionReducer(recompute, { type: "toggle", next: "walk" }); // token 4
+    // Still recoverable → switchMode can re-issue the walk recompute (not stranded at idle).
+    expect(backToWalk.lastSelection).toEqual({ lat: ORIGIN.lat, lng: ORIGIN.lng, label: "A" });
+    const walkAgain = selectionReducer(backToWalk, { type: "start", mode: "walk", preserveLast: true }); // token 5
+    const done = selectionReducer(walkAgain, { type: "resolved", token: 5, origin: ORIGIN, label: "A" });
+    expect(done.mode).toBe("walk");
+    expect(done.lastSelection).toEqual({ lat: ORIGIN.lat, lng: ORIGIN.lng, label: "A" });
+  });
+
+  it("a FAILED recompute keeps the origin so the opposite mode can still recover it (B1 fail-path)", () => {
+    const resolved = selectionReducer(start("walk"), { type: "resolved", token: 1, origin: ORIGIN, label: "A" });
+    const toTransit = selectionReducer(resolved, { type: "toggle", next: "transit" }); // token 2
+    const recompute = selectionReducer(toTransit, { type: "start", mode: "transit", preserveLast: true }); // token 3
+    // Transit recompute FAILS (502) — must NOT wipe the origin.
+    const failed = selectionReducer(recompute, { type: "failed", token: 3, stage: "isochrone", httpStatus: 502 });
+    expect(failed.status).toBe("error");
+    expect(failed.lastSelection).toEqual({ lat: ORIGIN.lat, lng: ORIGIN.lng, label: "A" });
+    // Same for an unexpected crash.
+    const crashed = selectionReducer(recompute, { type: "crash", token: 3 });
+    expect(crashed.lastSelection).toEqual({ lat: ORIGIN.lat, lng: ORIGIN.lng, label: "A" });
+    // Toggling back to walk can still recompute from the preserved origin.
+    const backToWalk = selectionReducer(failed, { type: "toggle", next: "walk" });
+    expect(backToWalk.lastSelection).toEqual({ lat: ORIGIN.lat, lng: ORIGIN.lng, label: "A" });
   });
 });
 

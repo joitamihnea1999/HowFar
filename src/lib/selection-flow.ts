@@ -54,7 +54,7 @@ export const initialSelectionState: SelectionState = {
 };
 
 export type SelectionAction =
-  | { type: "start"; mode: Mode }
+  | { type: "start"; mode: Mode; preserveLast?: boolean }
   | { type: "resolved"; token: number; origin: Origin; label: string }
   | { type: "failed"; token: number; stage: Stage; httpStatus: number }
   | { type: "crash"; token: number }
@@ -93,9 +93,11 @@ export function failureMessage(stage: Stage, httpStatus: number, mode: Mode): st
 export function selectionReducer(state: SelectionState, action: SelectionAction): SelectionState {
   switch (action.type) {
     case "start":
-      // New selection: invalidate anything in flight, snapshot the mode, and
-      // forget the prior origin so a mode toggle mid-flight resets to idle
-      // rather than recomputing a stale address.
+      // Invalidate anything in flight and snapshot the mode. A genuinely-new
+      // selection (search/click/pick) forgets the prior origin so a mode toggle
+      // mid-flight resets to idle rather than recomputing a stale address. A
+      // toggle-driven recompute (`preserveLast`) keeps the origin so a further
+      // toggle before this resolves can still re-issue it.
       return {
         ...state,
         token: state.token + 1,
@@ -103,7 +105,7 @@ export function selectionReducer(state: SelectionState, action: SelectionAction)
         status: "loading",
         label: null,
         message: null,
-        lastSelection: null,
+        lastSelection: action.preserveLast ? state.lastSelection : null,
       };
     case "resolved":
       if (action.token !== state.token) return state; // superseded — ignore
