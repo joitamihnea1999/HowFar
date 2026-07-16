@@ -30,13 +30,28 @@ interface Suggestion {
 const MIN_SUGGEST_LEN = 3;
 const SUGGEST_DEBOUNCE_MS = 250;
 
-// Sequential teal ramp (inner = brightest), drawn largest-first so the 15-min
-// core sits on top. Chosen to read clearly over the dark basemap.
-const RINGS = [
-  { minutes: 45, fill: "#0d5c55", line: "#2dd4bf" },
-  { minutes: 30, fill: "#0f766e", line: "#5eead4" },
-  { minutes: 15, fill: "#14b8a6", line: "#99f6e4" },
-] as const;
+type Mode = "walk" | "transit";
+
+// Per-mode sequential ramps (inner = brightest), drawn largest-first so the
+// 15-min core sits on top. Walk = teal, Transit = violet — a strong contrast on
+// the dark basemap so toggling modes reads instantly. Colors are carried on each
+// GeoJSON feature (see renderSelection) so one set of layers serves both modes.
+const RAMPS: Record<Mode, Record<number, { fill: string; line: string }>> = {
+  walk: {
+    45: { fill: "#0d5c55", line: "#2dd4bf" },
+    30: { fill: "#0f766e", line: "#5eead4" },
+    15: { fill: "#14b8a6", line: "#99f6e4" },
+  },
+  transit: {
+    45: { fill: "#4c1d95", line: "#a78bfa" },
+    30: { fill: "#6d28d9", line: "#c4b5fd" },
+    15: { fill: "#8b5cf6", line: "#ede9fe" },
+  },
+};
+// Draw order: largest first so smaller (brighter) rings sit on top.
+const RING_MINUTES = [45, 30, 15] as const;
+const MARKER_COLOR: Record<Mode, string> = { walk: "#2dd4bf", transit: "#a78bfa" };
+const MODE_LABEL: Record<Mode, string> = { walk: "Walking", transit: "Public transport" };
 
 const EMPTY_FC = { type: "FeatureCollection" as const, features: [] as unknown[] };
 
@@ -53,11 +68,16 @@ export default function AppMap() {
   const selectRef = useRef<((input: SelectInput) => void) | null>(null);
   const tokenRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
+  const modeRef = useRef<Mode>("walk");
+  // The last successfully-resolved origin+label, so toggling Walk/Transit
+  // recomputes the same point in the new mode with no geocode/reverse round-trip.
+  const lastSelectionRef = useRef<{ lat: number; lng: number; label: string } | null>(null);
   const suggestGenRef = useRef(0);
   const suggestAbortRef = useRef<AbortController | null>(null);
   const suppressSuggestRef = useRef(false);
 
   const [query, setQuery] = useState("");
+  const [mode, setMode] = useState<Mode>("walk");
   const [label, setLabel] = useState<string | null>(null);
   const [status, setStatus] = useState<Status>("idle");
   const [message, setMessage] = useState<string | null>(null);
@@ -101,30 +121,46 @@ export default function AppMap() {
     // Buffer the latest selection until the style (and isochrone source/layers)
     // exist — a search that resolves before `load` would otherwise drop its rings.
     let styleLoaded = false;
-    let pending: { origin: { lat: number; lng: number }; label: string; rings: Ring[] } | null = null;
+    let pending: { origin: { lat: number; lng: number }; label: string; rings: Ring[]; mode: Mode } | null =
+      null;
 
-    function renderSelection(origin: { lat: number; lng: number }, label: string, rings: Ring[]) {
+    function renderSelection(
+      origin: { lat: number; lng: number },
+      label: string,
+      rings: Ring[],
+      mode: Mode,
+    ) {
       if (!styleLoaded) {
-        pending = { origin, label, rings };
+        pending = { origin, label, rings, mode };
         return;
       }
+      const ramp = RAMPS[mode];
       const source = map.getSource("isochrone") as maplibregl.GeoJSONSource | undefined;
       source?.setData({
         type: "FeatureCollection",
+        // Carry the per-mode colors on each feature so the shared layers paint
+        // via ["get","fillColor"]/["get","lineColor"] — one layer set, two ramps.
         features: rings.map((r) => ({
           type: "Feature",
-          properties: { minutes: r.minutes },
+          properties: {
+            minutes: r.minutes,
+            fillColor: ramp[r.minutes]?.fill,
+            lineColor: ramp[r.minutes]?.line,
+          },
           geometry: r.geometry as GeoJSON.Geometry,
         })),
       } as GeoJSON.FeatureCollection);
 
-      if (!markerRef.current) markerRef.current = new maplibregl.Marker({ color: "#2dd4bf" });
+      // Recreate the marker so its color matches the active mode.
+      markerRef.current?.remove();
+      markerRef.current = new maplibregl.Marker({ color: MARKER_COLOR[mode] });
       // Marker sits at the isochrone's rounded origin (T9) so it matches the rings.
       markerRef.current.setLngLat([origin.lng, origin.lat]).addTo(map);
       map.flyTo({ center: [origin.lng, origin.lat], zoom: 13, essential: true });
 
       el.dataset.selection = label;
       el.dataset.isochroneRings = String(rings.length);
+      el.dataset.mode = mode;
     }
 
     function clearSelection() {
@@ -135,9 +171,13 @@ export default function AppMap() {
       markerRef.current?.remove();
       delete el.dataset.selection;
       delete el.dataset.isochroneRings;
+      delete el.dataset.mode;
     }
 
     async function select(input: SelectInput) {
+      // Capture the mode ONCE at the start so this response's endpoint, colors,
+      // legend and data-mode all agree even if the user toggles mid-flight.
+      const mode = modeRef.current;
       const token = ++tokenRef.current;
       abortRef.current?.abort();
       const controller = new AbortController();
@@ -152,6 +192,9 @@ export default function AppMap() {
       };
 
       clearSelection(); // M7: drop the previous marker/rings the moment a new selection starts
+      // Forget the prior resolved origin until THIS selection resolves, so a
+      // mode toggle mid-flight can't recompute a stale/previous address.
+      lastSelectionRef.current = null;
       setLabel(null);
       setStatus("loading");
       setMessage(null);
@@ -187,14 +230,17 @@ export default function AppMap() {
           // 404 (no address there) → keep the generic label but still show the reach.
         }
 
-        const isoRes = await fetch(`/api/isochrone?lat=${origin.lat}&lng=${origin.lng}`, { signal });
+        const isoPath = mode === "transit" ? "/api/transit" : "/api/isochrone";
+        const isoRes = await fetch(`${isoPath}?lat=${origin.lat}&lng=${origin.lng}`, { signal });
         if (stale()) return;
         if (isoRes.status === 422) return fail("That spot is outside Bucharest.");
-        if (!isoRes.ok) return fail("Could not compute walking reach. Try again.");
+        if (!isoRes.ok) return fail(`Could not compute ${mode === "transit" ? "transit" : "walking"} reach. Try again.`);
         const iso = (await isoRes.json()) as { origin: { lat: number; lng: number }; rings: Ring[] };
         if (stale()) return;
 
-        renderSelection(iso.origin, label, iso.rings);
+        // Remember the resolved origin so a mode toggle recomputes it directly.
+        lastSelectionRef.current = { lat: iso.origin.lat, lng: iso.origin.lng, label };
+        renderSelection(iso.origin, label, iso.rings, mode);
         setLabel(label);
         setStatus("idle");
       } catch (err) {
@@ -207,28 +253,29 @@ export default function AppMap() {
 
     map.on("load", () => {
       map.addSource("isochrone", { type: "geojson", data: EMPTY_FC as GeoJSON.FeatureCollection });
-      for (const ring of RINGS) {
-        const filter = ["==", ["get", "minutes"], ring.minutes] as maplibregl.FilterSpecification;
+      for (const minutes of RING_MINUTES) {
+        const filter = ["==", ["get", "minutes"], minutes] as maplibregl.FilterSpecification;
         map.addLayer({
-          id: `iso-fill-${ring.minutes}`,
+          id: `iso-fill-${minutes}`,
           type: "fill",
           source: "isochrone",
           filter,
-          paint: { "fill-color": ring.fill, "fill-opacity": 0.22 },
+          // Color comes from the feature (per-mode ramp) so both modes reuse these layers.
+          paint: { "fill-color": ["get", "fillColor"], "fill-opacity": 0.22 },
         });
         map.addLayer({
-          id: `iso-line-${ring.minutes}`,
+          id: `iso-line-${minutes}`,
           type: "line",
           source: "isochrone",
           filter,
-          paint: { "line-color": ring.line, "line-width": 1.5, "line-opacity": 0.9 },
+          paint: { "line-color": ["get", "lineColor"], "line-width": 1.5, "line-opacity": 0.9 },
         });
       }
       styleLoaded = true;
       if (pending) {
         const p = pending;
         pending = null;
-        renderSelection(p.origin, p.label, p.rings);
+        renderSelection(p.origin, p.label, p.rings, p.mode);
       }
       el.dataset.mapLoaded = "true";
     });
@@ -302,6 +349,26 @@ export default function AppMap() {
     setActiveIndex(-1);
   }
 
+  function switchMode(next: Mode) {
+    if (next === modeRef.current) return;
+    modeRef.current = next;
+    setMode(next);
+    // Invalidate any in-flight select so a walk response can't land under a
+    // transit toggle (or vice-versa) and mislabel the rings.
+    tokenRef.current += 1;
+    abortRef.current?.abort();
+    // Recompute the current point in the new mode — no geocode/reverse.
+    const last = lastSelectionRef.current;
+    if (last) {
+      selectRef.current?.({ kind: "point", lat: last.lat, lng: last.lng, label: last.label });
+    } else {
+      // No resolved selection to recompute. If we just aborted an in-flight
+      // search, don't strand the UI in "loading" — return it to idle.
+      setStatus("idle");
+      setMessage(null);
+    }
+  }
+
   function pickSuggestion(s: Suggestion) {
     closeSuggest();
     setSuggestions([]);
@@ -368,6 +435,31 @@ export default function AppMap() {
           </button>
         </form>
 
+        {/* Travel-mode toggle: recomputes the current point in the chosen mode. */}
+        <div
+          role="group"
+          aria-label="Travel mode"
+          className="pointer-events-auto flex gap-1 rounded-full border border-white/15 bg-black/50 p-1 backdrop-blur"
+        >
+          {(["walk", "transit"] as Mode[]).map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => switchMode(m)}
+              aria-pressed={mode === m}
+              className={`rounded-full px-5 py-1.5 text-sm font-medium transition-colors ${
+                mode === m
+                  ? m === "walk"
+                    ? "bg-teal-400/90 text-zinc-950"
+                    : "bg-violet-400/90 text-zinc-950"
+                  : "text-zinc-300 hover:text-zinc-100"
+              }`}
+            >
+              {m === "walk" ? "Walk" : "Transit"}
+            </button>
+          ))}
+        </div>
+
         {suggestOpen && query.trim().length >= MIN_SUGGEST_LEN && (
           <ul
             id="suggest-list"
@@ -411,10 +503,14 @@ export default function AppMap() {
               <>
                 <p className="line-clamp-2 text-sm text-zinc-200">{label}</p>
                 <div className="flex items-center gap-3 text-xs text-zinc-400">
-                  {RINGS.map((r) => (
-                    <span key={r.minutes} className="flex items-center gap-1.5">
-                      <span className="inline-block h-2 w-2 rounded-full" style={{ background: r.line }} />
-                      {r.minutes} min
+                  <span className="font-medium text-zinc-300">{MODE_LABEL[mode]}</span>
+                  {[15, 30, 45].map((m) => (
+                    <span key={m} className="flex items-center gap-1.5">
+                      <span
+                        className="inline-block h-2 w-2 rounded-full"
+                        style={{ background: RAMPS[mode][m].line }}
+                      />
+                      {m} min
                     </span>
                   ))}
                 </div>
@@ -422,6 +518,22 @@ export default function AppMap() {
             )}
           </div>
         )}
+      </div>
+
+      {/* Data attribution — Transitous ToS requires a visible link to its sources
+          (basemap © OSM is shown by the MapLibre attribution control). */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center px-4 pb-9 sm:pb-7">
+        <p className="pointer-events-auto rounded-full border border-white/10 bg-black/50 px-3 py-1 text-[11px] text-zinc-400 backdrop-blur">
+          Transit data ©{" "}
+          <a
+            href="https://transitous.org/sources/"
+            target="_blank"
+            rel="noreferrer"
+            className="text-violet-300 underline decoration-dotted underline-offset-2 hover:text-violet-200"
+          >
+            Transitous
+          </a>
+        </p>
       </div>
     </div>
   );
