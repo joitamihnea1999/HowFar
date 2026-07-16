@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { roundCoord, sha256Hex, timedFetch, withRateLimit } from "./http";
+import { providerFetch, roundCoord, sha256Hex, timedFetch, withRateLimit } from "./http";
 
 describe("helpers", () => {
   it("sha256Hex is stable and 64 hex chars", () => {
@@ -63,5 +63,26 @@ describe("timedFetch", () => {
     vi.stubGlobal("fetch", () => Promise.resolve(new Response("ok")));
     const res = await timedFetch("http://example.test", {}, 1000);
     expect(await res.text()).toBe("ok");
+  });
+});
+
+describe("providerFetch", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("composes the rate limiter and the timed fetch (the path every provider call takes)", async () => {
+    const seen: RequestInit[] = [];
+    vi.stubGlobal("fetch", (_url: string, init: RequestInit) => {
+      seen.push(init);
+      return Promise.resolve(new Response("composed"));
+    });
+    const res = await providerFetch("http://example.test", {
+      rateHost: "compose.test",
+      minIntervalMs: 0,
+      timeoutMs: 1000,
+      init: { headers: { "User-Agent": "test-agent" } },
+    });
+    expect(await res.text()).toBe("composed");
+    expect(seen[0]?.signal).toBeInstanceOf(AbortSignal); // timeout wiring reached fetch
+    expect((seen[0]?.headers as Record<string, string>)["User-Agent"]).toBe("test-agent");
   });
 });

@@ -23,7 +23,8 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
-      - run: npm test
+      # Coverage thresholds (vitest.config.ts) gate the merge, not just tests.
+      - run: npm run test:coverage
       - run: npm run build
 
   e2e:

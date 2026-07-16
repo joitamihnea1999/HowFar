@@ -11,7 +11,10 @@
     "typecheck": "tsc --noEmit",
     "tiles:fetch": "bash scripts/fetch-tiles.sh",
     "test": "vitest run",
-    "test:e2e": "playwright test"
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test",
+    "check": "npm run lint && npm run typecheck && npm test",
+    "check:ci": "npm run check && npm run build"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.2",
@@ -38,6 +41,7 @@
     "@types/node": "^24",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitest/coverage-v8": "^4.1.10",
     "eslint": "^9",
     "eslint-config-next": "16.2.10",
     "fast-check": "^4.9.0",
