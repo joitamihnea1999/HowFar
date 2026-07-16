@@ -81,6 +81,21 @@ describe("photon suggest", () => {
     expect(providerFetch).toHaveBeenCalledTimes(1);
   });
 
+  it("returns [] for a 200 with a null/garbled body (no 500)", async () => {
+    providerFetch.mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve(null) });
+    await expect(suggest("weird")).resolves.toEqual([]);
+  });
+
+  it("de-duplicates identical composed labels", async () => {
+    providerFetch.mockResolvedValue(
+      res([
+        point("Dup", 26.1, 44.43, { city: "Bucharest" }),
+        point("Dup", 26.11, 44.44, { city: "Bucharest" }),
+      ]),
+    );
+    await expect(suggest("dup")).resolves.toHaveLength(1);
+  });
+
   it("wraps a fetch failure as ProviderError", async () => {
     providerFetch.mockImplementation(async () => {
       throw new TypeError("network down");

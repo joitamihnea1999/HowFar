@@ -49,6 +49,7 @@ function composeLabel(p: PhotonProps | undefined): string {
 
 function normalize(features: PhotonFeature[]): Suggestion[] {
   const out: Suggestion[] = [];
+  const seen = new Set<string>();
   for (const f of features) {
     const g = f.geometry;
     if (!g || g.type !== "Point" || !Array.isArray(g.coordinates) || g.coordinates.length < 2) continue;
@@ -58,7 +59,8 @@ function normalize(features: PhotonFeature[]): Suggestion[] {
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
     if (!inBucharest(lat, lng)) continue; // defensive; bbox already constrains upstream
     const label = composeLabel(f.properties);
-    if (!label) continue; // drop blank, unusable rows
+    if (!label || seen.has(label)) continue; // drop blank + duplicate rows
+    seen.add(label);
     out.push({ label, lat, lng });
   }
   return out;
@@ -87,7 +89,9 @@ export async function suggest(query: string): Promise<Suggestion[]> {
     throw new ProviderError(`photon request failed: ${(err as Error).message}`);
   }
 
-  const suggestions = normalize(body.features ?? []);
+  // A 200 with a null/garbled body must not throw outside the try (→ 500); a
+  // missing features array just yields no suggestions.
+  const suggestions = normalize(body?.features ?? []);
   await setCachedSafe(key, suggestions, new Date(Date.now() + TTL_MS));
   return suggestions;
 }

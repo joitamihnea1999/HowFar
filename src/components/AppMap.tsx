@@ -64,6 +64,7 @@ export default function AppMap() {
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [suggestOpen, setSuggestOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
+  const [suggestState, setSuggestState] = useState<"idle" | "loading" | "error">("idle");
 
   useEffect(() => {
     const container = containerRef.current;
@@ -258,32 +259,39 @@ export default function AppMap() {
     const controller = new AbortController();
     suggestAbortRef.current = controller;
     const timer = setTimeout(async () => {
+      setSuggestState("loading");
+      setSuggestOpen(true);
       try {
         const res = await fetch(`/api/suggest?q=${encodeURIComponent(q)}`, { signal: controller.signal });
         if (gen !== suggestGenRef.current) return;
         if (!res.ok) {
+          // A provider/upstream error is NOT the same as "no matches".
           setSuggestions([]);
-          setSuggestOpen(true); // show the "no matches" affordance
+          setSuggestState("error");
           return;
         }
         const data = (await res.json()) as { suggestions: Suggestion[] };
         if (gen !== suggestGenRef.current) return;
         setSuggestions(data.suggestions);
         setActiveIndex(-1);
-        setSuggestOpen(true);
+        setSuggestState("idle");
       } catch {
-        /* aborted or network error → leave the dropdown as-is */
+        /* aborted (superseded/blur) → leave state to the newer run */
       }
     }, SUGGEST_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [query]);
 
   function onQueryChange(value: string) {
+    suppressSuggestRef.current = false; // a real user edit always re-enables suggesting
+    suggestGenRef.current += 1; // invalidate any in-flight response synchronously
+    suggestAbortRef.current?.abort();
     setQuery(value);
     if (value.trim().length < MIN_SUGGEST_LEN) {
       setSuggestions([]);
       setSuggestOpen(false);
       setActiveIndex(-1);
+      setSuggestState("idle");
     }
   }
 
@@ -340,7 +348,7 @@ export default function AppMap() {
             value={query}
             onChange={(e) => onQueryChange(e.target.value)}
             onKeyDown={onSearchKeyDown}
-            onBlur={() => setSuggestOpen(false)}
+            onBlur={closeSuggest}
             onFocus={() => suggestions.length > 0 && setSuggestOpen(true)}
             placeholder="Search a Bucharest address — or click the map"
             aria-label="Search a Bucharest address"
@@ -366,7 +374,11 @@ export default function AppMap() {
             role="listbox"
             className="pointer-events-auto w-full max-w-md overflow-hidden rounded-2xl border border-white/10 bg-black/70 backdrop-blur"
           >
-            {suggestions.length === 0 ? (
+            {suggestState === "loading" ? (
+              <li className="px-4 py-2.5 text-sm text-zinc-500">Searching…</li>
+            ) : suggestState === "error" ? (
+              <li className="px-4 py-2.5 text-sm text-amber-300">Couldn’t load suggestions. Try again.</li>
+            ) : suggestions.length === 0 ? (
               <li className="px-4 py-2.5 text-sm text-zinc-500">No matches in Bucharest</li>
             ) : (
               suggestions.map((s, i) => (
@@ -375,8 +387,8 @@ export default function AppMap() {
                   id={`suggest-opt-${i}`}
                   role="option"
                   aria-selected={i === activeIndex}
-                  onMouseDown={(e) => {
-                    e.preventDefault(); // keep focus so the pick runs before blur
+                  onPointerDown={(e) => {
+                    e.preventDefault(); // keep focus so the pick runs before blur (mouse + touch)
                     pickSuggestion(s);
                   }}
                   onMouseEnter={() => setActiveIndex(i)}

@@ -29,12 +29,21 @@ function ring(minutes: number, d: number) {
 const ISOCHRONE = { origin: { lat: 44.428, lng: 26.1025 }, rings: [ring(15, 0.01), ring(30, 0.02), ring(45, 0.03)] };
 
 async function setup(page: Page) {
-  const counts = { suggest: 0 };
+  const counts = { suggest: 0, geocode: 0, reverse: 0 };
   await page.route("**/api/suggest**", (route) => {
     counts.suggest += 1;
     route.fulfill({ json: { suggestions: SUGGESTIONS } });
   });
   await page.route("**/api/isochrone**", (route) => route.fulfill({ json: ISOCHRONE }));
+  // Stub + count these so a regression that re-geocodes a picked point is caught.
+  await page.route("**/api/geocode**", (route) => {
+    counts.geocode += 1;
+    route.fulfill({ json: { lat: 44.428, lng: 26.1025, label: "x" } });
+  });
+  await page.route("**/api/reverse**", (route) => {
+    counts.reverse += 1;
+    route.fulfill({ json: { lat: 44.428, lng: 26.1025, label: "x" } });
+  });
   return counts;
 }
 
@@ -49,7 +58,7 @@ test("typing shows a suggestion dropdown; clicking one renders the isochrone", a
   const errors: string[] = [];
   page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
   page.on("pageerror", (e) => errors.push(String(e)));
-  await setup(page);
+  const counts = await setup(page);
 
   const map = await waitForMap(page);
   await page.getByRole("combobox").fill("Union");
@@ -58,6 +67,10 @@ test("typing shows a suggestion dropdown; clicking one renders the isochrone", a
 
   await expect(map).toHaveAttribute("data-isochrone-rings", "3");
   await expect(map).toHaveAttribute("data-selection", /Union Square/);
+  // Signature invariant: a picked suggestion goes straight to the isochrone —
+  // NO geocode/reverse round-trip.
+  expect(counts.geocode).toBe(0);
+  expect(counts.reverse).toBe(0);
   expect(errors).toEqual([]);
 });
 
