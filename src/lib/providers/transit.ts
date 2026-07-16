@@ -9,8 +9,8 @@ import { buildRings, THRESHOLDS, type TransitStop } from "@/lib/providers/transi
  * origin, with per-stop minutes) and construct the polygons ourselves in
  * `transit-grid.ts`. Non-commercial, keyless; ToS requires an identifying
  * User-Agent + attribution (link rendered client-side to transitous.org/sources
- * + OSM). Returns the same `{origin, rings}` shape as the ORS walking isochrone
- * so the map renders both modes through one path (mind map [12]).
+ * + OSM). Returns the same `{origin, rings}` shape as ors.ts's walking
+ * isochrone so the map renders both modes through one path.
  */
 
 const URL = "https://api.transitous.org/api/v6/one-to-all";

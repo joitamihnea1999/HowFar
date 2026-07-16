@@ -1,7 +1,8 @@
 /**
  * Launch scope is Bucharest (brief §11). We reuse the exact bounding box of the
- * self-hosted tile extract (Bucharest + Ilfov; mind map [8]) so the map, the
- * geocoder geofence, and the isochrone origin all agree on "in area".
+ * self-hosted tile extract (Bucharest + Ilfov — the `--bbox` in
+ * scripts/fetch-tiles.sh; keep the two in sync) so the map, the geocoder
+ * geofence, and the isochrone origin all agree on "in area".
  *
  * Isomorphic (no server-only deps): the server uses `inBucharest` to geofence
  * provider results; the client uses `BUCHAREST_MAX_BOUNDS` for `maxBounds`.

@@ -6,7 +6,7 @@ import { BUCHAREST_BBOX } from "@/lib/bounds";
  * Transit-isochrone geometry construction — pure and deterministic so it can be
  * unit-tested without any network or cache. No transit provider returns transit
  * isochrones, so we build them ourselves from the reachable stops Transitous
- * MOTIS reports (mind map [7]).
+ * MOTIS reports (provider details: docs/PROVIDERS.md, Transitous section).
  *
  * Approach: rasterize a reachability field over the launch bounding box, then
  * extract 15/30/45-minute contours with marching squares (`d3-contour`).

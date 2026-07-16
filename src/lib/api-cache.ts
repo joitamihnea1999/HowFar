@@ -18,9 +18,9 @@ import { db } from "@/lib/db";
  * a concurrent `setCached` writes a fresh value between another caller's read
  * and delete, and that fresh value gets erased.
  *
- * `<T>` is caller-trust — the stored JSON is returned unchecked. M2 opts into a
- * runtime parser at the seams consuming real provider payloads (see
- * [[m2-cache-validation]]). The caller also owns the timeout boundary: wrap the
+ * `<T>` is caller-trust — the stored JSON is returned unchecked; provider
+ * clients re-validate shape at their seams (the `normalize` functions in
+ * providers/*.ts). The caller also owns the timeout boundary: wrap the
  * call in `withTimeout` if a stalled DB must not hang the request (this repo
  * has no driver-side query timeout by design).
  */
