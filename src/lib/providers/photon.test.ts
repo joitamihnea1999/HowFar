@@ -81,6 +81,11 @@ describe("photon suggest", () => {
     expect(providerFetch).toHaveBeenCalledTimes(1);
   });
 
+  it("502s (ProviderError) when features is present but not an array — garbled ≠ empty", async () => {
+    providerFetch.mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve({ features: {} }) });
+    await expect(suggest("garbled")).rejects.toThrow(/malformed response/i);
+  });
+
   it("returns [] for a 200 with a null/garbled body (no 500)", async () => {
     providerFetch.mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve(null) });
     await expect(suggest("weird")).resolves.toEqual([]);

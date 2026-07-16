@@ -4,9 +4,12 @@ HowFar is a single Next.js (App Router) app: the map UI, the API routes and the
 data-provider clients live in one repo and deploy as one Railway service backed
 by MySQL. Two rules shape everything:
 
-1. **No external call from the browser, ever.** Every provider request runs
-   server-side, is rate-limited per host, and is cached in MySQL — the browser
-   only talks to `/api/*`. The only secret is the OpenRouteService key.
+1. **No external data call from the browser, ever.** Every provider request
+   runs server-side, is rate-limited per host, and is cached in MySQL — the
+   browser talks to `/api/*` for all data. The only secret is the
+   OpenRouteService key. (Sole exception today: the basemap's font glyphs and
+   sprite are keyless static files fetched from `protomaps.github.io`;
+   self-hosting them is a planned polish item — see `docs/PROVIDERS.md`.)
 2. **The core flow must survive degradation.** A dead cache degrades to
    uncached (slower, still correct); a dead provider degrades to a clear 502;
    a dead database keeps `/api/health` alive while `/api/ready` reports 503.

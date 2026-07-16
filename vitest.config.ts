@@ -23,7 +23,6 @@ export default defineConfig({
         // bounds, providers) where it IS measured. Keep this list tight —
         // anything with branching logic belongs in lib, not here.
         "src/components/AppMap.tsx", // MapLibre glue (e2e: smoke/isochrone/autocomplete/transit)
-        "src/components/AuthControl.tsx", // RSC + server actions (e2e: smoke auth affordance)
         "src/app/page.tsx",
         "src/app/layout.tsx",
         "src/app/api/auth/**", // 3-line Auth.js handler re-export
@@ -33,14 +32,16 @@ export default defineConfig({
         // (206 slice, ETag, HEAD, malformed→416, over-cap→416, PMTiles magic).
         "src/app/api/tiles/route.ts",
       ],
-      // Floors, deliberately just under the measured baseline (see package
-      // scripts): the gate catches erosion; invariant-named tests do the real
-      // quality work, the percentage is only the backstop.
+      // Floors set 2-3pp under the measured baseline (97.9/96.0/95.1/97.6 at
+      // the time of setting — remeasure with `npm run test:coverage`): tight
+      // enough that a dropped test file or an untested new module fails CI,
+      // loose enough that a small honest change doesn't. The invariant-named
+      // tests do the real quality work; the percentage is only the backstop.
       thresholds: {
-        lines: 90,
-        branches: 85,
-        functions: 90,
-        statements: 90,
+        lines: 95,
+        branches: 93,
+        functions: 92,
+        statements: 95,
       },
     },
   },

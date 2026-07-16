@@ -45,10 +45,13 @@ function normalize(features: OrsFeature[]): Ring[] {
       (r): r is Ring =>
         !!r.geometry &&
         (r.geometry.type === "Polygon" || r.geometry.type === "MultiPolygon") &&
-        // A right-typed feature can still carry null/empty coordinates — that
-        // must fail here (→ 502), not inside MapLibre on the client.
+        // A right-typed feature can still carry null/empty/garbage coordinates
+        // — that must fail here (→ 502), not inside MapLibre on the client.
+        // One nesting level is checked (each member a non-empty array); full
+        // GeoJSON-tree validation is out of scope for a trusted provider.
         Array.isArray(r.geometry.coordinates) &&
         r.geometry.coordinates.length > 0 &&
+        (r.geometry.coordinates as unknown[]).every((c) => Array.isArray(c) && c.length > 0) &&
         r.minutes > 0,
     )
     .sort((a, b) => a.minutes - b.minutes);
@@ -89,6 +92,11 @@ export async function walkingIsochrone(latRaw: number, lngRaw: number): Promise<
     throw new ProviderError(`openrouteservice request failed: ${(err as Error).message}`);
   }
 
+  // A 200 whose features is present but not an array is a garbled response —
+  // it must become a 502, not a TypeError-500 from normalize.
+  if (body.features !== undefined && !Array.isArray(body.features)) {
+    throw new ProviderError("openrouteservice returned a malformed response (features not an array)");
+  }
   const rings = normalize(body.features ?? []);
   // Contract: exactly one valid ring per requested range (15/30/45), ascending.
   const gotExpected =

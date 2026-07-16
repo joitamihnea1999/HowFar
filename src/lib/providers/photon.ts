@@ -89,8 +89,12 @@ export async function suggest(query: string): Promise<Suggestion[]> {
     throw new ProviderError(`photon request failed: ${(err as Error).message}`);
   }
 
-  // A 200 with a null/garbled body must not throw outside the try (→ 500); a
-  // missing features array just yields no suggestions.
+  // A 200 with a null body must not throw outside the try (→ 500); a MISSING
+  // features array just yields no suggestions, but a PRESENT non-array one is
+  // a garbled response and must become a 502 (mirrors transit's guard).
+  if (body?.features !== undefined && !Array.isArray(body.features)) {
+    throw new ProviderError("photon returned a malformed response (features not an array)");
+  }
   const suggestions = normalize(body?.features ?? []);
   await setCachedSafe(key, suggestions, new Date(Date.now() + TTL_MS));
   return suggestions;

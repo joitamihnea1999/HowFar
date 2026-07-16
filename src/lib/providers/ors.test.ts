@@ -121,4 +121,19 @@ describe("walkingIsochrone", () => {
     providerFetch.mockResolvedValue(orsResponse([empty, poly(1800), poly(2700)]));
     await expect(walkingIsochrone(44.41, 26.11)).rejects.toThrow(/unexpected rings/i);
   });
+
+  it("rejects garbage nested one level down ([null] / non-array members)", async () => {
+    const nested = { properties: { value: 900 }, geometry: { type: "Polygon", coordinates: [null] } };
+    providerFetch.mockResolvedValue(orsResponse([nested, poly(1800), poly(2700)]));
+    await expect(walkingIsochrone(44.42, 26.12)).rejects.toThrow(/unexpected rings/i);
+
+    const strings = { properties: { value: 900 }, geometry: { type: "Polygon", coordinates: ["x"] } };
+    providerFetch.mockResolvedValue(orsResponse([strings, poly(1800), poly(2700)]));
+    await expect(walkingIsochrone(44.43, 26.13)).rejects.toThrow(/unexpected rings/i);
+  });
+
+  it("502s (ProviderError) on a garbled envelope where features is not an array", async () => {
+    providerFetch.mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve({ features: {} }) });
+    await expect(walkingIsochrone(44.44, 26.14)).rejects.toThrow(/malformed response/i);
+  });
 });
