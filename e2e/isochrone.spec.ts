@@ -45,10 +45,13 @@ test("search renders a marker, 3 isochrone rings, and the address label", async 
   await page.route("**/api/geocode**", (route) =>
     route.fulfill({ json: { lat: 44.4268, lng: 26.1025, label: "Piața Unirii, București" } }),
   );
+  // Typing now also fires /api/suggest (autocomplete) — stub it empty to keep
+  // this test hermetic; the "Go" button still exercises the geocode path.
+  await page.route("**/api/suggest**", (route) => route.fulfill({ json: { suggestions: [] } }));
   await stubIsochrone(page);
 
   const map = await waitForMap(page);
-  await page.getByRole("textbox").fill("Piata Unirii");
+  await page.getByRole("combobox").fill("Piata Unirii");
   await page.getByRole("button", { name: "Go" }).click();
 
   await expect(map).toHaveAttribute("data-isochrone-rings", "3");

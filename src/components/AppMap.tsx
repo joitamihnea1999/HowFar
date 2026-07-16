@@ -21,6 +21,14 @@ interface GeoPoint {
   lng: number;
   label: string;
 }
+interface Suggestion {
+  label: string;
+  lat: number;
+  lng: number;
+}
+
+const MIN_SUGGEST_LEN = 3;
+const SUGGEST_DEBOUNCE_MS = 250;
 
 // Sequential teal ramp (inner = brightest), drawn largest-first so the 15-min
 // core sits on top. Chosen to read clearly over the dark basemap.
@@ -33,7 +41,10 @@ const RINGS = [
 const EMPTY_FC = { type: "FeatureCollection" as const, features: [] as unknown[] };
 
 type Status = "idle" | "loading" | "error";
-type SelectInput = { kind: "search"; query: string } | { kind: "click"; lat: number; lng: number };
+type SelectInput =
+  | { kind: "search"; query: string }
+  | { kind: "click"; lat: number; lng: number }
+  | { kind: "point"; lat: number; lng: number; label: string };
 
 export default function AppMap() {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -42,11 +53,17 @@ export default function AppMap() {
   const selectRef = useRef<((input: SelectInput) => void) | null>(null);
   const tokenRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
+  const suggestGenRef = useRef(0);
+  const suggestAbortRef = useRef<AbortController | null>(null);
+  const suppressSuggestRef = useRef(false);
 
   const [query, setQuery] = useState("");
   const [label, setLabel] = useState<string | null>(null);
   const [status, setStatus] = useState<Status>("idle");
   const [message, setMessage] = useState<string | null>(null);
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [suggestOpen, setSuggestOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -152,6 +169,11 @@ export default function AppMap() {
           const point = (await res.json()) as GeoPoint;
           origin = { lat: point.lat, lng: point.lng };
           label = point.label;
+        } else if (input.kind === "point") {
+          // A picked autocomplete suggestion: point + label already resolved —
+          // go straight to the isochrone, NO geocode/reverse round-trip.
+          origin = { lat: input.lat, lng: input.lng };
+          label = input.label;
         } else {
           // A map click: the origin IS the clicked point (not a reverse-geocoded
           // centroid); reverse geocoding only supplies the human-readable label.
@@ -220,10 +242,91 @@ export default function AppMap() {
     };
   }, []);
 
+  // Debounced type-ahead: fetch suggestions as the user types. A generation
+  // token + AbortController make sure a slow response for an old query can't
+  // repopulate the dropdown, and <3 chars issues no request.
+  useEffect(() => {
+    const q = query.trim();
+    suggestAbortRef.current?.abort();
+    // A programmatic query change (picking a suggestion) must not re-fetch.
+    if (suppressSuggestRef.current) {
+      suppressSuggestRef.current = false;
+      return;
+    }
+    if (q.length < MIN_SUGGEST_LEN) return; // clearing handled in onQueryChange
+    const gen = ++suggestGenRef.current;
+    const controller = new AbortController();
+    suggestAbortRef.current = controller;
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/suggest?q=${encodeURIComponent(q)}`, { signal: controller.signal });
+        if (gen !== suggestGenRef.current) return;
+        if (!res.ok) {
+          setSuggestions([]);
+          setSuggestOpen(true); // show the "no matches" affordance
+          return;
+        }
+        const data = (await res.json()) as { suggestions: Suggestion[] };
+        if (gen !== suggestGenRef.current) return;
+        setSuggestions(data.suggestions);
+        setActiveIndex(-1);
+        setSuggestOpen(true);
+      } catch {
+        /* aborted or network error → leave the dropdown as-is */
+      }
+    }, SUGGEST_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  function onQueryChange(value: string) {
+    setQuery(value);
+    if (value.trim().length < MIN_SUGGEST_LEN) {
+      setSuggestions([]);
+      setSuggestOpen(false);
+      setActiveIndex(-1);
+    }
+  }
+
+  function closeSuggest() {
+    suggestGenRef.current += 1; // invalidate any in-flight response
+    suggestAbortRef.current?.abort();
+    setSuggestOpen(false);
+    setActiveIndex(-1);
+  }
+
+  function pickSuggestion(s: Suggestion) {
+    closeSuggest();
+    setSuggestions([]);
+    suppressSuggestRef.current = true; // the setQuery below must not re-open suggestions
+    setQuery(s.label);
+    selectRef.current?.({ kind: "point", lat: s.lat, lng: s.lng, label: s.label });
+  }
+
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (suggestOpen && activeIndex >= 0 && suggestions[activeIndex]) {
+      pickSuggestion(suggestions[activeIndex]);
+      return;
+    }
     const q = query.trim();
-    if (q) selectRef.current?.({ kind: "search", query: q });
+    if (q) {
+      closeSuggest();
+      selectRef.current?.({ kind: "search", query: q });
+    }
+  }
+
+  function onSearchKeyDown(e: React.KeyboardEvent) {
+    if (!suggestOpen || suggestions.length === 0) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActiveIndex((i) => (i + 1) % suggestions.length);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActiveIndex((i) => (i <= 0 ? suggestions.length - 1 : i - 1));
+    } else if (e.key === "Escape") {
+      closeSuggest();
+    }
+    // Enter is handled by the form's onSubmit (which picks the active option).
   }
 
   return (
@@ -235,9 +338,17 @@ export default function AppMap() {
         <form onSubmit={onSubmit} className="pointer-events-auto flex w-full max-w-md gap-2">
           <input
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => onQueryChange(e.target.value)}
+            onKeyDown={onSearchKeyDown}
+            onBlur={() => setSuggestOpen(false)}
+            onFocus={() => suggestions.length > 0 && setSuggestOpen(true)}
             placeholder="Search a Bucharest address — or click the map"
             aria-label="Search a Bucharest address"
+            role="combobox"
+            aria-expanded={suggestOpen}
+            aria-controls="suggest-list"
+            aria-activedescendant={activeIndex >= 0 ? `suggest-opt-${activeIndex}` : undefined}
+            autoComplete="off"
             className="w-full rounded-full border border-white/15 bg-black/50 px-4 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-500 backdrop-blur focus:border-teal-300/60 focus:outline-none"
           />
           <button
@@ -248,6 +359,37 @@ export default function AppMap() {
             {status === "loading" ? "…" : "Go"}
           </button>
         </form>
+
+        {suggestOpen && query.trim().length >= MIN_SUGGEST_LEN && (
+          <ul
+            id="suggest-list"
+            role="listbox"
+            className="pointer-events-auto w-full max-w-md overflow-hidden rounded-2xl border border-white/10 bg-black/70 backdrop-blur"
+          >
+            {suggestions.length === 0 ? (
+              <li className="px-4 py-2.5 text-sm text-zinc-500">No matches in Bucharest</li>
+            ) : (
+              suggestions.map((s, i) => (
+                <li
+                  key={`${s.lat},${s.lng},${i}`}
+                  id={`suggest-opt-${i}`}
+                  role="option"
+                  aria-selected={i === activeIndex}
+                  onMouseDown={(e) => {
+                    e.preventDefault(); // keep focus so the pick runs before blur
+                    pickSuggestion(s);
+                  }}
+                  onMouseEnter={() => setActiveIndex(i)}
+                  className={`cursor-pointer px-4 py-2.5 text-sm ${
+                    i === activeIndex ? "bg-teal-400/20 text-zinc-50" : "text-zinc-200"
+                  }`}
+                >
+                  {s.label}
+                </li>
+              ))
+            )}
+          </ul>
+        )}
 
         {(label || message) && (
           <div className="pointer-events-auto flex max-w-md flex-col items-center gap-1 rounded-2xl border border-white/10 bg-black/50 px-4 py-2 text-center backdrop-blur">
