@@ -1,6 +1,5 @@
 "use client";
 
-import { layers, namedFlavor } from "@protomaps/basemaps";
 import maplibregl from "maplibre-gl";
 import { Protocol } from "pmtiles";
 import { useEffect, useRef, useState } from "react";
@@ -8,7 +7,6 @@ import { useEffect, useRef, useState } from "react";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 import {
-  AMENITY_CATEGORIES,
   buildAmenityFeatures,
   countByCategory,
   type Amenity,
@@ -16,18 +14,22 @@ import {
 } from "@/features/amenities/amenities";
 import { isNewAmenityOrigin, originKey } from "@/features/amenities/amenities-flow";
 import { BUCHAREST_MAX_BOUNDS } from "@/lib/bounds";
+import { buildIsochroneFeatures, MARKER_COLOR } from "@/features/isochrones/isochrone-view";
+import AmenityPanel from "@/features/map/AmenityPanel";
+import AttributionBadge from "@/features/map/AttributionBadge";
 import {
-  buildIsochroneFeatures,
-  legendColor,
-  LEGEND_MINUTES,
-  MARKER_COLOR,
-  MODE_LABEL,
-  RING_MINUTES,
-} from "@/features/isochrones/isochrone-view";
+  addAmenityLayers,
+  addIsochroneLayers,
+  createMapStyle,
+  EMPTY_FC,
+} from "@/features/map/map-setup";
+import ModeToggle from "@/features/map/ModeToggle";
+import SearchForm from "@/features/map/SearchForm";
+import SelectionCard from "@/features/map/SelectionCard";
+import SuggestList from "@/features/map/SuggestList";
 import {
   comboboxReducer,
   initialComboboxState,
-  MIN_SUGGEST_LEN,
   shouldFetchSuggest,
   type ComboboxAction,
   type ComboboxState,
@@ -59,8 +61,6 @@ interface GeoPoint {
 /** Amenities are a property of the resolved address, independent of the travel
  * mode — so they live outside the selection state machine, in their own UI slice. */
 type AmenityUi = { status: "idle" | "loading" | "ready" | "error"; counts: AmenityCounts | null };
-
-const EMPTY_FC = { type: "FeatureCollection" as const, features: [] as unknown[] };
 
 export default function AppMap() {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -118,20 +118,7 @@ export default function AppMap() {
 
     const map = new maplibregl.Map({
       container,
-      style: {
-        version: 8,
-        glyphs: "https://protomaps.github.io/basemaps-assets/fonts/{fontstack}/{range}.pbf",
-        sprite: "https://protomaps.github.io/basemaps-assets/sprites/v4/dark",
-        sources: {
-          protomaps: {
-            type: "vector",
-            url: `pmtiles://${window.location.origin}/api/tiles`,
-            attribution:
-              '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-          },
-        },
-        layers: layers("protomaps", namedFlavor("dark"), { lang: "en" }),
-      },
+      style: createMapStyle(`${window.location.origin}/api/tiles`),
       center: BUCHAREST_CENTER,
       zoom: 11.5,
       maxBounds: BUCHAREST_MAX_BOUNDS,
@@ -332,43 +319,10 @@ export default function AppMap() {
     selectRef.current = select;
 
     map.on("load", () => {
-      map.addSource("isochrone", { type: "geojson", data: EMPTY_FC as GeoJSON.FeatureCollection });
-      for (const minutes of RING_MINUTES) {
-        const filter = ["==", ["get", "minutes"], minutes] as maplibregl.FilterSpecification;
-        map.addLayer({
-          id: `iso-fill-${minutes}`,
-          type: "fill",
-          source: "isochrone",
-          filter,
-          // Color comes from the feature (per-mode ramp) so both modes reuse these layers.
-          paint: { "fill-color": ["get", "fillColor"], "fill-opacity": 0.22 },
-        });
-        map.addLayer({
-          id: `iso-line-${minutes}`,
-          type: "line",
-          source: "isochrone",
-          filter,
-          paint: { "line-color": ["get", "lineColor"], "line-width": 1.5, "line-opacity": 0.9 },
-        });
-      }
-
-      // Amenity markers: one circle layer on top of the isochrone fills, colored
-      // per category via the feature's own `color` (the isochrone-layer pattern).
-      // The white stroke gives figure/ground pop AND a secondary encoding beyond
-      // hue (the palette's residual CVD proximity is covered by this + the legend).
-      map.addSource("amenities", { type: "geojson", data: EMPTY_FC as GeoJSON.FeatureCollection });
-      map.addLayer({
-        id: "amenity-markers",
-        type: "circle",
-        source: "amenities",
-        paint: {
-          "circle-radius": 5,
-          "circle-color": ["get", "color"],
-          "circle-stroke-color": "#ffffff",
-          "circle-stroke-width": 1.5,
-          "circle-opacity": 0.9,
-        },
-      });
+      // Source + layer specs live in map-setup (unit-tested); amenity markers
+      // draw on top of the isochrone fills by add order.
+      addIsochroneLayers(map);
+      addAmenityLayers(map);
 
       styleLoaded = true;
       if (pending) {
@@ -509,157 +463,28 @@ export default function AppMap() {
 
       {/* Search + status overlay. pointer-events-none wrapper; interactive bits opt back in. */}
       <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex flex-col items-center gap-2 px-4 pt-20 sm:pt-24">
-        <form onSubmit={onSubmit} className="pointer-events-auto flex w-full max-w-md gap-2">
-          <input
-            value={combo.query}
-            onChange={(e) => onQueryChange(e.target.value)}
-            onKeyDown={onSearchKeyDown}
-            onBlur={closeSuggest}
-            onFocus={() => dispatchCombo({ type: "focus" })}
-            placeholder="Search a Bucharest address — or click the map"
-            aria-label="Search a Bucharest address"
-            role="combobox"
-            aria-expanded={combo.open}
-            aria-controls="suggest-list"
-            aria-activedescendant={combo.activeIndex >= 0 ? `suggest-opt-${combo.activeIndex}` : undefined}
-            autoComplete="off"
-            className="w-full rounded-full border border-white/15 bg-black/50 px-4 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-500 backdrop-blur focus:border-teal-300/60 focus:outline-none"
-          />
-          <button
-            type="submit"
-            disabled={sel.status === "loading"}
-            className="rounded-full bg-teal-400/90 px-4 py-2.5 text-sm font-medium text-zinc-950 transition-colors hover:bg-teal-300 disabled:opacity-50"
-          >
-            {sel.status === "loading" ? "…" : "Go"}
-          </button>
-        </form>
-
-        {/* Travel-mode toggle: recomputes the current point in the chosen mode. */}
-        <div
-          role="group"
-          aria-label="Travel mode"
-          className="pointer-events-auto flex gap-1 rounded-full border border-white/15 bg-black/50 p-1 backdrop-blur"
-        >
-          {(["walk", "transit"] as Mode[]).map((m) => (
-            <button
-              key={m}
-              type="button"
-              onClick={() => switchMode(m)}
-              aria-pressed={sel.mode === m}
-              className={`rounded-full px-5 py-1.5 text-sm font-medium transition-colors ${
-                sel.mode === m
-                  ? m === "walk"
-                    ? "bg-teal-400/90 text-zinc-950"
-                    : "bg-violet-400/90 text-zinc-950"
-                  : "text-zinc-300 hover:text-zinc-100"
-              }`}
-            >
-              {m === "walk" ? "Walk" : "Transit"}
-            </button>
-          ))}
-        </div>
-
-        {combo.open && combo.query.trim().length >= MIN_SUGGEST_LEN && (
-          <ul
-            id="suggest-list"
-            role="listbox"
-            className="pointer-events-auto w-full max-w-md overflow-hidden rounded-2xl border border-white/10 bg-black/70 backdrop-blur"
-          >
-            {combo.status === "loading" ? (
-              <li className="px-4 py-2.5 text-sm text-zinc-500">Searching…</li>
-            ) : combo.status === "error" ? (
-              <li className="px-4 py-2.5 text-sm text-amber-300">Couldn’t load suggestions. Try again.</li>
-            ) : combo.suggestions.length === 0 ? (
-              <li className="px-4 py-2.5 text-sm text-zinc-500">No matches in Bucharest</li>
-            ) : (
-              combo.suggestions.map((s, i) => (
-                <li
-                  key={`${s.lat},${s.lng},${i}`}
-                  id={`suggest-opt-${i}`}
-                  role="option"
-                  aria-selected={i === combo.activeIndex}
-                  onPointerDown={(e) => {
-                    e.preventDefault(); // keep focus so the pick runs before blur (mouse + touch)
-                    pickSuggestion(s);
-                  }}
-                  onMouseEnter={() => dispatchCombo({ type: "hover", index: i })}
-                  className={`cursor-pointer px-4 py-2.5 text-sm ${
-                    i === combo.activeIndex ? "bg-teal-400/20 text-zinc-50" : "text-zinc-200"
-                  }`}
-                >
-                  {s.label}
-                </li>
-              ))
-            )}
-          </ul>
-        )}
-
-        {(sel.label || sel.message) && (
-          <div className="pointer-events-auto flex max-w-md flex-col items-center gap-1 rounded-2xl border border-white/10 bg-black/50 px-4 py-2 text-center backdrop-blur">
-            {sel.message ? (
-              <p className="text-sm text-amber-300">{sel.message}</p>
-            ) : (
-              <>
-                <p className="line-clamp-2 text-sm text-zinc-200">{sel.label}</p>
-                <div className="flex items-center gap-3 text-xs text-zinc-400">
-                  <span className="font-medium text-zinc-300">{MODE_LABEL[sel.mode]}</span>
-                  {LEGEND_MINUTES.map((m) => (
-                    <span key={m} className="flex items-center gap-1.5">
-                      <span
-                        className="inline-block h-2 w-2 rounded-full"
-                        style={{ background: legendColor(sel.mode, m) }}
-                      />
-                      {m} min
-                    </span>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
-        )}
-
-        {/* Nearby amenities within the 15-min walking isochrone (brief §5).
-            Mode-independent: shown for the selected address in both views. */}
-        {amenity.status !== "idle" && (
-          <div className="pointer-events-auto flex max-w-md flex-col items-center gap-1.5 rounded-2xl border border-white/10 bg-black/50 px-4 py-2.5 text-center backdrop-blur">
-            <span className="text-xs font-medium text-zinc-300">Within a 15-min walk</span>
-            {amenity.status === "loading" ? (
-              <span className="text-xs text-zinc-500">Finding nearby amenities…</span>
-            ) : amenity.status === "error" ? (
-              <span className="text-xs text-amber-300">Amenities unavailable right now</span>
-            ) : amenityCounts ? (
-              <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-xs">
-                {AMENITY_CATEGORIES.map((c) => (
-                  <span key={c.key} className="flex items-center gap-1.5">
-                    <span
-                      className="inline-block h-2 w-2 rounded-full ring-1 ring-white/40"
-                      style={{ background: c.color }}
-                    />
-                    <span className="font-medium tabular-nums text-zinc-100">{amenityCounts[c.key]}</span>
-                    <span className="text-zinc-400">{c.label}</span>
-                  </span>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        )}
+        <SearchForm
+          query={combo.query}
+          open={combo.open}
+          activeIndex={combo.activeIndex}
+          loading={sel.status === "loading"}
+          onSubmit={onSubmit}
+          onQueryChange={onQueryChange}
+          onKeyDown={onSearchKeyDown}
+          onFocus={() => dispatchCombo({ type: "focus" })}
+          onBlur={closeSuggest}
+        />
+        <ModeToggle mode={sel.mode} onSwitch={switchMode} />
+        <SuggestList
+          combo={combo}
+          onPick={pickSuggestion}
+          onHover={(index) => dispatchCombo({ type: "hover", index })}
+        />
+        <SelectionCard label={sel.label} message={sel.message} mode={sel.mode} />
+        <AmenityPanel status={amenity.status} counts={amenityCounts} />
       </div>
 
-      {/* Data attribution — Transitous ToS requires a visible link to its sources
-          (basemap © OSM is shown by the MapLibre attribution control). */}
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center px-4 pb-9 sm:pb-7">
-        <p className="pointer-events-auto rounded-full border border-white/10 bg-black/50 px-3 py-1 text-[11px] text-zinc-400 backdrop-blur">
-          Transit data ©{" "}
-          <a
-            href="https://transitous.org/sources/"
-            target="_blank"
-            rel="noreferrer"
-            className="text-violet-300 underline decoration-dotted underline-offset-2 hover:text-violet-200"
-          >
-            Transitous
-          </a>
-        </p>
-      </div>
+      <AttributionBadge />
     </div>
   );
 }

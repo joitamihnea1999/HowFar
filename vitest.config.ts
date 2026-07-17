@@ -23,6 +23,14 @@ export default defineConfig({
         // bounds, providers) where it IS measured. Keep this list tight —
         // anything with branching logic belongs in lib, not here.
         "src/features/map/AppMap.tsx", // MapLibre glue (e2e: smoke/isochrone/autocomplete/transit)
+        // Pure-props presentation leaves extracted from AppMap — no decisions,
+        // no state; every branch they render is asserted by the e2e suite.
+        "src/features/map/SearchForm.tsx",
+        "src/features/map/SuggestList.tsx",
+        "src/features/map/ModeToggle.tsx",
+        "src/features/map/SelectionCard.tsx",
+        "src/features/map/AmenityPanel.tsx",
+        "src/features/map/AttributionBadge.tsx",
         "src/app/page.tsx",
         "src/app/layout.tsx",
         "src/app/api/auth/**", // 3-line Auth.js handler re-export
