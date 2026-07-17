@@ -65,6 +65,13 @@ export function shouldFetchSuggest(state: ComboboxState): boolean {
   return state.query.trim().length >= MIN_SUGGEST_LEN && !state.suppress;
 }
 
+/** Whether the dropdown should render. Lives beside the reducer (measured, not
+ * in the coverage-excluded leaf) so the render gate can't drift from the
+ * fetch/short-query rules above. */
+export function shouldShowSuggestList(state: ComboboxState): boolean {
+  return state.open && state.query.trim().length >= MIN_SUGGEST_LEN;
+}
+
 export function comboboxReducer(state: ComboboxState, action: ComboboxAction): ComboboxState {
   switch (action.type) {
     case "queryChanged": {

@@ -1,9 +1,9 @@
-import { MIN_SUGGEST_LEN, type ComboboxState, type Suggestion } from "@/features/search/combobox";
+import { shouldShowSuggestList, type ComboboxState, type Suggestion } from "@/features/search/combobox";
 
 /**
  * Autocomplete dropdown. Pure presentation of the combobox state — the
- * open/short-query gate mirrors the reducer's fetch gate so the list never
- * shows for a query the wiring would not have fetched for.
+ * show/hide decision lives with the reducer (`shouldShowSuggestList`) so it
+ * stays measured and can't drift from the fetch gate.
  */
 
 interface SuggestListProps {
@@ -13,7 +13,7 @@ interface SuggestListProps {
 }
 
 export default function SuggestList({ combo, onPick, onHover }: SuggestListProps) {
-  if (!combo.open || combo.query.trim().length < MIN_SUGGEST_LEN) return null;
+  if (!shouldShowSuggestList(combo)) return null;
   return (
     <ul
       id="suggest-list"

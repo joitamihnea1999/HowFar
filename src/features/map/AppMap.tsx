@@ -298,7 +298,10 @@ export default function AppMap() {
         if (stale()) return;
         if (!isoRes.ok) {
           // A fresh selection whose reach failed must not leave orphan amenity
-          // markers (no rings to anchor them). A recompute keeps the prior reach.
+          // markers (no rings to anchor them). A failed recompute deliberately
+          // keeps the amenities — but clearSelection() above already dropped the
+          // prior rings, so they sit orphaned until the next selection/toggle
+          // (known latent gap; the failure message is shown meanwhile).
           if (!opts?.recompute) clearAmenities();
           return void dispatchSel({ type: "failed", token, stage: "isochrone", httpStatus: isoRes.status });
         }

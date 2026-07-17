@@ -19,12 +19,14 @@ export default defineConfig({
         "src/generated/**", // prisma codegen
         "src/**/*.test.{ts,tsx}",
         // Rendering/wiring glue, covered by the Playwright e2e suite instead;
-        // its pure decision logic lives in the feature folders (auth-view, auth-config,
-        // bounds, providers) where it IS measured. Keep this list tight —
-        // anything with branching logic belongs in lib, not here.
+        // its pure decision logic lives in the owning feature root (combobox,
+        // selection-flow, the flows, auth-view) where it IS measured. Keep this
+        // list tight — anything with branching logic belongs in a measured
+        // feature module, not here.
         "src/features/map/AppMap.tsx", // MapLibre glue (e2e: smoke/isochrone/autocomplete/transit)
-        // Pure-props presentation leaves extracted from AppMap — no decisions,
-        // no state; every branch they render is asserted by the e2e suite.
+        // Pure-props presentation leaves extracted from AppMap — no state, no
+        // fetch, render-only branching over already-decided values (show/hide
+        // decisions live in tested feature modules, e.g. shouldShowSuggestList).
         "src/features/map/SearchForm.tsx",
         "src/features/map/SuggestList.tsx",
         "src/features/map/ModeToggle.tsx",

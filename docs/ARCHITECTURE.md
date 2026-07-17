@@ -67,8 +67,9 @@ server code only.
 | `src/features/amenities/amenities.ts` | Category config + Overpass query/classifier (isomorphic — keeps turf off the client) |
 | `src/features/amenities/amenities-flow.ts` | Client fetch-decision logic (origin keying, toggle persistence) |
 | `src/features/amenities/server/overpass.ts` | Overpass client + server-side clip to the 15-min walk ring |
-| `src/features/auth/{auth-view,auth-config}.ts` | Pure auth decisions (what to render / which providers are configured) |
-| `src/features/auth/AuthControl.tsx` | Server component: session-aware sign-in/out |
+| `src/features/auth/auth-view.ts` | Pure auth decision: what the sign-in/out control renders |
+| `src/features/auth/server/auth-config.ts` | Which OAuth providers are configured (reads env — server-only) |
+| `src/features/auth/server/AuthControl.tsx` | Server component: session-aware sign-in/out |
 | `src/lib/provider-http.ts` | Shared provider plumbing: per-host rate limiter, abortable timeout, `ProviderError`, cache-key helpers |
 | `src/lib/api-cache.ts` | MySQL-backed cache; strict accessors + best-effort `*Safe` variants |
 | `src/lib/api-util.ts` | Route helpers: param parsing, geofence guard, error→status mapping |
@@ -81,7 +82,11 @@ amenities → isochrones (`server/overpass.ts` calls `server/ors.ts` — the §5
 "within the walking isochrone" clip); isochrones → map (`isochrone-view.ts`
 imports the `Mode`/`Ring` types from `selection-flow.ts`, type-only — they stay
 with the selection machine until the isochrone contract grows its own types
-module); every feature → `lib/`.
+module); every feature → `lib/`. `features/map` is the **composition root**: it
+may import any feature's root modules (and does — combobox, isochrone-view,
+amenities, amenities-flow), which makes map↔isochrones look bidirectional; the
+cycle is type-only and dissolves when the planned
+`features/isochrones/types.ts` lands.
 
 ## The provider-client template
 

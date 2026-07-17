@@ -1,7 +1,7 @@
 /**
  * Pure decision helpers for the client-side amenities fetch, split out of
  * `AppMap` so the race-sensitive rule is unit-testable (the task 012/013 lesson:
- * flow decisions live in lib, not the component).
+ * flow decisions live in the owning feature root, not the component).
  *
  * Amenities describe a resolved ADDRESS, not a travel mode, so they are keyed by
  * the rounded origin — NOT by the selection token, which a Walk↔Transit toggle

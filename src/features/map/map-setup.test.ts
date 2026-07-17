@@ -1,3 +1,4 @@
+import { layers, namedFlavor } from "@protomaps/basemaps";
 import { describe, expect, it } from "vitest";
 
 import { RING_MINUTES } from "@/features/isochrones/isochrone-view";
@@ -26,12 +27,13 @@ describe("createMapStyle", () => {
     expect(protomaps.attribution).toContain("openstreetmap.org/copyright");
   });
 
-  it("uses the protomaps-hosted glyphs and dark sprite, with a non-empty dark layer stack", () => {
+  it("uses the protomaps-hosted glyphs and dark sprite, with exactly the dark/en basemap stack", () => {
     const style = createMapStyle("https://example.com/api/tiles");
     expect(style.glyphs).toBe("https://protomaps.github.io/basemaps-assets/fonts/{fontstack}/{range}.pbf");
     expect(style.sprite).toBe("https://protomaps.github.io/basemaps-assets/sprites/v4/dark");
-    expect(Array.isArray(style.layers)).toBe(true);
-    expect(style.layers.length).toBeGreaterThan(0);
+    // Pin the flavor and label language, not just non-emptiness: switching to
+    // another namedFlavor or language must fail here.
+    expect(style.layers).toEqual(layers("protomaps", namedFlavor("dark"), { lang: "en" }));
   });
 
   it("is pure: two calls with different URLs do not share state", () => {
@@ -71,6 +73,16 @@ describe("addIsochroneLayers", () => {
         paint: { "line-color": ["get", "lineColor"], "line-width": 1.5, "line-opacity": 0.9 },
       });
     }
+  });
+});
+
+describe("layer composition", () => {
+  it("draws amenity markers above the isochrone fills when composed in the documented order", () => {
+    const { host, layerSpecs } = recorder();
+    addIsochroneLayers(host);
+    addAmenityLayers(host);
+    expect(layerSpecs.at(-1)?.id).toBe("amenity-markers");
+    expect(layerSpecs).toHaveLength(RING_MINUTES.length * 2 + 1);
   });
 });
 

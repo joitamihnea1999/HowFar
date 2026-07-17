@@ -6,6 +6,7 @@ import {
   initialComboboxState,
   MIN_SUGGEST_LEN,
   shouldFetchSuggest,
+  shouldShowSuggestList,
   type ComboboxState,
   type Suggestion,
 } from "./combobox";
@@ -225,5 +226,30 @@ describe("comboboxReducer — focus", () => {
 
   it("uses MIN_SUGGEST_LEN of 3", () => {
     expect(MIN_SUGGEST_LEN).toBe(3);
+  });
+});
+
+describe("shouldShowSuggestList — the dropdown render gate", () => {
+  it("shows only when open with a query at least MIN_SUGGEST_LEN long", () => {
+    expect(shouldShowSuggestList(opened())).toBe(true);
+    expect(shouldShowSuggestList(initialComboboxState)).toBe(false); // closed, empty
+    expect(shouldShowSuggestList(comboboxReducer(opened(), { type: "close" }))).toBe(false);
+  });
+
+  it("hides for short or whitespace-padded-short queries even while open", () => {
+    expect(shouldShowSuggestList({ ...opened(), query: "Un" })).toBe(false);
+    expect(shouldShowSuggestList({ ...opened(), query: "  Un  " })).toBe(false);
+    expect(shouldShowSuggestList({ ...opened(), query: "  Uni  " })).toBe(true);
+  });
+
+  it("agrees with the reducer: any state the reducer opens is showable", () => {
+    fc.assert(
+      fc.property(fc.string({ minLength: 0, maxLength: 12 }), (q) => {
+        const s = comboboxReducer(opened(), { type: "queryChanged", value: q });
+        // The reducer closes the dropdown for short queries; whenever it leaves
+        // it open, the render gate must show it.
+        return !s.open || shouldShowSuggestList(s);
+      }),
+    );
   });
 });

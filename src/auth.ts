@@ -3,7 +3,7 @@ import NextAuth, { type NextAuthConfig, type NextAuthResult } from "next-auth";
 import GitHub from "next-auth/providers/github";
 import Google from "next-auth/providers/google";
 
-import { configuredProviders } from "@/features/auth/auth-config";
+import { configuredProviders } from "@/features/auth/server/auth-config";
 import { db } from "@/lib/db";
 import { serverEnv } from "@/lib/env";
 
