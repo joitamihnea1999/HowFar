@@ -178,9 +178,12 @@ no stacks, no upstream payloads. The response body stays generic.
   nesting (15 ⊆ 30 ⊆ 45) is guaranteed by construction (thresholds of one
   monotonic field — see `transit-grid.ts`). The ONLY union is the per-threshold
   merge of the street-routed walking ring (`unionRings`) — nesting survives it
-  because both families nest; a union failure falls back to the un-unioned
-  ring, and an ORS failure falls back to the radial origin stamp (the transit
-  response never fails because of walk-geometry polish).
+  because both families nest AND the merge is guarded: all-or-nothing with a
+  superset check, so any per-ring failure rebuilds the whole family with the
+  radial origin stamp (a mixed family could exclude the origin from one of its
+  own rings); an ORS failure or an over-slow walk fetch (bounded wait) takes
+  the same radial path. The transit response never fails because of
+  walk-geometry polish.
 - Transit departure time is pinned to a representative weekday morning so
   reachability is comparable and cacheable (`representativeDeparture`); the
   response's `departure` field carries that instant so the UI can qualify the

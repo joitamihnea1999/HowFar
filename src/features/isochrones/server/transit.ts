@@ -9,6 +9,7 @@ import {
 import { getCachedSafe, setCachedSafe } from "@/lib/api-cache";
 import { BUCHAREST_BBOX } from "@/lib/bounds";
 import { providerFetch, ProviderError, roundCoord, USER_AGENT } from "@/lib/provider-http";
+import { withTimeout } from "@/lib/timeout";
 
 /**
  * Transitous MOTIS transit isochrones (server-side, cached). Transitous has no
@@ -31,6 +32,11 @@ const MAX_TRAVEL_MIN = THRESHOLDS[THRESHOLDS.length - 1]; // 45
 // rings; routed transfers cost nothing extra and reach ~4% more stops
 // (probed live 2026-07-17: 2508→2607 stops, same latency).
 const PEDESTRIAN_SPEED_M_S = "1.333";
+// Ceiling on how long the transit response waits for the walking rings: past
+// this, ship with the radial origin fallback instead of inheriting ORS's
+// rate-limit queue or a stalled body. The unfinished ORS call keeps running
+// and lands in the 7-day cache — a prefetch, deliberately not cancelled.
+const WALK_RINGS_TIMEOUT_MS = 8_000;
 
 const BUCHAREST_TZ = "Europe/Bucharest";
 const REPRESENTATIVE_WEEKDAY = 3; // Wednesday
@@ -109,7 +115,7 @@ export function representativeDeparture(now: Date = new Date()): string {
 // Keep stops a little beyond the launch box: a stop just outside it can still
 // have egress-walk minutes that reach area INSIDE the box. The grid itself only
 // spans the box (and clamps stamping to it), so out-of-area cells never render.
-const STOP_MARGIN_DEG = 0.05; // ~4–5.5 km ≈ max egress walk (45 min · 80 m/min)
+const STOP_MARGIN_DEG = 0.05; // ~4–5.5 km — comfortably ≥ max egress walk (45 min · 57 m/min ≈ 2.6 km)
 
 function parseStops(all: OneToAllStop[]): TransitStop[] {
   const stops: TransitStop[] = [];
@@ -209,17 +215,27 @@ async function fetchAndBuild(
   }
 
   const stops = parseStops(body.all);
-  const walkRings = await walkPromise;
+  // Bounded wait: a stalled ORS body or a deep rate-limit queue must not hold
+  // the transit response hostage (the walk ring is polish, not a dependency).
+  const timedWalk = await withTimeout(walkPromise, WALK_RINGS_TIMEOUT_MS);
+  if (!timedWalk.ok) {
+    console.error("[transit] walking rings timed out; radial origin fallback (ORS call continues into cache)");
+  }
+  const walkRings = timedWalk.ok ? timedWalk.value : null;
 
   // Geometry construction is CPU work on caller-supplied shapes — a failure here
   // is a provider-side data problem (→ 502), not an internal 500.
   let rings: TransitIsochroneResult["rings"];
   try {
     // With street-routed walk rings in hand, skip the radial origin stamp and
-    // union the exact walk geometry in per threshold; without them, fall back
-    // to the calibrated radial origin (see transit-grid.ts).
+    // union the walk geometry in per threshold. unionRings is all-or-nothing:
+    // any per-ring failure returns null and the WHOLE family is rebuilt with
+    // the radial origin stamp — a mixed family could exclude the origin from
+    // one of its own rings and break nesting (then sit in cache for 7 days).
     const built = buildRings({ lat, lng }, stops, { stampOrigin: !walkRings });
-    rings = walkRings ? unionRings(built, walkRings) : built;
+    rings = walkRings
+      ? (unionRings(built, walkRings) ?? buildRings({ lat, lng }, stops, { stampOrigin: true }))
+      : built;
   } catch (err) {
     throw new ProviderError(`transit isochrone construction failed: ${(err as Error).message}`);
   }

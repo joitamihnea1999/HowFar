@@ -159,7 +159,9 @@ describe("buildRings", () => {
     const rings = buildRings(ORIGIN, stops);
     const ms = performance.now() - t0;
     expect(rings.map((r) => r.minutes)).toEqual([15, 30, 45]);
-    expect(ms).toBeLessThan(300);
+    // Real measured time ~120-250 ms locally; the generous ceiling absorbs
+    // CI coverage-instrumentation inflation (same rationale as the 500-stop test).
+    expect(ms).toBeLessThan(2000);
   });
 
   it("yields three EMPTY MultiPolygons (still 3 rings, ascending) when nothing reaches the box", () => {
@@ -212,7 +214,8 @@ describe("unionRings", () => {
     // Transit square NE of the origin; walk square AT the origin, disjoint from it.
     const transit = THRESHOLDS.map((m, i) => mpRing(m, [square(44.47, 26.16, 0.01 + i * 0.005)]));
     const walk = THRESHOLDS.map((m, i) => walkRing(m, C.lat, C.lng, 0.008 + i * 0.004));
-    const out = unionRings(transit, walk);
+    const out = unionRings(transit, walk)!;
+    expect(out).not.toBeNull();
     for (const [i, r] of out.entries()) {
       expect(r.minutes).toBe(THRESHOLDS[i]);
       // origin (walk-only) AND the transit square both inside
@@ -224,7 +227,8 @@ describe("unionRings", () => {
   it("an empty transit ring takes the walk geometry outright (as MultiPolygon)", () => {
     const transit = THRESHOLDS.map((m) => mpRing(m, []));
     const walk = THRESHOLDS.map((m) => walkRing(m, C.lat, C.lng, 0.01));
-    const out = unionRings(transit, walk);
+    const out = unionRings(transit, walk)!;
+    expect(out).not.toBeNull();
     for (const r of out) {
       expect(r.geometry.type).toBe("MultiPolygon");
       expect(r.geometry.coordinates.length).toBe(1);
@@ -232,16 +236,23 @@ describe("unionRings", () => {
     }
   });
 
-  it("keeps the transit ring when the walk ring is missing, empty, or threshold-mismatched", () => {
+  it("returns null (family fallback) when a walk ring is missing, empty, or threshold-mismatched", () => {
+    // ALL-OR-NOTHING: the caller skipped the origin stamp, so a partial merge
+    // could ship a ring without any origin-walk area — signal a full rebuild.
     const transit = THRESHOLDS.map((m) => mpRing(m, [square(44.44, 26.12, 0.01)]));
-    expect(unionRings(transit, [])).toEqual(transit);
-    const empties = THRESHOLDS.map((m) => ({ minutes: m, geometry: { type: "Polygon" as const, coordinates: [] } }));
-    expect(unionRings(transit, empties)).toEqual(transit);
-    const mismatched = [walkRing(99, C.lat, C.lng, 0.01), walkRing(98, C.lat, C.lng, 0.02), walkRing(97, C.lat, C.lng, 0.03)];
-    expect(unionRings(transit, mismatched)).toEqual(transit);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(unionRings(transit, [])).toBeNull();
+      const empties = THRESHOLDS.map((m) => ({ minutes: m, geometry: { type: "Polygon" as const, coordinates: [] } }));
+      expect(unionRings(transit, empties)).toBeNull();
+      const mismatched = [walkRing(99, C.lat, C.lng, 0.01), walkRing(98, C.lat, C.lng, 0.02), walkRing(97, C.lat, C.lng, 0.03)];
+      expect(unionRings(transit, mismatched)).toBeNull();
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 
-  it("falls back to the un-unioned ring when turf union throws on degenerate input", () => {
+  it("returns null when turf union fails on degenerate input — never throws, never partial", () => {
     const transit = THRESHOLDS.map((m) => mpRing(m, [square(44.44, 26.12, 0.01)]));
     const garbage = THRESHOLDS.map((m) => ({
       minutes: m,
@@ -249,7 +260,25 @@ describe("unionRings", () => {
     }));
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      expect(unionRings(transit, garbage)).toEqual(transit); // never throws, never 502s
+      expect(unionRings(transit, garbage)).toBeNull();
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("a SINGLE bad ring poisons the whole family (the mixed case that breaks nesting)", () => {
+    // Good walk rings at 15 and 45 but garbage at 30: a per-ring fallback would
+    // ship a 30-ring without origin-walk area while 15/45 have it — the exact
+    // nesting/origin-exclusion bug the all-or-nothing contract prevents.
+    const transit = THRESHOLDS.map((m, i) => mpRing(m, [square(44.44, 26.12, 0.01 + i * 0.005)]));
+    const walk = [
+      walkRing(15, C.lat, C.lng, 0.008),
+      { minutes: 30, geometry: { type: "Polygon" as const, coordinates: [[["x"]]] as unknown } },
+      walkRing(45, C.lat, C.lng, 0.016),
+    ];
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(unionRings(transit, walk)).toBeNull();
     } finally {
       errSpy.mockRestore();
     }
@@ -268,6 +297,7 @@ describe("unionRings", () => {
           const transit = THRESHOLDS.map((m, i) => mpRing(m, [square(tlat, tlng, tHalf * (i + 1))]));
           const walk = THRESHOLDS.map((m, i) => walkRing(m, tlat + offset, tlng - offset, wHalf * (i + 1)));
           const out = unionRings(transit, walk);
+          if (out === null) return false; // clean inputs must never trigger fallback
           for (const [small, large] of [[out[0], out[1]], [out[1], out[2]]] as const) {
             const diff = difference({
               type: "FeatureCollection",

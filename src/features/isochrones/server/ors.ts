@@ -58,17 +58,17 @@ function normalize(features: OrsFeature[]): Ring[] {
     );
   }
   const sorted = [...features].sort(
-    (a, b) => (a.properties?.value ?? Number.NaN) - (b.properties?.value ?? Number.NaN),
+    (a, b) => (a?.properties?.value ?? Number.NaN) - (b?.properties?.value ?? Number.NaN),
   );
   return sorted.map((f, i) => {
-    const value = f.properties?.value;
+    const value = f?.properties?.value;
     if (typeof value !== "number" || Math.abs(value - CALIBRATED_RANGES_S[i]!) > RANGE_TOLERANCE_S) {
       throw new ProviderError(
-        `openrouteservice ring values [${sorted.map((s) => s.properties?.value).join(", ")}] ` +
+        `openrouteservice ring values [${sorted.map((s) => s?.properties?.value).join(", ")}] ` +
           `do not match the calibrated ranges [${CALIBRATED_RANGES_S.join(", ")}]`,
       );
     }
-    const geometry = f.geometry;
+    const geometry = f?.geometry;
     if (
       !geometry ||
       (geometry.type !== "Polygon" && geometry.type !== "MultiPolygon") ||
@@ -143,8 +143,11 @@ async function fetchAndCache(latRaw: number, lngRaw: number, key: string): Promi
     throw new ProviderError(`openrouteservice request failed: ${(err as Error).message}`);
   }
 
-  // A 200 whose features is present but not an array is a garbled response —
-  // it must become a 502, not a TypeError-500 from normalize.
+  // A 200 whose body is null/non-object, or whose features is present but not
+  // an array, is a garbled response — it must become a 502, not a TypeError-500.
+  if (body === null || typeof body !== "object") {
+    throw new ProviderError("openrouteservice returned a malformed response (non-object body)");
+  }
   if (body.features !== undefined && !Array.isArray(body.features)) {
     throw new ProviderError("openrouteservice returned a malformed response (features not an array)");
   }

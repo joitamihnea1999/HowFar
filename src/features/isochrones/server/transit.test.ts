@@ -170,10 +170,52 @@ describe("transitIsochrone", () => {
     const result = await transitIsochrone(44.4268, 26.1025);
     // buildRings was told NOT to stamp the origin...
     expect(buildRingsMock.mock.calls[0][2]).toEqual({ stampOrigin: false });
-    // ...and the walk square landed in the output via the union.
+    // ...and the walk square landed in the output via the union: the ORIGIN
+    // (inside the walk square, far from the only stop) is in its own 15-ring.
     expect(result.rings.map((r) => r.minutes)).toEqual([15, 30, 45]);
     const [r15] = result.rings;
     expect((r15.geometry.coordinates as unknown[]).length).toBeGreaterThan(0);
+    expect(booleanPointInPolygon([26.1025, 44.4268], {
+      type: "Feature", properties: {},
+      geometry: r15.geometry as never,
+    })).toBe(true);
+  });
+
+  it("rebuilds the WHOLE family with the radial stamp when the union fails (no mixed rings)", async () => {
+    walkingIsochroneMock.mockResolvedValue({
+      origin: { lat: 44.4268, lng: 26.1025 },
+      rings: [15, 30, 45].map((m) => ({
+        minutes: m,
+        geometry: { type: "Polygon", coordinates: [[["x"]]] }, // degenerate → union fails
+      })),
+    });
+    providerFetch.mockResolvedValue(oneToAll([stop(44.44, 26.12, 5)]));
+    const result = await transitIsochrone(44.4268, 26.1025);
+    // First build skipped the origin stamp (walk rings were expected); the
+    // all-or-nothing union returned null → one full radial rebuild, never a mix.
+    expect(buildRingsMock.mock.calls.map((c) => c[2])).toEqual([
+      { stampOrigin: false },
+      { stampOrigin: true },
+    ]);
+    expect(booleanPointInPolygon([26.1025, 44.4268], {
+      type: "Feature", properties: {},
+      geometry: result.rings[0].geometry as never,
+    })).toBe(true); // origin present via the radial stamp
+  });
+
+  it("ships with the radial fallback when the walk rings hang (bounded wait, no hostage response)", async () => {
+    vi.useFakeTimers();
+    try {
+      walkingIsochroneMock.mockReturnValue(new Promise(() => {})); // stalled body / deep queue
+      providerFetch.mockResolvedValue(oneToAll([stop(44.44, 26.12, 5)]));
+      const pending = transitIsochrone(44.4268, 26.1025);
+      await vi.advanceTimersByTimeAsync(8_100); // past WALK_RINGS_TIMEOUT_MS
+      const result = await pending;
+      expect(result.rings).toHaveLength(3);
+      expect(buildRingsMock.mock.calls[0][2]).toEqual({ stampOrigin: true });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("zero stops + walk rings available ⇒ the response IS the walk rings (as MultiPolygons)", async () => {

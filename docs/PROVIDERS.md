@@ -94,12 +94,15 @@ methodology below is re-runnable whenever providers or the city data change.
   **1.402×** (143 routed-vs-straight pairs, 6 origins; p25 1.29, p75 1.54, p90 1.82 — worst at
   river/rail barriers). Stop-egress stamps run at 80/1.402 m/min. This is a **calibrated
   approximation** — anisotropy (a river beside the stop) is documented, not modeled.
-- **Origin walk component:** street-REAL, not approximated — the transit rings union in the
-  calibrated ORS walking rings per threshold and skip the radial origin stamp (radial is the
-  ORS-failure fallback only).
+- **Origin walk component:** street-routed and boundary-calibrated (the ORS ring geometry with
+  the corrected ranges, ±10% residuals) — the transit rings union it in per threshold and skip
+  the radial origin stamp. The merge is all-or-nothing with a superset guard; any failure
+  rebuilds the whole family with the radial stamp (never a mixed family).
 - **Validation (shipped rings vs `one-to-many-intermodal` ground truth, 252 points, 3 origins):**
   over-claiming (painted ≤T but really >T+5 min) fell from up to **75%** (15-min threshold at the
-  barrier origin) to **0-6%** everywhere, with **zero** under-claiming before or after.
+  barrier origin) to **0-6%** everywhere, with **zero** under-claiming beyond the symmetric
+  ±5-minute tolerance band, before or after (sub-5-minute deviations are inside the band by
+  definition and not counted either way).
 - **Fair use accounting:** calibration was a bounded one-off development campaign (~35
   `one-to-many`/intermodal calls total, all ≤128 locations, ≥2 s spacing, identifying
   User-Agent with contact email). Runtime traffic is unchanged: 1 `one-to-all` + ≤1 coalesced

@@ -1,3 +1,4 @@
+import { area } from "@turf/area";
 import { union } from "@turf/union";
 import { contours } from "d3-contour";
 import type { Feature, MultiPolygon, Polygon } from "geojson";
@@ -16,7 +17,9 @@ import { BUCHAREST_BBOX } from "@/lib/bounds";
  *   (+ the origin's own radial walk access, ONLY when the caller has no
  *    street-routed walking isochrone to union in — see stampOrigin below)
  * The three rings are contours of ONE monotonic field, so nesting
- * (15 ⊆ 30 ⊆ 45) is guaranteed by construction — no polygon union, no cap.
+ * (15 ⊆ 30 ⊆ 45) is guaranteed by construction for buildRings itself (no cap,
+ * no union inside the field pass); the ONLY union is the separate unionRings
+ * step below, whose all-or-nothing + superset guards keep the invariant.
  *
  * REALISM (calibrated 2026-07-17): egress from a stop is stamped radially, but
  * at a DETOUR-DEFLATED speed — crow-fly distance understates real street
@@ -24,8 +27,8 @@ import { BUCHAREST_BBOX } from "@/lib/bounds";
  * metres at the nominal walk speed painted ~2× too much area. This is a
  * calibrated approximation, not street routing: anisotropy (rivers, rail) is
  * documented in docs/PROVIDERS.md "Calibration", not modeled. The ORIGIN's
- * walk component IS street-real: transit.ts unions the corrected ORS walking
- * rings into the result and then skips the radial origin stamp entirely.
+ * walk component is street-routed (boundary-calibrated ORS rings): transit.ts
+ * unions them into the result and skips the radial origin stamp entirely.
  *
  * Why not buffer-and-union the reachable stops? On a real 2,509-stop payload
  * that took ~65 s (turf `union` of hundreds of overlapping discs on the request
@@ -173,38 +176,59 @@ function toMultiPolygon(g: { type: "Polygon" | "MultiPolygon"; coordinates: unkn
 
 /**
  * Union each transit ring with the street-routed walking ring of the SAME
- * threshold, replacing the radial origin approximation with the exact walk
- * geometry (a walk of ≤T minutes is always a valid ≤T-minute transit journey,
- * so the union is semantically a superset-merge, and both families nest ⇒ the
- * outputs nest). Defensive per ring: any union failure, shape mismatch or
- * degenerate input falls back to the un-unioned transit ring — geometry polish
- * must never fail the transit response.
+ * threshold, replacing the radial origin approximation with the walk geometry
+ * (a walk of ≤T minutes is always a valid ≤T-minute transit journey, so the
+ * union is semantically a superset-merge, and both families nest ⇒ the
+ * outputs nest — GUARDED below, not assumed).
+ *
+ * ALL-OR-NOTHING: returns null if ANY threshold's merge fails (turf throw,
+ * missing/mismatched walk ring, degenerate geometry, or a merged result whose
+ * area shrank — a union must be a superset). A per-ring fallback would be
+ * WRONG here: the caller skipped the radial origin stamp expecting the walk
+ * geometry, so one failed ring would ship without any origin-walk area while
+ * its neighbours have it — breaking nesting and possibly excluding the origin
+ * from its own ring, then caching that for 7 days. On null the caller rebuilds
+ * the whole family with the radial origin stamp instead.
  */
-export function unionRings(transitRings: Ring[], walkRings: WalkRing[]): Ring[] {
-  return transitRings.map((ring, i) => {
+export function unionRings(transitRings: Ring[], walkRings: WalkRing[]): Ring[] | null {
+  const out: Ring[] = [];
+  for (const [i, ring] of transitRings.entries()) {
     const walk = walkRings[i];
     if (!walk || walk.minutes !== ring.minutes || isEmptyGeometry(walk.geometry?.coordinates)) {
-      return ring;
-    }
-    if (isEmptyGeometry(ring.geometry.coordinates)) {
-      // No transit reach at this threshold — the walking area IS the reach.
-      return { minutes: ring.minutes, geometry: toMultiPolygon(walk.geometry) };
+      console.error(`[transit-grid] ring-${ring.minutes}: walk ring missing/empty — radial fallback`);
+      return null;
     }
     try {
-      const merged = union({
-        type: "FeatureCollection",
-        features: [
-          { type: "Feature", properties: {}, geometry: ring.geometry } as Feature<MultiPolygon>,
-          { type: "Feature", properties: {}, geometry: walk.geometry as unknown } as Feature<
-            Polygon | MultiPolygon
-          >,
-        ],
-      });
-      if (!merged?.geometry) return ring;
-      return { minutes: ring.minutes, geometry: toMultiPolygon(merged.geometry) };
+      const walkFeature = {
+        type: "Feature",
+        properties: {},
+        geometry: walk.geometry as unknown,
+      } as Feature<Polygon | MultiPolygon>;
+      const walkArea = area(walkFeature); // also validates the walk geometry (throws on garbage)
+      if (isEmptyGeometry(ring.geometry.coordinates)) {
+        // No transit reach at this threshold — the walking area IS the reach.
+        out.push({ minutes: ring.minutes, geometry: toMultiPolygon(walk.geometry) });
+        continue;
+      }
+      const transitFeature = {
+        type: "Feature",
+        properties: {},
+        geometry: ring.geometry,
+      } as Feature<MultiPolygon>;
+      const merged = union({ type: "FeatureCollection", features: [transitFeature, walkFeature] });
+      if (!merged?.geometry) return null;
+      // Superset guard: turf can fail SILENTLY on near-degenerate input,
+      // returning valid-looking but smaller geometry. 1 m² of float slack.
+      const mergedArea = area(merged);
+      if (mergedArea + 1 < Math.max(area(transitFeature), walkArea)) {
+        console.error(`[transit-grid] ring-${ring.minutes}: union shrank — radial fallback`);
+        return null;
+      }
+      out.push({ minutes: ring.minutes, geometry: toMultiPolygon(merged.geometry) });
     } catch (err) {
-      console.error(`[transit-grid] ring-${ring.minutes} union failed, keeping radial ring:`, err);
-      return ring;
+      console.error(`[transit-grid] ring-${ring.minutes} union failed — radial fallback:`, err);
+      return null;
     }
-  });
+  }
+  return out;
 }
