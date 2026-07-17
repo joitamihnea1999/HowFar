@@ -13,8 +13,19 @@ const HOST = "api.openrouteservice.org";
 const MIN_INTERVAL_MS = 1500; // free tier ~40 isochrone req/min (PROVIDERS.md) ⇒ ≥1.5s spacing
 const TIMEOUT_MS = 12_000;
 const TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const RANGES_SECONDS = [900, 1800, 2700]; // 15 / 30 / 45 minutes
-const EXPECTED_MINUTES = [15, 30, 45];
+// The requested ranges are CALIBRATED, not nominal. ORS foot-walking boundaries
+// are systematically generous versus real street walking: auditing ring
+// boundaries with street-routed distances (MOTIS one-to-many, withDistance) at
+// three diverse origins (Unirii / Grozăvești / Berceni, 2026-07-17) put the
+// nominal 900/1800/2700 s boundaries at 1.265/1.164/1.123 × their labels at
+// 80 m/min. Two-pass fit (initial scale, then one measured iteration because
+// the factor grows as ranges shrink) landed the values below; re-audited
+// boundaries sit at ≈ the nominal minutes (15-ring median 15.0, residuals
+// within ±10%). So the polygon LABELED "15/30/45 min" truly takes ≈ that many
+// street-walking minutes. Methodology + re-run: docs/PROVIDERS.md "Calibration".
+const CALIBRATED_RANGES_S = [827, 1674, 2528];
+const NOMINAL_MINUTES = [15, 30, 45];
+const RANGE_TOLERANCE_S = 1; // ORS echoes the requested range in properties.value
 
 // Loose GeoJSON typing to avoid pulling in @types/geojson; the client passes
 // these straight into a MapLibre GeoJSON source.
@@ -35,26 +46,44 @@ interface OrsFeature {
   geometry?: { type?: string; coordinates?: unknown };
 }
 
+/** Strict bijection from response features to nominal rings: exactly one
+ * feature per requested calibrated range, matched on the RAW echoed value and
+ * only then relabeled to 15/30/45. A dropped, duplicated, reordered-but-wrong
+ * or unscaled feature must 502 here — silently mislabeling would lie on the
+ * map AND corrupt the amenities clip (it uses the "15-min" ring). */
 function normalize(features: OrsFeature[]): Ring[] {
-  return features
-    .map((f) => ({
-      minutes: Math.round((f.properties?.value ?? 0) / 60),
-      geometry: f.geometry,
-    }))
-    .filter(
-      (r): r is Ring =>
-        !!r.geometry &&
-        (r.geometry.type === "Polygon" || r.geometry.type === "MultiPolygon") &&
-        // A right-typed feature can still carry null/empty/garbage coordinates
-        // — that must fail here (→ 502), not inside MapLibre on the client.
-        // One nesting level is checked (each member a non-empty array); full
-        // GeoJSON-tree validation is out of scope for a trusted provider.
-        Array.isArray(r.geometry.coordinates) &&
-        r.geometry.coordinates.length > 0 &&
-        (r.geometry.coordinates as unknown[]).every((c) => Array.isArray(c) && c.length > 0) &&
-        r.minutes > 0,
-    )
-    .sort((a, b) => a.minutes - b.minutes);
+  if (features.length !== CALIBRATED_RANGES_S.length) {
+    throw new ProviderError(
+      `openrouteservice returned ${features.length} rings (expected ${CALIBRATED_RANGES_S.length})`,
+    );
+  }
+  const sorted = [...features].sort(
+    (a, b) => (a.properties?.value ?? Number.NaN) - (b.properties?.value ?? Number.NaN),
+  );
+  return sorted.map((f, i) => {
+    const value = f.properties?.value;
+    if (typeof value !== "number" || Math.abs(value - CALIBRATED_RANGES_S[i]!) > RANGE_TOLERANCE_S) {
+      throw new ProviderError(
+        `openrouteservice ring values [${sorted.map((s) => s.properties?.value).join(", ")}] ` +
+          `do not match the calibrated ranges [${CALIBRATED_RANGES_S.join(", ")}]`,
+      );
+    }
+    const geometry = f.geometry;
+    if (
+      !geometry ||
+      (geometry.type !== "Polygon" && geometry.type !== "MultiPolygon") ||
+      // A right-typed feature can still carry null/empty/garbage coordinates
+      // — that must fail here (→ 502), not inside MapLibre on the client.
+      // One nesting level is checked (each member a non-empty array); full
+      // GeoJSON-tree validation is out of scope for a trusted provider.
+      !Array.isArray(geometry.coordinates) ||
+      geometry.coordinates.length === 0 ||
+      !(geometry.coordinates as unknown[]).every((c) => Array.isArray(c) && c.length > 0)
+    ) {
+      throw new ProviderError("openrouteservice returned a ring with invalid geometry");
+    }
+    return { minutes: NOMINAL_MINUTES[i]!, geometry: geometry as Ring["geometry"] };
+  });
 }
 
 // In-flight requests, keyed by cache key, so two concurrent cold callers for the
@@ -66,7 +95,9 @@ const inFlight = new Map<string, Promise<IsochroneResult>>();
 /** Walking isochrone (15/30/45 min) from a point. Coord is rounded ONCE and
  *  reused for the cache key, the ORS request, and the returned origin. */
 export async function walkingIsochrone(latRaw: number, lngRaw: number): Promise<IsochroneResult> {
-  const key = `iso:foot:${roundCoord(latRaw)},${roundCoord(lngRaw)}`;
+  // v2: calibrated ranges (see CALIBRATED_RANGES_S) — the version bump makes
+  // sure no pre-calibration (over-generous) cached ring is ever served again.
+  const key = `iso:foot:v2:${roundCoord(latRaw)},${roundCoord(lngRaw)}`;
 
   const hit = await getCachedSafe<IsochroneResult>(key);
   if (hit) return hit;
@@ -102,7 +133,7 @@ async function fetchAndCache(latRaw: number, lngRaw: number, key: string): Promi
         // ORS isochrones serves application/geo+json; do NOT send Accept: application/json (→ 406).
         headers: { Authorization: apiKey, "Content-Type": "application/json" },
         // ORS expects [lng, lat] order.
-        body: JSON.stringify({ locations: [[lng, lat]], range: RANGES_SECONDS }),
+        body: JSON.stringify({ locations: [[lng, lat]], range: CALIBRATED_RANGES_S }),
       },
     });
     if (!res.ok) throw new ProviderError(`openrouteservice responded ${res.status}`);
@@ -117,16 +148,9 @@ async function fetchAndCache(latRaw: number, lngRaw: number, key: string): Promi
   if (body.features !== undefined && !Array.isArray(body.features)) {
     throw new ProviderError("openrouteservice returned a malformed response (features not an array)");
   }
+  // normalize enforces the full contract (count, calibrated values, geometry)
+  // and throws ProviderError itself — rings come back ascending 15/30/45.
   const rings = normalize(body.features ?? []);
-  // Contract: exactly one valid ring per requested range (15/30/45), ascending.
-  const gotExpected =
-    rings.length === EXPECTED_MINUTES.length &&
-    EXPECTED_MINUTES.every((m, i) => rings[i]?.minutes === m);
-  if (!gotExpected) {
-    throw new ProviderError(
-      `openrouteservice returned unexpected rings: [${rings.map((r) => r.minutes).join(", ")}]`,
-    );
-  }
 
   const result: IsochroneResult = { origin: { lat, lng }, rings };
   await setCachedSafe(key, result, new Date(Date.now() + TTL_MS));
