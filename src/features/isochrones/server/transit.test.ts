@@ -1,10 +1,14 @@
+import { booleanPointInPolygon } from "@turf/boolean-point-in-polygon";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { store, providerFetch, buildRingsMock } = vi.hoisted(() => ({
+const { store, providerFetch, buildRingsMock, walkingIsochroneMock } = vi.hoisted(() => ({
   store: new Map<string, unknown>(),
   providerFetch: vi.fn(),
   buildRingsMock: vi.fn(),
+  walkingIsochroneMock: vi.fn(),
 }));
+
+vi.mock("@/features/isochrones/server/ors", () => ({ walkingIsochrone: walkingIsochroneMock }));
 
 vi.mock("@/lib/api-cache", () => ({
   getCachedSafe: (key: string) => Promise.resolve(store.has(key) ? store.get(key) : null),
@@ -44,7 +48,15 @@ beforeEach(async () => {
   buildRingsMock.mockImplementation((...args: Parameters<typeof actual.buildRings>) =>
     actual.buildRings(...args),
   );
+  // Default: ORS unavailable → the provider takes the radial-origin fallback,
+  // preserving the historical semantics every pre-union test asserts. The
+  // rejection is consumed by transit.ts's immediate .catch (no unhandled).
+  walkingIsochroneMock.mockRejectedValue(new Error("ORS down (test default)"));
+  errSpy?.mockRestore();
+  errSpy = vi.spyOn(console, "error").mockImplementation(() => {}); // silence the fallback log
 });
+
+let errSpy: ReturnType<typeof vi.spyOn> | undefined;
 
 describe("transitIsochrone", () => {
   it("returns the ORS-identical {origin, rings[15,30,45]} shape on a valid response", async () => {
@@ -141,12 +153,95 @@ describe("transitIsochrone", () => {
     expect(result.origin).toEqual({ lat: 44.42681, lng: 26.10253 });
   });
 
-  it("serves a cache hit without a second fetch", async () => {
+  it("skips the radial origin stamp and unions the walk rings when ORS succeeds", async () => {
+    const sq = (half: number) => [[
+      [26.1025 - half, 44.4268 - half], [26.1025 + half, 44.4268 - half],
+      [26.1025 + half, 44.4268 + half], [26.1025 - half, 44.4268 + half],
+      [26.1025 - half, 44.4268 - half],
+    ]];
+    walkingIsochroneMock.mockResolvedValue({
+      origin: { lat: 44.4268, lng: 26.1025 },
+      rings: [15, 30, 45].map((m, i) => ({
+        minutes: m,
+        geometry: { type: "Polygon", coordinates: sq(0.005 * (i + 1)) },
+      })),
+    });
+    providerFetch.mockResolvedValue(oneToAll([stop(44.475, 26.16, 20)]));
+    const result = await transitIsochrone(44.4268, 26.1025);
+    // buildRings was told NOT to stamp the origin...
+    expect(buildRingsMock.mock.calls[0][2]).toEqual({ stampOrigin: false });
+    // ...and the walk square landed in the output via the union.
+    expect(result.rings.map((r) => r.minutes)).toEqual([15, 30, 45]);
+    const [r15] = result.rings;
+    expect((r15.geometry.coordinates as unknown[]).length).toBeGreaterThan(0);
+  });
+
+  it("zero stops + walk rings available ⇒ the response IS the walk rings (as MultiPolygons)", async () => {
+    const sq = (half: number) => [[
+      [26.1025 - half, 44.4268 - half], [26.1025 + half, 44.4268 - half],
+      [26.1025 + half, 44.4268 + half], [26.1025 - half, 44.4268 + half],
+      [26.1025 - half, 44.4268 - half],
+    ]];
+    const walkRings = [15, 30, 45].map((m, i) => ({
+      minutes: m,
+      geometry: { type: "Polygon" as const, coordinates: sq(0.005 * (i + 1)) },
+    }));
+    walkingIsochroneMock.mockResolvedValue({ origin: { lat: 44.4268, lng: 26.1025 }, rings: walkRings });
+    providerFetch.mockResolvedValue(oneToAll([]));
+    const result = await transitIsochrone(44.4268, 26.1025);
+    expect(result.rings).toEqual(
+      walkRings.map((w) => ({
+        minutes: w.minutes,
+        geometry: { type: "MultiPolygon", coordinates: [w.geometry.coordinates] },
+      })),
+    );
+  });
+
+  it("falls back to the radial origin stamp when ORS fails (response still ships)", async () => {
+    providerFetch.mockResolvedValue(oneToAll([stop(44.44, 26.12, 5)]));
+    const result = await transitIsochrone(44.4268, 26.1025); // default mock: ORS down
+    expect(buildRingsMock.mock.calls[0][2]).toEqual({ stampOrigin: true });
+    expect(result.rings).toHaveLength(3);
+    expect(booleanPointInPolygon([26.1025, 44.4268], {
+      type: "Feature", properties: {},
+      geometry: result.rings[0].geometry as never,
+    })).toBe(true); // origin walk area present via the radial fallback
+  });
+
+  it("serves a cache hit without a second fetch, under the v2 key", async () => {
     providerFetch.mockResolvedValue(oneToAll([stop(44.44, 26.12, 5)]));
     const first = await transitIsochrone(44.4, 26.1);
     const second = await transitIsochrone(44.4, 26.1);
     expect(providerFetch).toHaveBeenCalledTimes(1);
     expect(second).toEqual(first);
+    // v2 key: pre-calibration cached rings must never be served again.
+    expect([...store.keys()].every((k) => k.startsWith("transit:v2:"))).toBe(true);
+  });
+
+  it("pins the speed model and routed transfers in the one-to-all request", async () => {
+    providerFetch.mockResolvedValue(oneToAll([]));
+    await transitIsochrone(44.4, 26.1);
+    const url = providerFetch.mock.calls[0][0] as string;
+    expect(url).toContain("pedestrianSpeed=1.333");
+    expect(url).toContain("useRoutedTransfers=true");
+  });
+
+  it("returns the pinned representative departure so the UI can qualify the claim", async () => {
+    providerFetch.mockResolvedValue(oneToAll([]));
+    const result = await transitIsochrone(44.4, 26.1);
+    expect(result.departure).toBe(representativeDeparture());
+  });
+
+  it("coalesces two concurrent cold requests for the same origin into ONE one-to-all", async () => {
+    let resolveFetch!: (v: unknown) => void;
+    providerFetch.mockReturnValue(new Promise((r) => (resolveFetch = r)));
+    const p1 = transitIsochrone(44.4, 26.1);
+    const p2 = transitIsochrone(44.4, 26.1);
+    await new Promise((r) => setTimeout(r, 0)); // drain cache reads + in-flight registration
+    resolveFetch(oneToAll([stop(44.44, 26.12, 5)]));
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(providerFetch).toHaveBeenCalledTimes(1);
+    expect(r1).toEqual(r2);
   });
 });
 

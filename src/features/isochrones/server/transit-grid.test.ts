@@ -2,9 +2,20 @@ import { area } from "@turf/area";
 import { booleanPointInPolygon } from "@turf/boolean-point-in-polygon";
 import { difference } from "@turf/difference";
 import type { Feature, MultiPolygon } from "geojson";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { buildRings, THRESHOLDS, WALK_SPEED_M_PER_MIN, type Ring } from "./transit-grid";
+import fc from "fast-check";
+
+import {
+  buildRings,
+  EGRESS_M_PER_MIN,
+  STREET_DETOUR,
+  THRESHOLDS,
+  unionRings,
+  WALK_SPEED_M_PER_MIN,
+  type Ring,
+  type WalkRing,
+} from "./transit-grid";
 
 const ORIGIN = { lat: 44.4268, lng: 26.1025 }; // Piața Unirii
 
@@ -103,8 +114,52 @@ describe("buildRings", () => {
     expect(ms).toBeLessThan(2000);
   });
 
-  it("uses the documented walk speed constant", () => {
+  it("uses the documented walk speed and measured detour constants", () => {
     expect(WALK_SPEED_M_PER_MIN).toBe(80);
+    expect(STREET_DETOUR).toBe(1.402); // measured 2026-07-17, see module comment
+    expect(EGRESS_M_PER_MIN).toBeCloseTo(80 / 1.402, 10);
+  });
+
+  it("stampOrigin:false leaves the origin unstamped (empty rings with no stops)", () => {
+    // transit.ts uses this when the street-routed walk rings get unioned in —
+    // the radial origin disc must NOT contribute area in that mode.
+    const rings = buildRings(ORIGIN, [], { stampOrigin: false });
+    for (const r of rings) expect(r.geometry.coordinates).toEqual([]);
+    // ...while stops still stamp normally in the same mode.
+    const withStop = buildRings(ORIGIN, [{ lat: 44.44, lng: 26.12, dur: 5 }], { stampOrigin: false });
+    expect(withStop[2].geometry.coordinates.length).toBeGreaterThan(0);
+  });
+
+  it("egress radius honours the detour deflation: a point ~14 crow-minutes out is NOT 15-reachable", () => {
+    // A stop with dur=0 at the origin: at the OLD 80 m/min crow-fly stamp a cell
+    // 1120 m away (14 "crow minutes") sat inside the 15-ring; with the measured
+    // 1.402 detour its street time is ~19.6 min, so it must now fall OUTSIDE.
+    const stop = { lat: ORIGIN.lat, lng: ORIGIN.lng, dur: 0 };
+    const [r15] = buildRings({ lat: 50, lng: 30 }, [stop], { stampOrigin: false });
+    const lat1120 = ORIGIN.lat + 1120 / 110540;
+    expect(booleanPointInPolygon(pt(ORIGIN.lng, lat1120), asFeature(r15))).toBe(false);
+    // ...but a point ~700 m out (12.3 street-minutes at the calibrated speed) IS inside.
+    const lat700 = ORIGIN.lat + 700 / 110540;
+    expect(booleanPointInPolygon(pt(ORIGIN.lng, lat700), asFeature(r15))).toBe(true);
+  });
+
+  it("stays under the perf ceiling on a full-scale (~2,500-stop) payload at the finer grid", () => {
+    // Deterministic synthetic payload matching the real Unirii one-to-all scale
+    // (2,508 stops); complexity depends only on stop count x stamp radii, so
+    // this is perf-equivalent to the recorded payload without a binary fixture.
+    const stops: { lat: number; lng: number; dur: number }[] = [];
+    for (let i = 0; i < 2500; i++) {
+      stops.push({
+        lat: 44.34 + (i % 50) * 0.004,
+        lng: 25.97 + Math.floor(i / 50) * 0.005,
+        dur: 3 + (i % 43),
+      });
+    }
+    const t0 = performance.now();
+    const rings = buildRings(ORIGIN, stops);
+    const ms = performance.now() - t0;
+    expect(rings.map((r) => r.minutes)).toEqual([15, 30, 45]);
+    expect(ms).toBeLessThan(300);
   });
 
   it("yields three EMPTY MultiPolygons (still 3 rings, ascending) when nothing reaches the box", () => {
@@ -128,5 +183,102 @@ describe("buildRings", () => {
     expect(r15.geometry.coordinates).toEqual([]);
     expect(r30.geometry.coordinates.length).toBeGreaterThan(0);
     expect(r45.geometry.coordinates.length).toBeGreaterThan(0);
+  });
+});
+
+// --- unionRings -------------------------------------------------------------
+
+/** Axis-aligned square as a Polygon ring (closed, CCW). */
+function square(clat: number, clng: number, halfDeg: number): number[][][] {
+  return [[
+    [clng - halfDeg, clat - halfDeg],
+    [clng + halfDeg, clat - halfDeg],
+    [clng + halfDeg, clat + halfDeg],
+    [clng - halfDeg, clat + halfDeg],
+    [clng - halfDeg, clat - halfDeg],
+  ]];
+}
+function mpRing(minutes: number, coords: number[][][][]): Ring {
+  return { minutes, geometry: { type: "MultiPolygon", coordinates: coords } };
+}
+function walkRing(minutes: number, clat: number, clng: number, halfDeg: number): WalkRing {
+  return { minutes, geometry: { type: "Polygon", coordinates: square(clat, clng, halfDeg) } };
+}
+
+describe("unionRings", () => {
+  const C = { lat: 44.4268, lng: 26.1025 };
+
+  it("merges the walk ring into each threshold: walk-only area becomes part of the result", () => {
+    // Transit square NE of the origin; walk square AT the origin, disjoint from it.
+    const transit = THRESHOLDS.map((m, i) => mpRing(m, [square(44.47, 26.16, 0.01 + i * 0.005)]));
+    const walk = THRESHOLDS.map((m, i) => walkRing(m, C.lat, C.lng, 0.008 + i * 0.004));
+    const out = unionRings(transit, walk);
+    for (const [i, r] of out.entries()) {
+      expect(r.minutes).toBe(THRESHOLDS[i]);
+      // origin (walk-only) AND the transit square both inside
+      expect(booleanPointInPolygon(pt(C.lng, C.lat), asFeature(r))).toBe(true);
+      expect(booleanPointInPolygon(pt(26.16, 44.47), asFeature(r))).toBe(true);
+    }
+  });
+
+  it("an empty transit ring takes the walk geometry outright (as MultiPolygon)", () => {
+    const transit = THRESHOLDS.map((m) => mpRing(m, []));
+    const walk = THRESHOLDS.map((m) => walkRing(m, C.lat, C.lng, 0.01));
+    const out = unionRings(transit, walk);
+    for (const r of out) {
+      expect(r.geometry.type).toBe("MultiPolygon");
+      expect(r.geometry.coordinates.length).toBe(1);
+      expect(booleanPointInPolygon(pt(C.lng, C.lat), asFeature(r))).toBe(true);
+    }
+  });
+
+  it("keeps the transit ring when the walk ring is missing, empty, or threshold-mismatched", () => {
+    const transit = THRESHOLDS.map((m) => mpRing(m, [square(44.44, 26.12, 0.01)]));
+    expect(unionRings(transit, [])).toEqual(transit);
+    const empties = THRESHOLDS.map((m) => ({ minutes: m, geometry: { type: "Polygon" as const, coordinates: [] } }));
+    expect(unionRings(transit, empties)).toEqual(transit);
+    const mismatched = [walkRing(99, C.lat, C.lng, 0.01), walkRing(98, C.lat, C.lng, 0.02), walkRing(97, C.lat, C.lng, 0.03)];
+    expect(unionRings(transit, mismatched)).toEqual(transit);
+  });
+
+  it("falls back to the un-unioned ring when turf union throws on degenerate input", () => {
+    const transit = THRESHOLDS.map((m) => mpRing(m, [square(44.44, 26.12, 0.01)]));
+    const garbage = THRESHOLDS.map((m) => ({
+      minutes: m,
+      geometry: { type: "Polygon" as const, coordinates: [[["x"]]] as unknown },
+    }));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(unionRings(transit, garbage)).toEqual(transit); // never throws, never 502s
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("property: outputs nest (15 ⊆ 30 ⊆ 45) for arbitrary concentric families", () => {
+    fc.assert(
+      fc.property(
+        fc.double({ min: 44.35, max: 44.5, noNaN: true }),
+        fc.double({ min: 26.0, max: 26.2, noNaN: true }),
+        fc.double({ min: 0.002, max: 0.02, noNaN: true }),
+        fc.double({ min: 0.002, max: 0.02, noNaN: true }),
+        fc.double({ min: 0, max: 0.05, noNaN: true }),
+        (tlat, tlng, tHalf, wHalf, offset) => {
+          // Both inputs nest by construction (concentric squares, growing half-size).
+          const transit = THRESHOLDS.map((m, i) => mpRing(m, [square(tlat, tlng, tHalf * (i + 1))]));
+          const walk = THRESHOLDS.map((m, i) => walkRing(m, tlat + offset, tlng - offset, wHalf * (i + 1)));
+          const out = unionRings(transit, walk);
+          for (const [small, large] of [[out[0], out[1]], [out[1], out[2]]] as const) {
+            const diff = difference({
+              type: "FeatureCollection",
+              features: [asFeature(small!), asFeature(large!)],
+            });
+            if ((diff ? area(diff) : 0) >= 1) return false; // leak ≥ 1 m² = nesting broken
+          }
+          return true;
+        },
+      ),
+      { numRuns: 40 },
+    );
   });
 });

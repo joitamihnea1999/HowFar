@@ -1,7 +1,14 @@
+import { walkingIsochrone } from "@/features/isochrones/server/ors";
+import {
+  buildRings,
+  THRESHOLDS,
+  unionRings,
+  type TransitStop,
+  type WalkRing,
+} from "@/features/isochrones/server/transit-grid";
 import { getCachedSafe, setCachedSafe } from "@/lib/api-cache";
 import { BUCHAREST_BBOX } from "@/lib/bounds";
 import { providerFetch, ProviderError, roundCoord, USER_AGENT } from "@/lib/provider-http";
-import { buildRings, THRESHOLDS, type TransitStop } from "@/features/isochrones/server/transit-grid";
 
 /**
  * Transitous MOTIS transit isochrones (server-side, cached). Transitous has no
@@ -19,6 +26,11 @@ const MIN_INTERVAL_MS = 1500; // community-run; be a good citizen
 const TIMEOUT_MS = 20_000; // one-to-all is heavy (~1.5–3 s live)
 const TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_TRAVEL_MIN = THRESHOLDS[THRESHOLDS.length - 1]; // 45
+// Pin MOTIS's access-walk speed to the product's 80 m/min (= 1.333 m/s) so the
+// per-stop durations share one speed model with the egress stamps and the walk
+// rings; routed transfers cost nothing extra and reach ~4% more stops
+// (probed live 2026-07-17: 2508→2607 stops, same latency).
+const PEDESTRIAN_SPEED_M_S = "1.333";
 
 const BUCHAREST_TZ = "Europe/Bucharest";
 const REPRESENTATIVE_WEEKDAY = 3; // Wednesday
@@ -30,6 +42,10 @@ export interface TransitIsochroneResult {
   origin: { lat: number; lng: number };
   /** Reachability rings, ascending by minutes (15, 30, 45). */
   rings: { minutes: number; geometry: { type: "Polygon" | "MultiPolygon"; coordinates: unknown } }[];
+  /** The pinned representative departure (ISO instant) the reachability models
+   * — upcoming Wednesday 08:30 Europe/Bucharest, NOT "now". Surfaced so the UI
+   * can qualify the claim (a weekend/night visitor sees weekday-morning reach). */
+  departure: string;
 }
 
 interface OneToAllStop {
@@ -119,22 +135,60 @@ function parseStops(all: OneToAllStop[]): TransitStop[] {
   return stops;
 }
 
+// In-flight requests keyed by cache key: two concurrent cold callers for the
+// same origin+departure share ONE heavy one-to-all request (the ors.ts T3
+// pattern — fair use under bursts). Cleared on settle.
+const inFlight = new Map<string, Promise<TransitIsochroneResult>>();
+
 /** Transit isochrone (15/30/45 min) from a point, via Transitous one-to-all. */
 export async function transitIsochrone(latRaw: number, lngRaw: number): Promise<TransitIsochroneResult> {
-  const lat = Number(roundCoord(latRaw));
-  const lng = Number(roundCoord(lngRaw));
   const departure = representativeDeparture();
-  const key = `transit:${roundCoord(latRaw)},${roundCoord(lngRaw)}:${departure}`;
+  // v2: calibrated egress + pinned pedestrian speed + routed transfers + union
+  // (the version bump keeps pre-calibration cached rings from ever serving).
+  const key = `transit:v2:${roundCoord(latRaw)},${roundCoord(lngRaw)}:${departure}`;
 
   const hit = await getCachedSafe<TransitIsochroneResult>(key);
   if (hit) return hit;
+
+  const existing = inFlight.get(key);
+  if (existing) return existing;
+
+  const promise = fetchAndBuild(latRaw, lngRaw, departure, key);
+  inFlight.set(key, promise);
+  try {
+    return await promise;
+  } finally {
+    inFlight.delete(key);
+  }
+}
+
+async function fetchAndBuild(
+  latRaw: number,
+  lngRaw: number,
+  departure: string,
+  key: string,
+): Promise<TransitIsochroneResult> {
+  const lat = Number(roundCoord(latRaw));
+  const lng = Number(roundCoord(lngRaw));
+
+  // Street-routed origin walk, fetched IN PARALLEL with one-to-all (coalesced
+  // with /api/isochrone + amenities via ors.ts's single-flight + 7d cache, so
+  // a fresh transit selection costs ≤1 marginal ORS call). Failure is non-fatal
+  // — the radial origin stamp takes over and the response still ships.
+  const walkPromise: Promise<WalkRing[] | null> = walkingIsochrone(latRaw, lngRaw)
+    .then((r) => r.rings as WalkRing[])
+    .catch((err: Error) => {
+      console.error(`[transit] walking rings unavailable, radial origin fallback: ${err.message}`);
+      return null;
+    });
 
   // A stalled/unreachable/garbled upstream is a provider error (→ 502), not a 500.
   let body: OneToAllBody;
   try {
     const url =
       `${URL}?one=${lat},${lng}&maxTravelTime=${MAX_TRAVEL_MIN}` +
-      `&transitModes=TRANSIT&time=${encodeURIComponent(departure)}`;
+      `&transitModes=TRANSIT&time=${encodeURIComponent(departure)}` +
+      `&pedestrianSpeed=${PEDESTRIAN_SPEED_M_S}&useRoutedTransfers=true`;
     const res = await providerFetch(url, {
       rateHost: HOST,
       minIntervalMs: MIN_INTERVAL_MS,
@@ -155,12 +209,17 @@ export async function transitIsochrone(latRaw: number, lngRaw: number): Promise<
   }
 
   const stops = parseStops(body.all);
+  const walkRings = await walkPromise;
 
   // Geometry construction is CPU work on caller-supplied shapes — a failure here
   // is a provider-side data problem (→ 502), not an internal 500.
   let rings: TransitIsochroneResult["rings"];
   try {
-    rings = buildRings({ lat, lng }, stops);
+    // With street-routed walk rings in hand, skip the radial origin stamp and
+    // union the exact walk geometry in per threshold; without them, fall back
+    // to the calibrated radial origin (see transit-grid.ts).
+    const built = buildRings({ lat, lng }, stops, { stampOrigin: !walkRings });
+    rings = walkRings ? unionRings(built, walkRings) : built;
   } catch (err) {
     throw new ProviderError(`transit isochrone construction failed: ${(err as Error).message}`);
   }
@@ -168,7 +227,7 @@ export async function transitIsochrone(latRaw: number, lngRaw: number): Promise<
     throw new ProviderError("transit isochrone produced unexpected rings");
   }
 
-  const result: TransitIsochroneResult = { origin: { lat, lng }, rings };
+  const result: TransitIsochroneResult = { origin: { lat, lng }, rings, departure };
   await setCachedSafe(key, result, new Date(Date.now() + TTL_MS));
   return result;
 }

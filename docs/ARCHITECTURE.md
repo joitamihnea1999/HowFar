@@ -167,11 +167,24 @@ no stacks, no upstream payloads. The response body stays generic.
 - Coordinates: ORS wants `[lng, lat]`; Nominatim returns lat/lon as *strings*;
   Photon and Nominatim use different bbox parameter orders. Each quirk is
   commented at its call site.
+- Ring labels mean REAL street minutes at 80 m/min, not provider-nominal
+  values: the ORS ranges are calibrated (`ors.ts` CALIBRATED_RANGES_S — the
+  response contract matches features to those exact values before relabeling
+  to 15/30/45) and transit egress runs at a measured detour-deflated speed
+  (`transit-grid.ts` STREET_DETOUR). Methodology + numbers:
+  `docs/PROVIDERS.md` "Calibration". Cache keys are versioned (`iso:foot:v2:`,
+  `transit:v2:`) so pre-calibration rings can never be served.
 - Isochrone rings are always exactly 15/30/45 minutes, ascending; transit ring
   nesting (15 ⊆ 30 ⊆ 45) is guaranteed by construction (thresholds of one
-  monotonic field — see `transit-grid.ts` for why it is a grid, not a union).
+  monotonic field — see `transit-grid.ts`). The ONLY union is the per-threshold
+  merge of the street-routed walking ring (`unionRings`) — nesting survives it
+  because both families nest; a union failure falls back to the un-unioned
+  ring, and an ORS failure falls back to the radial origin stamp (the transit
+  response never fails because of walk-geometry polish).
 - Transit departure time is pinned to a representative weekday morning so
-  reachability is comparable and cacheable (`representativeDeparture`).
+  reachability is comparable and cacheable (`representativeDeparture`); the
+  response's `departure` field carries that instant so the UI can qualify the
+  claim (a weekend/night visitor is seeing weekday-08:30 reach).
 - Negative geocode results are cached under a sentinel so repeat misses cost
   zero upstream calls.
 - The tile route caps Range slices (DoS guard) and never buffers the whole

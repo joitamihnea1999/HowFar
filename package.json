@@ -22,6 +22,7 @@
     "@prisma/client": "^7.8.0",
     "@protomaps/basemaps": "^5.7.2",
     "@turf/boolean-point-in-polygon": "^7.3.5",
+    "@turf/union": "^7.3.5",
     "d3-contour": "^4.0.2",
     "dotenv": "^17.4.2",
     "maplibre-gl": "^5.24.0",

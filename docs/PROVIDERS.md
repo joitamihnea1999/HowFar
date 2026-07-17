@@ -74,6 +74,40 @@ calls. Go/no-go bar: ≥100 fresh addresses/day headroom on every provider. **Al
   to 15 min"** — cannot serve the required 30/45-min thresholds on the free tier. Transit mode
   also not confirmed in the Isoline API docs.
 
+### Calibration of the reachability rings (2026-07-17) — how "15 minutes" is kept honest
+
+Both isochrone constructions are **calibrated against street-network measurements**, and the
+methodology below is re-runnable whenever providers or the city data change.
+
+- **Ruler:** MOTIS `one-to-many` (`mode=WALK`, `withDistance=true`) returns street-routed
+  **distance**, making measurements independent of any speed assumption; minutes are then
+  distances at the product's documented walking speed (80 m/min ≈ 4.8 km/h). Distance-based
+  measurement is the ruler everywhere (durations depend on the router's own speed constant).
+- **Walking rings (ORS):** ORS foot-walking boundaries are systematically generous — boundary
+  audits at three diverse origins (Unirii central / Grozăvești river-barrier / Berceni periphery)
+  put the nominal 900/1800/2700 s boundaries at 1.265/1.164/1.123 × their labels. ~4% of that is
+  ORS's faster speed constant (~5 km/h vs our 4.8), the rest boundary/hull generosity; the fix is
+  cause-agnostic: request ranges fitted in two passes (the factor grows as ranges shrink) —
+  final `[827, 1674, 2528]` s — then re-audited: the corrected boundaries sit at ≈ nominal
+  (15-ring median exactly 15.0 min; residuals within ±10%). See `ors.ts` CALIBRATED_RANGES_S.
+- **Transit egress:** crow-fly understates Bucharest street distance by a measured median
+  **1.402×** (143 routed-vs-straight pairs, 6 origins; p25 1.29, p75 1.54, p90 1.82 — worst at
+  river/rail barriers). Stop-egress stamps run at 80/1.402 m/min. This is a **calibrated
+  approximation** — anisotropy (a river beside the stop) is documented, not modeled.
+- **Origin walk component:** street-REAL, not approximated — the transit rings union in the
+  calibrated ORS walking rings per threshold and skip the radial origin stamp (radial is the
+  ORS-failure fallback only).
+- **Validation (shipped rings vs `one-to-many-intermodal` ground truth, 252 points, 3 origins):**
+  over-claiming (painted ≤T but really >T+5 min) fell from up to **75%** (15-min threshold at the
+  barrier origin) to **0-6%** everywhere, with **zero** under-claiming before or after.
+- **Fair use accounting:** calibration was a bounded one-off development campaign (~35
+  `one-to-many`/intermodal calls total, all ≤128 locations, ≥2 s spacing, identifying
+  User-Agent with contact email). Runtime traffic is unchanged: 1 `one-to-all` + ≤1 coalesced
+  ORS call per fresh address, everything MySQL-cached. **The Transitous courtesy contact is
+  still an open owner action** (see Action items) — no further calibration campaigns before it
+  lands. For later travel modes (bike/car), `one-to-many` supports `mode=BIKE|CAR` — same
+  instrument, same budget discipline.
+
 ### Amenities / POIs — Overpass API ✅ PICKED
 - Commons/fair use (<https://dev.overpass-api.de/overpass-doc/en/preface/commons.html>, wiki):
   guideline ≈ "10,000 requests per day and … download volume below about 1 GB per day".
