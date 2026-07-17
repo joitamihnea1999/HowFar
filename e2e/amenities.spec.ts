@@ -26,6 +26,9 @@ const TRANSIT = { origin: { lat: 44.4268, lng: 26.1025 }, rings: [ring(15, 0.03)
 const AMENITIES = {
   origin: { lat: 44.4268, lng: 26.1025 },
   walkMinutes: 15,
+  // Parks count (200) deliberately exceeds the rendered markers (5) — the chip
+  // must show the TRUE server count, not a recount of the capped markers.
+  counts: { groceries: 62, pharmacies: 35, parks: 200, schools: 38, transit: 91 },
   amenities: [
     { lat: 44.427, lng: 26.103, name: "Mega Image", category: "groceries" },
     { lat: 44.428, lng: 26.101, name: "Catena", category: "pharmacies" },
@@ -82,6 +85,10 @@ test("a selection renders amenity markers + five category counts, preserved acro
   for (const label of ["Groceries", "Pharmacies", "Parks & green", "Schools", "Transit stops"]) {
     await expect(page.getByText(label)).toBeVisible();
   }
+  // Count fidelity: the chip shows the TRUE server count (200), not the number
+  // of rendered markers (5, from data-amenity-count).
+  await expect(map).toHaveAttribute("data-amenity-count", "5");
+  await expect(page.getByText("200")).toBeVisible();
 
   // Toggle to Transit: rings change, amenities PERSIST with no refetch.
   await page.getByRole("button", { name: "Transit" }).click();
@@ -116,20 +123,45 @@ test("a slow amenity response is not lost when the user toggles mode mid-flight"
   expect(amenityCalls).toBe(1);
 });
 
-test("an amenities 502 shows an error chip but never destroys the isochrone", async ({ page }) => {
+test("a later amenities failure clears the prior count and shows an error, keeping the isochrone", async ({
+  page,
+}) => {
   await stubBase(page);
-  await page.route("**/api/amenities**", (route) =>
+  let calls = 0;
+  await page.route("**/api/amenities**", (route) => {
+    calls += 1;
+    return calls === 1
+      ? route.fulfill({ json: AMENITIES })
+      : route.fulfill({ status: 502, json: { error: "Upstream provider error" } });
+  });
+
+  const map = await waitForMap(page);
+  await search(page);
+  await expect(map).toHaveAttribute("data-amenity-count", "5"); // first selection: markers + count
+
+  // A fresh selection whose amenities 502: the stale count is cleared (non-vacuous
+  // — it was "5") and an error shows, while the isochrone still renders.
+  await search(page);
+  await expect(page.getByText(/amenities unavailable/i)).toBeVisible();
+  await expect(map).not.toHaveAttribute("data-amenity-count", /.*/);
+  await expect(map).toHaveAttribute("data-isochrone-rings", "3");
+});
+
+test("a failed isochrone leaves no orphan amenity markers", async ({ page }) => {
+  await stubBase(page);
+  await page.route("**/api/isochrone**", (route) =>
     route.fulfill({ status: 502, json: { error: "Upstream provider error" } }),
   );
+  await page.route("**/api/amenities**", (route) => route.fulfill({ json: AMENITIES })); // would succeed
 
   const map = await waitForMap(page);
   await search(page);
 
-  // Isochrone still renders...
-  await expect(map).toHaveAttribute("data-isochrone-rings", "3");
-  // ...and the amenities failure is isolated to its own chip.
-  await expect(page.getByText(/amenities unavailable/i)).toBeVisible();
+  // The reach failed, so amenities must not paint markers/counts with nothing to
+  // anchor them: the panel stays hidden and no rings render.
   await expect(map).not.toHaveAttribute("data-amenity-count", /.*/);
+  await expect(page.getByText("Within a 15-min walk")).not.toBeVisible();
+  await expect(map).not.toHaveAttribute("data-isochrone-rings", /.*/);
 });
 
 test("a selection that resolves before the map style loads still paints amenity markers", async ({ page }) => {

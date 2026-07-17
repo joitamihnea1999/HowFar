@@ -7,7 +7,10 @@ import {
   buildOverpassQuery,
   capPerCategory,
   categoryForTags,
+  countByCategory,
+  sortByDistance,
   type Amenity,
+  type AmenityCounts,
 } from "@/lib/amenities";
 import { getCachedSafe, setCachedSafe } from "@/lib/api-cache";
 import { inBucharest } from "@/lib/bounds";
@@ -52,7 +55,9 @@ export interface NearbyAmenitiesResult {
   origin: { lat: number; lng: number };
   /** The walk-isochrone ring the amenities are clipped to. */
   walkMinutes: number;
-  /** Amenities inside that ring (flat; counts derived client-side). */
+  /** True per-category counts of ALL amenities in the ring (before the marker cap). */
+  counts: AmenityCounts;
+  /** Nearest-first amenities inside the ring, capped per category for rendering. */
   amenities: Amenity[];
 }
 
@@ -116,6 +121,9 @@ function parseElements(elements: OverpassElement[]): Amenity[] {
   const seen = new Set<string>();
   const out: Amenity[] = [];
   for (const el of elements) {
+    // A malformed array may contain null/non-object entries — never let one
+    // throw here (this runs outside the ProviderError try/catch → would be a 500).
+    if (!el || typeof el !== "object") continue;
     const category = categoryForTags(el.tags);
     if (!category) continue;
     const lat = Number(el.lat ?? el.center?.lat);
@@ -178,6 +186,10 @@ export async function nearbyAmenities(latRaw: number, lngRaw: number): Promise<N
   if (!ring?.geometry) {
     throw new ProviderError(`walk isochrone missing the ${WALK_CLIP_MINUTES}-min ring for clipping`);
   }
-  const amenities = capPerCategory(clipToRing(all, ring.geometry as GeoJSON.Geometry), MAX_PER_CATEGORY);
-  return { origin: { lat, lng }, walkMinutes: WALK_CLIP_MINUTES, amenities };
+  const clipped = clipToRing(all, ring.geometry as GeoJSON.Geometry);
+  // Counts are the TRUE clipped totals (before the cap) so a category exceeding
+  // the marker cap still reports its real number; markers are the nearest N.
+  const counts = countByCategory(clipped);
+  const amenities = capPerCategory(sortByDistance(clipped, { lat, lng }), MAX_PER_CATEGORY);
+  return { origin: { lat, lng }, walkMinutes: WALK_CLIP_MINUTES, counts, amenities };
 }

@@ -79,11 +79,11 @@ export const AMENITY_ENVELOPE_M = 1500;
 /** Amenity counts/markers are clipped to this walking-isochrone ring (brief §5). */
 export const WALK_CLIP_MINUTES = 15;
 
-/** Defensive per-category cap so one dense category (e.g. bus stops) can't
- * dominate the map. Applied AFTER the isochrone clip (not on the raw envelope):
- * Overpass returns elements in type/id order, not by distance, so capping the
- * envelope could drop a NEAR item in favour of a far one. Capping the clipped,
- * in-isochrone set is both fair and — at a 15-min walk — effectively never hit. */
+/** Defensive per-category cap on the RENDERED markers so one dense category
+ * (e.g. gardens tagged as parks in central Bucharest) can't flood the map.
+ * Applied to the nearest-first, clipped set so the kept markers are the closest.
+ * Counts shown to the user are the true clipped totals (derived pre-cap), so a
+ * category exceeding the cap still reports its real count. */
 export const MAX_PER_CATEGORY = 150;
 
 /** A single resolved POI — the canonical flat shape the route returns and the
@@ -126,8 +126,25 @@ export function categoryForTags(tags: Record<string, string> | undefined): Ameni
   return null;
 }
 
+/** Squared planar distance (deg², longitude scaled by latitude) — accurate
+ * enough for ORDERING POIs by nearness at city scale, and cheaper than haversine. */
+function distanceSq(a: { lat: number; lng: number }, origin: { lat: number; lng: number }): number {
+  const k = Math.cos((origin.lat * Math.PI) / 180);
+  const dLat = a.lat - origin.lat;
+  const dLng = (a.lng - origin.lng) * k;
+  return dLat * dLat + dLng * dLng;
+}
+
+/** Amenities sorted nearest-first to the origin (stable copy). So that when a
+ * category is later capped, the kept items are the NEAREST — not an arbitrary
+ * OSM-id-ordered subset. */
+export function sortByDistance(items: Amenity[], origin: { lat: number; lng: number }): Amenity[] {
+  return [...items].sort((a, b) => distanceSq(a, origin) - distanceSq(b, origin));
+}
+
 /** Keep at most `max` amenities per category, preserving input order. Defensive
- * bound on the displayed set (see MAX_PER_CATEGORY) — pure so it's testable. */
+ * bound on the RENDERED markers (see MAX_PER_CATEGORY) — pure so it's testable.
+ * Counts are derived BEFORE this cap, so the displayed totals stay truthful. */
 export function capPerCategory(items: Amenity[], max: number): Amenity[] {
   const perCategory: Partial<Record<AmenityCategoryKey, number>> = {};
   const out: Amenity[] = [];

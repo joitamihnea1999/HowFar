@@ -73,6 +73,15 @@ describe("fetchOverpassAmenities (parse / classify / dedup / cap)", () => {
     expect(out).toEqual([{ lat: 44.44, lng: 26.12, name: "Catena", category: "pharmacies" }]);
   });
 
+  it("does not throw on null/garbled array entries; still parses the valid ones", async () => {
+    providerFetch.mockResolvedValue(
+      resp([null, "nope", { center: null }, node(1, 44.44, 26.12, { amenity: "pharmacy", name: "OK" })]),
+    );
+    expect(await fetchOverpassAmenities(44.4268, 26.1025)).toEqual([
+      { lat: 44.44, lng: 26.12, name: "OK", category: "pharmacies" },
+    ]);
+  });
+
   it("dedups a duplicated element by OSM type/id", async () => {
     providerFetch.mockResolvedValue(
       resp([
@@ -182,6 +191,7 @@ describe("nearbyAmenities (clip to the 15-min walk ring)", () => {
     expect(result.walkMinutes).toBe(15);
     expect(result.origin).toEqual({ lat: 44.4268, lng: 26.1025 });
     expect(result.amenities).toEqual([{ lat: 44.45, lng: 26.1, name: "In", category: "pharmacies" }]);
+    expect(result.counts.pharmacies).toBe(1);
   });
 
   it("runs the isochrone and Overpass fetch in parallel", async () => {
@@ -192,19 +202,32 @@ describe("nearbyAmenities (clip to the 15-min walk ring)", () => {
     expect(providerFetch).toHaveBeenCalledTimes(1);
   });
 
-  it("caps per category on the CLIPPED (in-ring) set", async () => {
+  it("caps RENDERED markers per category but reports the TRUE clipped counts", async () => {
     walkingIsochrone.mockResolvedValue(isoResult);
-    // 200 bus stops all inside ring15 → capped to 150; 3 parks kept.
+    // 200 bus stops all inside ring15 → 150 markers, but the count stays 200.
     const busStops = Array.from({ length: 200 }, (_, i) => node(3000 + i, 44.45, 26.1, { highway: "bus_stop" }));
     const parks = Array.from({ length: 3 }, (_, i) => way(4000 + i, 44.45, 26.11, { leisure: "park" }));
     providerFetch.mockResolvedValue(resp([...busStops, ...parks]));
     const result = await nearbyAmenities(44.4268, 26.1025);
-    const counts = result.amenities.reduce<Record<string, number>>(
+    const markerCounts = result.amenities.reduce<Record<string, number>>(
       (m, a) => ({ ...m, [a.category]: (m[a.category] ?? 0) + 1 }),
       {},
     );
-    expect(counts.transit).toBe(150);
-    expect(counts.parks).toBe(3);
+    expect(markerCounts.transit).toBe(150); // capped markers
+    expect(result.counts.transit).toBe(200); // true count (uncapped)
+    expect(result.counts.parks).toBe(3);
+  });
+
+  it("keeps the NEAREST markers when a category is capped", async () => {
+    walkingIsochrone.mockResolvedValue(isoResult);
+    // A far-but-still-in-ring stop plus 150 near stops: the far one must be dropped.
+    const near = Array.from({ length: 150 }, (_, i) => node(5000 + i, 44.4269, 26.1026, { highway: "bus_stop" }));
+    const far = node(9999, 44.499, 26.149, { highway: "bus_stop", name: "FarStop" });
+    providerFetch.mockResolvedValue(resp([far, ...near])); // far first in envelope order
+    const result = await nearbyAmenities(44.4268, 26.1025);
+    expect(result.amenities).toHaveLength(150);
+    expect(result.amenities.some((a) => a.name === "FarStop")).toBe(false); // nearest-sort dropped it
+    expect(result.counts.transit).toBe(151); // but the true count still includes it
   });
 
   it("throws ProviderError when the walk isochrone has no 15-min ring", async () => {

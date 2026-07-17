@@ -57,15 +57,35 @@ function normalize(features: OrsFeature[]): Ring[] {
     .sort((a, b) => a.minutes - b.minutes);
 }
 
+// In-flight requests, keyed by cache key, so two concurrent cold callers for the
+// same origin (e.g. the client's /api/isochrone and the amenities route, which
+// also needs the walk ring) share ONE ORS request instead of each burning a
+// rate-limited/quota-capped POST. Cleared on settle.
+const inFlight = new Map<string, Promise<IsochroneResult>>();
+
 /** Walking isochrone (15/30/45 min) from a point. Coord is rounded ONCE and
  *  reused for the cache key, the ORS request, and the returned origin. */
 export async function walkingIsochrone(latRaw: number, lngRaw: number): Promise<IsochroneResult> {
-  const lat = Number(roundCoord(latRaw));
-  const lng = Number(roundCoord(lngRaw));
   const key = `iso:foot:${roundCoord(latRaw)},${roundCoord(lngRaw)}`;
 
   const hit = await getCachedSafe<IsochroneResult>(key);
   if (hit) return hit;
+
+  const existing = inFlight.get(key);
+  if (existing) return existing;
+
+  const promise = fetchAndCache(latRaw, lngRaw, key);
+  inFlight.set(key, promise);
+  try {
+    return await promise;
+  } finally {
+    inFlight.delete(key);
+  }
+}
+
+async function fetchAndCache(latRaw: number, lngRaw: number, key: string): Promise<IsochroneResult> {
+  const lat = Number(roundCoord(latRaw));
+  const lng = Number(roundCoord(lngRaw));
 
   const apiKey = serverEnv().orsApiKey;
   if (!apiKey) throw new ProviderError("ORS_API_KEY is not configured");

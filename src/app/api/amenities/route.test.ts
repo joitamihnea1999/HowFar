@@ -32,6 +32,7 @@ describe("GET /api/amenities", () => {
     const result = {
       origin: { lat: 44.4268, lng: 26.1025 },
       walkMinutes: 15,
+      counts: { groceries: 0, pharmacies: 1, parks: 0, schools: 0, transit: 0 },
       amenities: [{ lat: 44.44, lng: 26.12, name: "Catena", category: "pharmacies" }],
     };
     nearbyAmenities.mockResolvedValue(result);

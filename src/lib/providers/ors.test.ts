@@ -106,6 +106,18 @@ describe("walkingIsochrone", () => {
     expect(second).toEqual(first);
   });
 
+  it("coalesces two concurrent cold requests for the same origin into ONE fetch", async () => {
+    let resolveFetch!: (v: unknown) => void;
+    providerFetch.mockReturnValue(new Promise((r) => (resolveFetch = r)));
+    const p1 = walkingIsochrone(44.4, 26.1);
+    const p2 = walkingIsochrone(44.4, 26.1);
+    await new Promise((r) => setTimeout(r, 0)); // drain cache reads + in-flight registration
+    resolveFetch(orsResponse([poly(900), poly(1800), poly(2700)]));
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(providerFetch).toHaveBeenCalledTimes(1);
+    expect(r1).toEqual(r2);
+  });
+
   it("throws ProviderError without touching the network when ORS_API_KEY is missing", async () => {
     serverEnv.mockReturnValue({});
     await expect(walkingIsochrone(44.4, 26.1)).rejects.toThrow(/ORS_API_KEY/);

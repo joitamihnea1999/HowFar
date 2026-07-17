@@ -77,6 +77,7 @@ export default function AppMap() {
   const amenityAbortRef = useRef<AbortController | null>(null);
   const amenityGenRef = useRef(0);
   const amenityKeyRef = useRef<string | null>(null);
+  const clearAmenitiesRef = useRef<(() => void) | null>(null);
   const [amenity, setAmenity] = useState<AmenityUi>({ status: "idle", counts: null });
 
   // The two extracted state machines drive the render via useState, but each is
@@ -142,7 +143,7 @@ export default function AppMap() {
     // exist — a search that resolves before `load` would otherwise drop its rings.
     let styleLoaded = false;
     let pending: { origin: Origin; label: string; rings: Ring[]; mode: Mode } | null = null;
-    let pendingAmenities: Amenity[] | null = null;
+    let pendingAmenities: { items: Amenity[]; counts: AmenityCounts } | null = null;
 
     function renderSelection(origin: Origin, label: string, rings: Ring[], mode: Mode) {
       if (!styleLoaded) {
@@ -178,12 +179,15 @@ export default function AppMap() {
       delete el.dataset.mode;
     }
 
-    function renderAmenities(items: Amenity[]) {
+    // `counts` are the server's TRUE clipped totals (may exceed the rendered
+    // marker count when a category was capped) — the chips show these, not a
+    // recount of the capped markers.
+    function renderAmenities(items: Amenity[], counts: AmenityCounts) {
       // Buffer until the style (and the amenities source) exist — an amenity
       // response can land before `load`, exactly like the isochrone.
       if (!styleLoaded) {
-        pendingAmenities = items;
-        setAmenity({ status: "ready", counts: countByCategory(items) });
+        pendingAmenities = { items, counts };
+        setAmenity({ status: "ready", counts });
         return;
       }
       (map.getSource("amenities") as maplibregl.GeoJSONSource | undefined)?.setData({
@@ -191,7 +195,7 @@ export default function AppMap() {
         features: buildAmenityFeatures(items) as GeoJSON.Feature[],
       });
       el.dataset.amenityCount = String(items.length);
-      setAmenity({ status: "ready", counts: countByCategory(items) });
+      setAmenity({ status: "ready", counts });
     }
 
     // Drop amenity markers/counts and supersede any in-flight fetch. Called only
@@ -207,6 +211,7 @@ export default function AppMap() {
       delete el.dataset.amenityCount;
       setAmenity({ status: "idle", counts: null });
     }
+    clearAmenitiesRef.current = clearAmenities;
 
     // Fetch amenities for a resolved origin, in parallel with the isochrone. A
     // toggle recompute resolves the same origin ⇒ no refetch. A failure surfaces
@@ -224,11 +229,12 @@ export default function AppMap() {
         .then(async (res) => {
           if (gen !== amenityGenRef.current) return;
           if (!res.ok) return void setAmenity({ status: "error", counts: null });
-          const data = (await res.json()) as { amenities?: unknown };
+          const data = (await res.json()) as { amenities?: unknown; counts?: AmenityCounts };
           if (gen !== amenityGenRef.current) return;
           // A valid-but-wrong-shape body (no array) is an error, not "no amenities".
           if (!Array.isArray(data.amenities)) return void setAmenity({ status: "error", counts: null });
-          renderAmenities(data.amenities as Amenity[]);
+          const items = data.amenities as Amenity[];
+          renderAmenities(items, data.counts ?? countByCategory(items));
         })
         .catch((err) => {
           if ((err as Error)?.name === "AbortError" || gen !== amenityGenRef.current) return;
@@ -303,7 +309,12 @@ export default function AppMap() {
 
         const isoRes = await fetch(`${isochronePath(mode)}?lat=${origin.lat}&lng=${origin.lng}`, { signal });
         if (stale()) return;
-        if (!isoRes.ok) return void dispatchSel({ type: "failed", token, stage: "isochrone", httpStatus: isoRes.status });
+        if (!isoRes.ok) {
+          // A fresh selection whose reach failed must not leave orphan amenity
+          // markers (no rings to anchor them). A recompute keeps the prior reach.
+          if (!opts?.recompute) clearAmenities();
+          return void dispatchSel({ type: "failed", token, stage: "isochrone", httpStatus: isoRes.status });
+        }
         const iso = (await isoRes.json()) as { origin: Origin; rings: Ring[] };
         if (stale()) return;
 
@@ -313,6 +324,7 @@ export default function AppMap() {
         renderSelection(iso.origin, label, iso.rings, mode);
       } catch (err) {
         if ((err as Error)?.name === "AbortError" || stale()) return;
+        if (!opts?.recompute) clearAmenities();
         dispatchSel({ type: "crash", token });
       }
     }
@@ -367,7 +379,7 @@ export default function AppMap() {
       if (pendingAmenities) {
         const a = pendingAmenities;
         pendingAmenities = null;
-        renderAmenities(a);
+        renderAmenities(a.items, a.counts);
       }
       el.dataset.mapLoaded = "true";
     });
@@ -451,8 +463,13 @@ export default function AppMap() {
     // Recompute the current point in the new mode — no geocode/reverse. With no
     // resolved selection the reducer already reset status to idle.
     const last = selRef.current.lastSelection;
-    if (last)
+    if (last) {
       selectRef.current?.({ kind: "point", lat: last.lat, lng: last.lng, label: last.label }, { recompute: true });
+    } else {
+      // Toggling away from a still-loading first selection cancels it — drop its
+      // in-flight amenities too, so a late response can't paint orphan markers.
+      clearAmenitiesRef.current?.();
+    }
   }
 
   function onSubmit(e: React.FormEvent) {
