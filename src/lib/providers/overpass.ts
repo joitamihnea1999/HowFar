@@ -78,33 +78,51 @@ export interface NearbyAmenitiesResult {
 async function fetchFromHost(
   endpoint: { url: string; host: string },
   query: string,
-  signal: AbortSignal,
+  raceSignal: AbortSignal,
 ): Promise<OverpassElement[]> {
-  const res = await providerFetch(endpoint.url, {
-    rateHost: endpoint.host,
-    minIntervalMs: MIN_INTERVAL_MS,
-    timeoutMs: ENDPOINT_TIMEOUT_MS,
-    signal,
-    init: {
-      method: "POST",
-      headers: {
-        "User-Agent": USER_AGENT,
-        "Content-Type": "application/x-www-form-urlencoded",
+  // A per-attempt deadline that stays armed THROUGH body parsing. providerFetch's
+  // internal timeout only guards until response headers arrive — a host that
+  // sends 200 headers then stalls the body would otherwise keep the race pending
+  // forever if the siblings have already failed. Merge it with the race signal
+  // (which aborts this attempt the moment a sibling wins).
+  const deadline = new AbortController();
+  const timer = setTimeout(() => deadline.abort(), ENDPOINT_TIMEOUT_MS);
+  try {
+    const res = await providerFetch(endpoint.url, {
+      rateHost: endpoint.host,
+      minIntervalMs: MIN_INTERVAL_MS,
+      timeoutMs: ENDPOINT_TIMEOUT_MS,
+      signal: AbortSignal.any([deadline.signal, raceSignal]),
+      init: {
+        method: "POST",
+        headers: {
+          "User-Agent": USER_AGENT,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: `data=${encodeURIComponent(query)}`,
       },
-      body: `data=${encodeURIComponent(query)}`,
-    },
-  });
-  if (!res.ok) throw new ProviderError(`overpass ${endpoint.host} responded ${res.status}`);
-  const body = (await res.json()) as OverpassBody;
-  if (!Array.isArray(body.elements)) {
-    throw new ProviderError(`overpass ${endpoint.host} returned no element array`);
+    });
+    if (!res.ok) throw new ProviderError(`overpass ${endpoint.host} responded ${res.status}`);
+    const body = (await res.json()) as OverpassBody;
+    if (!Array.isArray(body.elements)) {
+      throw new ProviderError(`overpass ${endpoint.host} returned no element array`);
+    }
+    // Overpass signals server-side timeout/quota via a 200 + `remark`, often with
+    // empty/partial elements — treat that as a failure so another host can win.
+    if (body.remark && /timed out|timeout|quota|error|exceeded/i.test(body.remark)) {
+      throw new ProviderError(`overpass ${endpoint.host} remark: ${body.remark}`);
+    }
+    // A truly empty envelope is never legitimate for a guarded Bucharest-bbox
+    // origin (5 broad categories within 1500m — there's always at least a bus
+    // stop). A mirror returning [] without a remark is degraded; treat it as a
+    // loss so a healthy host wins, and so we never cache an empty set for 30 days.
+    if (body.elements.length === 0) {
+      throw new ProviderError(`overpass ${endpoint.host} returned an empty envelope`);
+    }
+    return body.elements;
+  } finally {
+    clearTimeout(timer);
   }
-  // Overpass signals server-side timeout/quota via a 200 + `remark`, often with
-  // empty/partial elements — treat that as a failure so another host can win.
-  if (body.remark && /timed out|timeout|quota|error|exceeded/i.test(body.remark)) {
-    throw new ProviderError(`overpass ${endpoint.host} remark: ${body.remark}`);
-  }
-  return body.elements;
 }
 
 /** Race the endpoint pool: the first host to return a valid response wins and
@@ -118,7 +136,7 @@ async function fetchOverpassElements(lat: number, lng: number): Promise<Overpass
   } catch (err) {
     const reasons =
       err instanceof AggregateError
-        ? err.errors.map((e) => (e as Error).message).join("; ")
+        ? err.errors.map((e) => (e instanceof Error ? e.message : String(e))).join("; ")
         : String(err);
     throw new ProviderError(`overpass unavailable (all endpoints failed: ${reasons})`);
   } finally {
@@ -170,14 +188,34 @@ export function clipToRing(items: Amenity[], ring: GeoJSON.Geometry | null | und
   });
 }
 
+// In-flight envelopes, keyed by cache key, so two concurrent cold callers for
+// the same origin share ONE 3-endpoint race instead of each fanning out to all
+// three public instances (which would triple the load on keyless community
+// servers). Mirrors the single-flight in ors.ts. Cleared on settle.
+const inFlight = new Map<string, Promise<Amenity[]>>();
+
 /** Fetch + parse the raw (unclipped) envelope of amenities around a point,
- * cached (best-effort). Mode-independent, so it's shared across walk/transit
- * views. Exported for tests (the clip is applied by `nearbyAmenities`). */
+ * cached (best-effort) and single-flighted. Mode-independent, so it's shared
+ * across walk/transit views. Exported for tests (the clip is applied by
+ * `nearbyAmenities`). */
 export async function fetchOverpassAmenities(lat: number, lng: number): Promise<Amenity[]> {
   const key = `amenities:v1:${AMENITY_ENVELOPE_M}:${roundCoord(lat)},${roundCoord(lng)}`;
   const hit = await getCachedSafe<Amenity[]>(key);
   if (hit) return hit;
 
+  const existing = inFlight.get(key);
+  if (existing) return existing;
+
+  const promise = fetchParseCache(lat, lng, key);
+  inFlight.set(key, promise);
+  try {
+    return await promise;
+  } finally {
+    inFlight.delete(key);
+  }
+}
+
+async function fetchParseCache(lat: number, lng: number, key: string): Promise<Amenity[]> {
   const elements = await fetchOverpassElements(Number(roundCoord(lat)), Number(roundCoord(lng)));
   const amenities = parseElements(elements);
   await setCachedSafe(key, amenities, new Date(Date.now() + TTL_MS));

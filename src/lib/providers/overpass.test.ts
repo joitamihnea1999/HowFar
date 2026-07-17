@@ -148,6 +148,41 @@ describe("fetchOverpassAmenities (endpoint race)", () => {
     await expect(fetchOverpassAmenities(44.4, 26.1)).rejects.toThrow(/overpass unavailable/i);
     expect(providerFetch).toHaveBeenCalledTimes(3);
   });
+
+  it("treats an empty envelope (no remark) as a race loss so a healthy host wins", async () => {
+    providerFetch
+      .mockResolvedValueOnce(resp([])) // host 1: degraded — empty, no remark
+      .mockResolvedValueOnce(resp([node(1, 44.44, 26.12, { amenity: "pharmacy" })])) // host 2 wins
+      .mockResolvedValueOnce(resp([node(2, 44.45, 26.13, { amenity: "pharmacy" })]));
+    expect(await fetchOverpassAmenities(44.4, 26.1)).toHaveLength(1);
+  });
+
+  it("throws when EVERY endpoint returns an empty envelope (never caches empty)", async () => {
+    providerFetch.mockResolvedValue(resp([]));
+    await expect(fetchOverpassAmenities(44.4, 26.1)).rejects.toThrow(/overpass unavailable/i);
+  });
+
+  it("aborts the losing hosts once one wins (fair-use: don't leave 2 queries running)", async () => {
+    providerFetch.mockResolvedValue(resp([node(1, 44.44, 26.12, { amenity: "pharmacy" })]));
+    await fetchOverpassAmenities(44.4, 26.1);
+    const signals = providerFetch.mock.calls.map((c) => (c[1] as { signal: AbortSignal }).signal);
+    expect(signals).toHaveLength(3);
+    // The race controller is aborted in `finally` once Promise.any settles, so
+    // every per-host signal (merged with the race signal) ends up aborted.
+    expect(signals.every((s) => s.aborted)).toBe(true);
+  });
+
+  it("coalesces concurrent cache misses for one origin into a SINGLE race", async () => {
+    providerFetch.mockResolvedValue(resp([node(1, 44.44, 26.12, { amenity: "pharmacy" })]));
+    const [a, b] = await Promise.all([
+      fetchOverpassAmenities(44.4, 26.1),
+      fetchOverpassAmenities(44.4, 26.1),
+    ]);
+    expect(a).toEqual(b);
+    // Single-flight: two concurrent cold callers share ONE 3-endpoint race (3
+    // upstream calls), not 6 — otherwise we'd triple-hammer the public mirrors.
+    expect(providerFetch).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe("nearbyAmenities (clip to the 15-min walk ring)", () => {
@@ -189,7 +224,7 @@ describe("nearbyAmenities (clip to the 15-min walk ring)", () => {
 
   it("runs the isochrone and Overpass fetch in parallel", async () => {
     walkingIsochrone.mockResolvedValue(isoResult);
-    providerFetch.mockResolvedValue(resp([]));
+    providerFetch.mockResolvedValue(resp([node(1, 44.44, 26.12, { amenity: "pharmacy" })]));
     await nearbyAmenities(44.4268, 26.1025);
     expect(walkingIsochrone).toHaveBeenCalledTimes(1);
     expect(providerFetch).toHaveBeenCalledTimes(3); // one Overpass race (3 endpoints), run parallel to the isochrone
@@ -228,7 +263,7 @@ describe("nearbyAmenities (clip to the 15-min walk ring)", () => {
       origin: { lat: 44.4268, lng: 26.1025 },
       rings: [{ minutes: 30, geometry: ring15 }],
     });
-    providerFetch.mockResolvedValue(resp([]));
+    providerFetch.mockResolvedValue(resp([node(1, 44.44, 26.12, { amenity: "pharmacy" })]));
     await expect(nearbyAmenities(44.4268, 26.1025)).rejects.toThrow(/15-min ring/);
   });
 });

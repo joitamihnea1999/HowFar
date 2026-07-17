@@ -64,6 +64,26 @@ describe("timedFetch", () => {
     const res = await timedFetch("http://example.test", {}, 1000);
     expect(await res.text()).toBe("ok");
   });
+
+  it("aborts the underlying request when an external signal fires (multi-host race loser)", async () => {
+    let seenSignal: AbortSignal | undefined;
+    vi.stubGlobal(
+      "fetch",
+      (_url: string, init: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          seenSignal = init.signal ?? undefined;
+          init.signal?.addEventListener("abort", () =>
+            reject(new DOMException("The operation was aborted", "AbortError")),
+          );
+        }),
+    );
+    const external = new AbortController();
+    // Long internal timeout, so only the EXTERNAL signal can end this call.
+    const pending = timedFetch("http://example.test", {}, 30_000, external.signal);
+    external.abort();
+    await expect(pending).rejects.toThrow(/abort/i);
+    expect(seenSignal?.aborted).toBe(true); // external abort propagated to fetch
+  });
 });
 
 describe("providerFetch", () => {
