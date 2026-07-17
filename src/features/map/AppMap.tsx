@@ -297,12 +297,11 @@ export default function AppMap() {
         const isoRes = await fetch(`${isochronePath(mode)}?lat=${origin.lat}&lng=${origin.lng}`, { signal });
         if (stale()) return;
         if (!isoRes.ok) {
-          // A fresh selection whose reach failed must not leave orphan amenity
-          // markers (no rings to anchor them). A failed recompute deliberately
-          // keeps the amenities — but clearSelection() above already dropped the
-          // prior rings, so they sit orphaned until the next selection/toggle
-          // (known latent gap; the failure message is shown meanwhile).
-          if (!opts?.recompute) clearAmenities();
+          // Invariant: amenity markers never render without rings. The rings
+          // were already dropped when this run started (clearSelection above),
+          // so a failed reach — fresh selection OR toggle recompute — clears
+          // the amenities too; a recompute back will refetch (server-cached).
+          clearAmenities();
           return void dispatchSel({ type: "failed", token, stage: "isochrone", httpStatus: isoRes.status });
         }
         const iso = (await isoRes.json()) as { origin: Origin; rings: Ring[] };
@@ -314,7 +313,7 @@ export default function AppMap() {
         renderSelection(iso.origin, label, iso.rings, mode);
       } catch (err) {
         if ((err as Error)?.name === "AbortError" || stale()) return;
-        if (!opts?.recompute) clearAmenities();
+        clearAmenities(); // same invariant as the failed-reach branch above
         dispatchSel({ type: "crash", token });
       }
     }

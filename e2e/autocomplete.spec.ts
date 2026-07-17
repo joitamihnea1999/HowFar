@@ -113,3 +113,14 @@ test("rapid typing collapses to a single debounced suggest request", async ({ pa
   await page.waitForTimeout(400);
   expect(counts.suggest).toBeLessThanOrEqual(2);
 });
+
+test("a query with no matches shows the empty state, not a stuck spinner or hidden dropdown", async ({
+  page,
+}) => {
+  await setup(page);
+  // Last-registered route wins: this query genuinely has zero suggestions.
+  await page.route("**/api/suggest**", (route) => route.fulfill({ json: { suggestions: [] } }));
+  await waitForMap(page);
+  await page.getByRole("combobox").fill("Zzzzz");
+  await expect(page.getByText("No matches in Bucharest")).toBeVisible();
+});

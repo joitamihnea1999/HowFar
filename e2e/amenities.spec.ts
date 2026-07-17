@@ -177,3 +177,25 @@ test("a selection that resolves before the map style loads still paints amenity 
   await expect(map).toHaveAttribute("data-map-loaded", "true", { timeout: 30_000 });
   await expect(map).toHaveAttribute("data-amenity-count", "5", { timeout: 10_000 });
 });
+
+test("a failed mode-toggle recompute clears amenities instead of leaving orphan markers", async ({ page }) => {
+  await stubBase(page);
+  // Walk succeeds; the transit recompute fails (last-registered route wins).
+  await page.route("**/api/transit**", (route) =>
+    route.fulfill({ status: 502, json: { error: "Upstream provider error" } }),
+  );
+  await page.route("**/api/amenities**", (route) => route.fulfill({ json: AMENITIES }));
+
+  const map = await waitForMap(page);
+  await search(page);
+  await expect(map).toHaveAttribute("data-amenity-count", "5"); // walk: rings + amenities painted
+
+  // Toggle to Transit: the recompute 502s. The walk rings were already dropped
+  // when the recompute started, so keeping the amenities would paint markers
+  // anchored to nothing — they must clear along with the panel.
+  await page.getByRole("button", { name: "Transit" }).click();
+  await expect(page.getByText(/could not compute transit reach/i)).toBeVisible();
+  await expect(map).not.toHaveAttribute("data-isochrone-rings", /.*/);
+  await expect(map).not.toHaveAttribute("data-amenity-count", /.*/);
+  await expect(page.getByText("Within a 15-min walk")).not.toBeVisible();
+});
