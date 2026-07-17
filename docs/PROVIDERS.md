@@ -57,7 +57,7 @@ calls. Go/no-go bar: ≥100 fresh addresses/day headroom on every provider. **Al
   thousands of overlapping walk discs took ~65 s on a real 2,509-stop payload. Shipped
   instead: rasterize a reachability field over the launch bbox and extract the 15/30/45-min
   contours with marching squares (~40 ms, and ring nesting is guaranteed by construction).
-  See `src/lib/providers/transit-grid.ts`.
+  See `src/features/isochrones/server/transit-grid.ts`.
 - Usage policy (<https://transitous.org/api/>): free, community-run; "not intended for commercial
   or for-profit purposes" (HowFar: non-commercial portfolio, no ads/subscriptions ✅); open-source
   clients must publish source (repo will be public ✅); send identifying `User-Agent` with contact

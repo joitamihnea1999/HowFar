@@ -26,9 +26,10 @@ map click   ──► /api/reverse ──► Nominatim    (label only — the cl
      ▼
 /api/isochrone ──► OpenRouteService           (walking rings, 15/30/45 min)
 /api/transit  ──► Transitous one-to-all ──► transit-grid (rings built in-process)
+/api/amenities ──► Overpass ∥ ORS walk ring ──► clip server-side (POIs within the 15-min walk)
      │
      ▼
-AppMap renders {origin, rings[]} — one GeoJSON source, per-feature colors
+AppMap renders {origin, rings[]} + amenity markers — GeoJSON sources, per-feature colors
 ```
 
 Each provider route follows the same skeleton: parse/validate input
@@ -38,24 +39,55 @@ the cause and returns a generic 502/500).
 
 ## Module map
 
+Source is organised feature-first: each folder under `src/features/` is one
+product concern, holding its client logic at the feature root and its
+server-only modules (provider clients and anything touching secrets, Prisma or
+node builtins) in a `server/` subfolder. `src/lib/` keeps only shared platform
+plumbing.
+
+**Import rule:** client components and client-side modules may import feature
+*root* modules and the client-safe lib pair (`bounds`, `timeout`) — never
+anything under a `server/` folder or the rest of `lib/` (db, env, api-cache,
+api-util, health, provider-http, byte-range), which exist for API routes and
+server code only.
+
 | Path | Role |
 | --- | --- |
 | `src/app/api/*/route.ts` | Thin HTTP glue: status codes only, no business logic |
 | `src/app/api/tiles/route.ts` | Serves the self-hosted PMTiles basemap with HTTP Range semantics |
-| `src/lib/providers/http.ts` | Shared plumbing: per-host rate limiter, abortable timeout, `ProviderError`, cache-key helpers |
-| `src/lib/providers/{nominatim,ors,photon,transit}.ts` | One client per provider (see the template below) |
-| `src/lib/providers/transit-grid.ts` | Pure geometry: reachability grid + marching-squares contours |
+| `src/features/map/AppMap.tsx` | MapLibre client component: selection/fetch orchestration wiring the pieces below |
+| `src/features/map/selection-flow.ts` | Selection state machine (token staleness, mode snapshot, failure mapping); owns the `Mode`/`Ring`/`Origin` types |
+| `src/features/map/map-setup.ts` | Pure basemap style + source/layer specs (unit-tested) |
+| `src/features/map/{SearchForm,SuggestList,ModeToggle,SelectionCard,AmenityPanel,AttributionBadge}.tsx` | Pure-props presentation leaves — no state, no decisions |
+| `src/features/search/combobox.ts` | Autocomplete state machine (generation staleness, keyboard nav) |
+| `src/features/search/server/{nominatim,photon}.ts` | Geocode/reverse + type-ahead provider clients |
+| `src/features/isochrones/isochrone-view.ts` | Pure ring view-model: per-mode ramps, GeoJSON features, legend |
+| `src/features/isochrones/server/{ors,transit}.ts` | Walking + transit reachability provider clients |
+| `src/features/isochrones/server/transit-grid.ts` | Pure geometry: reachability grid + marching-squares contours |
+| `src/features/amenities/amenities.ts` | Category config + Overpass query/classifier (isomorphic — keeps turf off the client) |
+| `src/features/amenities/amenities-flow.ts` | Client fetch-decision logic (origin keying, toggle persistence) |
+| `src/features/amenities/server/overpass.ts` | Overpass client + server-side clip to the 15-min walk ring |
+| `src/features/auth/{auth-view,auth-config}.ts` | Pure auth decisions (what to render / which providers are configured) |
+| `src/features/auth/AuthControl.tsx` | Server component: session-aware sign-in/out |
+| `src/lib/provider-http.ts` | Shared provider plumbing: per-host rate limiter, abortable timeout, `ProviderError`, cache-key helpers |
 | `src/lib/api-cache.ts` | MySQL-backed cache; strict accessors + best-effort `*Safe` variants |
+| `src/lib/api-util.ts` | Route helpers: param parsing, geofence guard, error→status mapping |
 | `src/lib/{env,db,health,timeout,bounds,byte-range}.ts` | Env validation, Prisma pool, DB probe, deadline helper, launch bbox, Range parsing |
-| `src/lib/{auth-view,auth-config}.ts` | Pure auth decisions (what to render / which providers are configured) |
-| `src/auth.ts` | Auth.js wiring only — decisions live in the two lib modules above |
-| `src/components/AppMap.tsx` | MapLibre client component: search box, mode toggle, ring rendering |
+| `src/auth.ts` | Auth.js wiring only — decisions live in `features/auth` |
 | `e2e/` | Playwright specs against the production build (see Testing) |
+
+**Deliberate cross-feature edges** (documented so nobody "fixes" them):
+amenities → isochrones (`server/overpass.ts` calls `server/ors.ts` — the §5
+"within the walking isochrone" clip); isochrones → map (`isochrone-view.ts`
+imports the `Mode`/`Ring` types from `selection-flow.ts`, type-only — they stay
+with the selection machine until the isochrone contract grows its own types
+module); every feature → `lib/`.
 
 ## The provider-client template
 
-All four clients share one shape — read `src/lib/providers/ors.ts` once and
-the rest follow:
+All six clients (nominatim, photon, ors, transit, overpass — plus the tiles
+route's Range serving as a degenerate case) share one shape — read
+`src/features/isochrones/server/ors.ts` once and the rest follow:
 
 1. A constants block: endpoint, host, `MIN_INTERVAL_MS`, `TIMEOUT_MS`, cache
    TTL. The values live in code, next to the client they throttle.
@@ -71,11 +103,14 @@ the rest follow:
 
 ### Adding a provider (checklist)
 
-Copy this for every new data source (amenities, air quality, …):
+Copy this for every new data source (air quality, reviews, …):
 
-- [ ] `src/lib/providers/<name>.ts` following the five points above; cache key
-      `"<domain>:<discriminator>"` (hash free-text with `sha256Hex`, round
-      coordinates with `roundCoord` so key, request and rendered origin agree).
+- [ ] Placement rule: the client lives WITH the feature it serves —
+      `src/features/<feature>/server/<name>.ts` (create the feature folder if
+      the data source starts a new concern; never a shared providers/ folder).
+      Follow the five points above; cache key `"<domain>:<discriminator>"`
+      (hash free-text with `sha256Hex`, round coordinates with `roundCoord` so
+      key, request and rendered origin agree).
 - [ ] Colocated `<name>.test.ts`: happy-path normalize, malformed/garbled body
       → `ProviderError`, non-ok status → `ProviderError`, network failure
       wrapped, cache hit issues zero fetches, provider-specific edge rows
@@ -88,7 +123,7 @@ Copy this for every new data source (amenities, air quality, …):
 - [ ] e2e: stub **the exact route** (`page.route("**/api/<name>**", …)`) —
       never a blanket `**/api/**`, which would also intercept the map's tile
       requests and break rendering.
-- [ ] ToS: identifying `User-Agent` (`USER_AGENT` in `providers/http.ts`),
+- [ ] ToS: identifying `User-Agent` (`USER_AGENT` in `lib/provider-http.ts`),
       visible attribution in the UI if required, quotas noted in
       `docs/PROVIDERS.md`.
 
