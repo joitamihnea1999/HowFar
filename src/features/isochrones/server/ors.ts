@@ -1,6 +1,6 @@
 import { getCachedSafe, setCachedSafe } from "@/lib/api-cache";
 import { serverEnv } from "@/lib/env";
-import { providerFetch, ProviderError, roundCoord } from "@/lib/providers/http";
+import { providerFetch, ProviderError, roundCoord } from "@/lib/provider-http";
 
 /**
  * OpenRouteService foot-walking isochrones (server-side, cached). One request

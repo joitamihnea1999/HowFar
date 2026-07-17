@@ -1,7 +1,7 @@
 import type { Session } from "next-auth";
 
 import { auth, configuredProviders, signIn, signOut } from "@/auth";
-import { resolveAuthView, type Provider } from "@/lib/auth-view";
+import { resolveAuthView, type Provider } from "@/features/auth/auth-view";
 
 const PROVIDER_LABEL: Record<Provider, string> = {
   google: "Google",

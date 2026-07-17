@@ -1,6 +1,6 @@
 import { getCachedSafe, setCachedSafe } from "@/lib/api-cache";
 import { BUCHAREST_BBOX } from "@/lib/bounds";
-import { providerFetch, ProviderError, roundCoord, sha256Hex, USER_AGENT } from "@/lib/providers/http";
+import { providerFetch, ProviderError, roundCoord, sha256Hex, USER_AGENT } from "@/lib/provider-http";
 
 // Nominatim viewbox is x1,y1,x2,y2 (two opposite corners); with bounded=1 it
 // restricts results to the box — biasing forward geocode to Bucharest so a

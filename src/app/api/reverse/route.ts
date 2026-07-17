@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { errorResponse, jsonError, outOfAreaGuard, parseLatLng } from "@/lib/api-util";
-import { reverseGeocode } from "@/lib/providers/nominatim";
+import { reverseGeocode } from "@/features/search/server/nominatim";
 
 export const dynamic = "force-dynamic";
 

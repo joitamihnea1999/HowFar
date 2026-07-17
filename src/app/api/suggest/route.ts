@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { errorResponse } from "@/lib/api-util";
-import { suggest } from "@/lib/providers/photon";
+import { suggest } from "@/features/search/server/photon";
 
 export const dynamic = "force-dynamic";
 

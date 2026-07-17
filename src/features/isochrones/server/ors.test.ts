@@ -14,8 +14,8 @@ vi.mock("@/lib/api-cache", () => ({
   },
 }));
 
-vi.mock("@/lib/providers/http", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./http")>()),
+vi.mock("@/lib/provider-http", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/provider-http")>()),
   providerFetch,
 }));
 

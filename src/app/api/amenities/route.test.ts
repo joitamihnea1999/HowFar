@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { nearbyAmenities } = vi.hoisted(() => ({ nearbyAmenities: vi.fn() }));
-vi.mock("@/lib/providers/overpass", () => ({ nearbyAmenities }));
+vi.mock("@/features/amenities/server/overpass", () => ({ nearbyAmenities }));
 
-import { ProviderError } from "@/lib/providers/http";
+import { ProviderError } from "@/lib/provider-http";
 
 import { GET } from "./route";
 

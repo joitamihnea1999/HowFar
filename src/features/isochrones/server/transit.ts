@@ -1,7 +1,7 @@
 import { getCachedSafe, setCachedSafe } from "@/lib/api-cache";
 import { BUCHAREST_BBOX } from "@/lib/bounds";
-import { providerFetch, ProviderError, roundCoord, USER_AGENT } from "@/lib/providers/http";
-import { buildRings, THRESHOLDS, type TransitStop } from "@/lib/providers/transit-grid";
+import { providerFetch, ProviderError, roundCoord, USER_AGENT } from "@/lib/provider-http";
+import { buildRings, THRESHOLDS, type TransitStop } from "@/features/isochrones/server/transit-grid";
 
 /**
  * Transitous MOTIS transit isochrones (server-side, cached). Transitous has no

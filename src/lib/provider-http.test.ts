@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { providerFetch, roundCoord, sha256Hex, timedFetch, withRateLimit } from "./http";
+import { providerFetch, roundCoord, sha256Hex, timedFetch, withRateLimit } from "./provider-http";
 
 describe("helpers", () => {
   it("sha256Hex is stable and 64 hex chars", () => {

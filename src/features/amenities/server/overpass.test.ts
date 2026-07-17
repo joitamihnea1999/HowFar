@@ -14,15 +14,15 @@ vi.mock("@/lib/api-cache", () => ({
   },
 }));
 
-vi.mock("@/lib/providers/http", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./http")>()),
+vi.mock("@/lib/provider-http", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/provider-http")>()),
   providerFetch,
 }));
 
-vi.mock("@/lib/providers/ors", () => ({ walkingIsochrone }));
+vi.mock("@/features/isochrones/server/ors", () => ({ walkingIsochrone }));
 
 import { clipToRing, fetchOverpassAmenities, nearbyAmenities } from "./overpass";
-import type { Amenity } from "@/lib/amenities";
+import type { Amenity } from "@/features/amenities/amenities";
 
 type Tags = Record<string, string>;
 const node = (id: number, lat: number, lon: number, tags: Tags) => ({ type: "node", id, lat, lon, tags });

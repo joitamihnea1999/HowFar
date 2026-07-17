@@ -5,7 +5,9 @@
  * component keeps the imperative `setData`/marker/layer calls.
  */
 
-import type { Mode, Ring } from "./selection-flow";
+// Cross-feature type-only edge: Mode/Ring belong to the selection state machine
+// in features/map until the isochrone contract grows its own types module.
+import type { Mode, Ring } from "@/features/map/selection-flow";
 
 // Per-mode sequential ramps (inner = brightest). Walk = teal, Transit = violet —
 // a strong contrast on the dark basemap so toggling modes reads instantly.

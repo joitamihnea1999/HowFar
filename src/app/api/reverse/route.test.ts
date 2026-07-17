@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { reverseGeocode } = vi.hoisted(() => ({ reverseGeocode: vi.fn() }));
-vi.mock("@/lib/providers/nominatim", () => ({ reverseGeocode }));
+vi.mock("@/features/search/server/nominatim", () => ({ reverseGeocode }));
 
-import { ProviderError } from "@/lib/providers/http";
+import { ProviderError } from "@/lib/provider-http";
 
 import { GET } from "./route";
 

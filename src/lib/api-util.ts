@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { inBucharest } from "@/lib/bounds";
-import { ProviderError } from "@/lib/providers/http";
+import { ProviderError } from "@/lib/provider-http";
 
 /** JSON error body with a status code. */
 export function jsonError(status: number, error: string) {

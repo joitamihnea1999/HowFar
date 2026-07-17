@@ -14,14 +14,14 @@ vi.mock("@/lib/api-cache", () => ({
   },
 }));
 
-vi.mock("@/lib/providers/http", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./http")>()),
+vi.mock("@/lib/provider-http", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/provider-http")>()),
   providerFetch,
 }));
 
 // Delegate to the real grid builder by default; individual tests can override
 // (e.g. to force a construction failure → ProviderError).
-vi.mock("@/lib/providers/transit-grid", async (importOriginal) => ({
+vi.mock("@/features/isochrones/server/transit-grid", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./transit-grid")>()),
   buildRings: (...args: unknown[]) => buildRingsMock(...args),
 }));

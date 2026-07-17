@@ -13,8 +13,8 @@ import {
   countByCategory,
   type Amenity,
   type AmenityCounts,
-} from "@/lib/amenities";
-import { isNewAmenityOrigin, originKey } from "@/lib/amenities-flow";
+} from "@/features/amenities/amenities";
+import { isNewAmenityOrigin, originKey } from "@/features/amenities/amenities-flow";
 import { BUCHAREST_MAX_BOUNDS } from "@/lib/bounds";
 import {
   buildIsochroneFeatures,
@@ -23,7 +23,7 @@ import {
   MARKER_COLOR,
   MODE_LABEL,
   RING_MINUTES,
-} from "@/lib/isochrone-view";
+} from "@/features/isochrones/isochrone-view";
 import {
   comboboxReducer,
   initialComboboxState,
@@ -32,7 +32,7 @@ import {
   type ComboboxAction,
   type ComboboxState,
   type Suggestion,
-} from "@/lib/combobox";
+} from "@/features/search/combobox";
 import {
   initialSelectionState,
   isochronePath,
@@ -44,7 +44,7 @@ import {
   type SelectInput,
   type SelectionAction,
   type SelectionState,
-} from "@/lib/selection-flow";
+} from "@/features/map/selection-flow";
 
 // Piața Unirii — the classic Bucharest reference point.
 const BUCHAREST_CENTER: [number, number] = [26.1025, 44.4268];
@@ -83,7 +83,7 @@ export default function AppMap() {
   // The two extracted state machines drive the render via useState, but each is
   // mirrored in a ref so a dispatch can be read back synchronously in the same
   // tick (fresh token/generation) from the imperative fetch orchestration —
-  // see lib/selection-flow and lib/combobox. Render reads the state; callbacks
+  // see features/map/selection-flow and features/search/combobox. Render reads the state; callbacks
   // read the ref.
   const [selState, setSelState] = useState<SelectionState>(initialSelectionState);
   const [comboState, setComboState] = useState<ComboboxState>(initialComboboxState);

@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { suggest } = vi.hoisted(() => ({ suggest: vi.fn() }));
-vi.mock("@/lib/providers/photon", () => ({ suggest }));
+vi.mock("@/features/search/server/photon", () => ({ suggest }));
 
-import { ProviderError } from "@/lib/providers/http";
+import { ProviderError } from "@/lib/provider-http";
 
 import { GET } from "./route";
 

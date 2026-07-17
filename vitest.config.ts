@@ -19,14 +19,14 @@ export default defineConfig({
         "src/generated/**", // prisma codegen
         "src/**/*.test.{ts,tsx}",
         // Rendering/wiring glue, covered by the Playwright e2e suite instead;
-        // its pure decision logic lives in src/lib (auth-view, auth-config,
+        // its pure decision logic lives in the feature folders (auth-view, auth-config,
         // bounds, providers) where it IS measured. Keep this list tight —
         // anything with branching logic belongs in lib, not here.
-        "src/components/AppMap.tsx", // MapLibre glue (e2e: smoke/isochrone/autocomplete/transit)
+        "src/features/map/AppMap.tsx", // MapLibre glue (e2e: smoke/isochrone/autocomplete/transit)
         "src/app/page.tsx",
         "src/app/layout.tsx",
         "src/app/api/auth/**", // 3-line Auth.js handler re-export
-        "src/auth.ts", // NextAuth wiring; decisions extracted to lib/auth-config
+        "src/auth.ts", // NextAuth wiring; decisions extracted to features/auth/auth-config
         // Range parsing (the logic) is unit+property tested in lib/byte-range;
         // the fs-serving glue is exercised end-to-end by smoke.spec.ts
         // (206 slice, ETag, HEAD, malformed→416, over-cap→416, PMTiles magic).

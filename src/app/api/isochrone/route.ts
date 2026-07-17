@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { errorResponse, outOfAreaGuard, parseLatLng } from "@/lib/api-util";
-import { walkingIsochrone } from "@/lib/providers/ors";
+import { walkingIsochrone } from "@/features/isochrones/server/ors";
 
 export const dynamic = "force-dynamic";
 

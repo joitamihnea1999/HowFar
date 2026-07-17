@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { walkingIsochrone } = vi.hoisted(() => ({ walkingIsochrone: vi.fn() }));
-vi.mock("@/lib/providers/ors", () => ({ walkingIsochrone }));
+vi.mock("@/features/isochrones/server/ors", () => ({ walkingIsochrone }));
 
-import { ProviderError } from "@/lib/providers/http";
+import { ProviderError } from "@/lib/provider-http";
 
 import { GET } from "./route";
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildIsochroneFeatures, legendColor, MARKER_COLOR, MODE_LABEL, RING_MINUTES } from "./isochrone-view";
-import type { Ring } from "./selection-flow";
+import type { Ring } from "@/features/map/selection-flow";
 
 const RINGS: Ring[] = [
   { minutes: 15, geometry: { type: "Polygon", coordinates: [] } },

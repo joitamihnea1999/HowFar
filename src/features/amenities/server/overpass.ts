@@ -11,11 +11,11 @@ import {
   sortByDistance,
   type Amenity,
   type AmenityCounts,
-} from "@/lib/amenities";
+} from "@/features/amenities/amenities";
 import { getCachedSafe, setCachedSafe } from "@/lib/api-cache";
 import { inBucharest } from "@/lib/bounds";
-import { providerFetch, ProviderError, roundCoord, USER_AGENT } from "@/lib/providers/http";
-import { walkingIsochrone } from "@/lib/providers/ors";
+import { providerFetch, ProviderError, roundCoord, USER_AGENT } from "@/lib/provider-http";
+import { walkingIsochrone } from "@/features/isochrones/server/ors";
 
 /**
  * OpenStreetMap amenities via the Overpass API (server-side, cached). One merged

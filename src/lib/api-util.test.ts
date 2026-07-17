@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { errorResponse, jsonError, outOfAreaGuard, parseLatLng } from "./api-util";
-import { ProviderError } from "./providers/http";
+import { ProviderError } from "./provider-http";
 
 describe("errorResponse", () => {
   const logged = vi.spyOn(console, "error").mockImplementation(() => {});

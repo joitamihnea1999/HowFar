@@ -1,6 +1,6 @@
 import { getCachedSafe, setCachedSafe } from "@/lib/api-cache";
 import { BUCHAREST_BBOX, inBucharest } from "@/lib/bounds";
-import { providerFetch, ProviderError, sha256Hex, USER_AGENT } from "@/lib/providers/http";
+import { providerFetch, ProviderError, sha256Hex, USER_AGENT } from "@/lib/provider-http";
 
 /**
  * Photon (komoot, keyless, OSM-based) type-ahead geocoding — the autocomplete

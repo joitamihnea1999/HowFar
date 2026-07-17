@@ -1,7 +1,7 @@
 import { Suspense } from "react";
 
-import AppMap from "@/components/AppMap";
-import AuthControl from "@/components/AuthControl";
+import AppMap from "@/features/map/AppMap";
+import AuthControl from "@/features/auth/AuthControl";
 
 export default function Home() {
   return (

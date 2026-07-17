@@ -3,12 +3,12 @@ import NextAuth, { type NextAuthConfig, type NextAuthResult } from "next-auth";
 import GitHub from "next-auth/providers/github";
 import Google from "next-auth/providers/google";
 
-import { configuredProviders } from "@/lib/auth-config";
+import { configuredProviders } from "@/features/auth/auth-config";
 import { db } from "@/lib/db";
 import { serverEnv } from "@/lib/env";
 
 // Re-exported so consumers keep one auth entry point; the implementation
-// lives in lib/auth-config.ts where it is unit-testable without next-auth.
+// lives in features/auth/auth-config.ts where it is unit-testable without next-auth.
 export { configuredProviders };
 
 /**

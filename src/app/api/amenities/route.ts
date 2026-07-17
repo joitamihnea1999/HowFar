@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { errorResponse, outOfAreaGuard, parseLatLng } from "@/lib/api-util";
-import { nearbyAmenities } from "@/lib/providers/overpass";
+import { nearbyAmenities } from "@/features/amenities/server/overpass";
 
 export const dynamic = "force-dynamic";
 
