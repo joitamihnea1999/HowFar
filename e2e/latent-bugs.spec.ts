@@ -26,6 +26,11 @@ const WALK = { origin: { lat: 44.4268, lng: 26.1025 }, rings: [polyRing(15, 0.01
 const TRANSIT = { origin: { lat: 44.4268, lng: 26.1025 }, rings: [polyRing(15, 0.03), polyRing(30, 0.06), polyRing(45, 0.09)] };
 
 async function waitForMap(page: Page) {
+  // Every selection now also fetches amenities — stub it so CI never hits live
+  // Overpass/ORS (this suite asserts nothing about amenities).
+  await page.route("**/api/amenities**", (route) =>
+    route.fulfill({ json: { origin: { lat: 44.4268, lng: 26.1025 }, walkMinutes: 15, amenities: [] } }),
+  );
   await page.goto("/");
   const map = page.getByTestId("app-map");
   await expect(map).toHaveAttribute("data-map-loaded", "true", { timeout: 30_000 });

@@ -48,6 +48,11 @@ async function setup(page: Page) {
 }
 
 async function waitForMap(page: Page) {
+  // Every selection now also fetches amenities — stub it so CI never hits live
+  // Overpass/ORS (this suite asserts nothing about amenities).
+  await page.route("**/api/amenities**", (route) =>
+    route.fulfill({ json: { origin: { lat: 44.428, lng: 26.1025 }, walkMinutes: 15, amenities: [] } }),
+  );
   await page.goto("/");
   const map = page.getByTestId("app-map");
   await expect(map).toHaveAttribute("data-map-loaded", "true", { timeout: 30_000 });

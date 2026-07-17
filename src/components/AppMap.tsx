@@ -7,6 +7,14 @@ import { useEffect, useRef, useState } from "react";
 
 import "maplibre-gl/dist/maplibre-gl.css";
 
+import {
+  AMENITY_CATEGORIES,
+  buildAmenityFeatures,
+  countByCategory,
+  type Amenity,
+  type AmenityCounts,
+} from "@/lib/amenities";
+import { isNewAmenityOrigin, originKey } from "@/lib/amenities-flow";
 import { BUCHAREST_MAX_BOUNDS } from "@/lib/bounds";
 import {
   buildIsochroneFeatures,
@@ -48,6 +56,10 @@ interface GeoPoint {
   label: string;
 }
 
+/** Amenities are a property of the resolved address, independent of the travel
+ * mode — so they live outside the selection state machine, in their own UI slice. */
+type AmenityUi = { status: "idle" | "loading" | "ready" | "error"; counts: AmenityCounts | null };
+
 const EMPTY_FC = { type: "FeatureCollection" as const, features: [] as unknown[] };
 
 export default function AppMap() {
@@ -58,6 +70,14 @@ export default function AppMap() {
   const abortRef = useRef<AbortController | null>(null);
   const suggestAbortRef = useRef<AbortController | null>(null);
   const suggestTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Amenities: keyed by rounded origin (NOT the selection token, which a mode
+  // toggle bumps) so a Walk↔Transit toggle persists the markers with no refetch;
+  // a generation guards stale responses.
+  const amenityAbortRef = useRef<AbortController | null>(null);
+  const amenityGenRef = useRef(0);
+  const amenityKeyRef = useRef<string | null>(null);
+  const [amenity, setAmenity] = useState<AmenityUi>({ status: "idle", counts: null });
 
   // The two extracted state machines drive the render via useState, but each is
   // mirrored in a ref so a dispatch can be read back synchronously in the same
@@ -122,6 +142,7 @@ export default function AppMap() {
     // exist — a search that resolves before `load` would otherwise drop its rings.
     let styleLoaded = false;
     let pending: { origin: Origin; label: string; rings: Ring[]; mode: Mode } | null = null;
+    let pendingAmenities: Amenity[] | null = null;
 
     function renderSelection(origin: Origin, label: string, rings: Ring[], mode: Mode) {
       if (!styleLoaded) {
@@ -157,6 +178,64 @@ export default function AppMap() {
       delete el.dataset.mode;
     }
 
+    function renderAmenities(items: Amenity[]) {
+      // Buffer until the style (and the amenities source) exist — an amenity
+      // response can land before `load`, exactly like the isochrone.
+      if (!styleLoaded) {
+        pendingAmenities = items;
+        setAmenity({ status: "ready", counts: countByCategory(items) });
+        return;
+      }
+      (map.getSource("amenities") as maplibregl.GeoJSONSource | undefined)?.setData({
+        type: "FeatureCollection",
+        features: buildAmenityFeatures(items) as GeoJSON.Feature[],
+      });
+      el.dataset.amenityCount = String(items.length);
+      setAmenity({ status: "ready", counts: countByCategory(items) });
+    }
+
+    // Drop amenity markers/counts and supersede any in-flight fetch. Called only
+    // on a genuinely-new selection — NOT on a mode toggle (which must persist).
+    function clearAmenities() {
+      amenityAbortRef.current?.abort();
+      amenityGenRef.current += 1;
+      amenityKeyRef.current = null;
+      pendingAmenities = null;
+      (map.getSource("amenities") as maplibregl.GeoJSONSource | undefined)?.setData(
+        EMPTY_FC as GeoJSON.FeatureCollection,
+      );
+      delete el.dataset.amenityCount;
+      setAmenity({ status: "idle", counts: null });
+    }
+
+    // Fetch amenities for a resolved origin, in parallel with the isochrone. A
+    // toggle recompute resolves the same origin ⇒ no refetch. A failure surfaces
+    // an amenity-only error and never touches the isochrone.
+    function maybeFetchAmenities(origin: Origin) {
+      const key = originKey(origin.lat, origin.lng);
+      if (!isNewAmenityOrigin(amenityKeyRef.current, key)) return;
+      amenityKeyRef.current = key;
+      const gen = (amenityGenRef.current += 1);
+      amenityAbortRef.current?.abort();
+      const controller = new AbortController();
+      amenityAbortRef.current = controller;
+      setAmenity({ status: "loading", counts: null });
+      fetch(`/api/amenities?lat=${origin.lat}&lng=${origin.lng}`, { signal: controller.signal })
+        .then(async (res) => {
+          if (gen !== amenityGenRef.current) return;
+          if (!res.ok) return void setAmenity({ status: "error", counts: null });
+          const data = (await res.json()) as { amenities?: unknown };
+          if (gen !== amenityGenRef.current) return;
+          // A valid-but-wrong-shape body (no array) is an error, not "no amenities".
+          if (!Array.isArray(data.amenities)) return void setAmenity({ status: "error", counts: null });
+          renderAmenities(data.amenities as Amenity[]);
+        })
+        .catch((err) => {
+          if ((err as Error)?.name === "AbortError" || gen !== amenityGenRef.current) return;
+          setAmenity({ status: "error", counts: null });
+        });
+    }
+
     async function select(input: SelectInput, opts?: { recompute?: boolean }) {
       // Snapshot the mode ONCE (from the selection machine) so this response's
       // endpoint, colors, legend and data-mode all agree even if the user
@@ -172,6 +251,9 @@ export default function AppMap() {
       const stale = () => token !== selRef.current.token;
 
       clearSelection(); // drop the previous marker/rings the moment a new selection starts
+      // A genuinely-new selection also drops the old amenities; a mode toggle
+      // (recompute) leaves them so they persist across Walk↔Transit.
+      if (!opts?.recompute) clearAmenities();
 
       try {
         // Resolve the origin (what the isochrone + marker use) and its label.
@@ -215,6 +297,10 @@ export default function AppMap() {
           }
         }
 
+        // Fire amenities in parallel with the isochrone (both use `origin`); its
+        // own generation/abort make it independent of this selection's token.
+        maybeFetchAmenities(origin);
+
         const isoRes = await fetch(`${isochronePath(mode)}?lat=${origin.lat}&lng=${origin.lng}`, { signal });
         if (stale()) return;
         if (!isoRes.ok) return void dispatchSel({ type: "failed", token, stage: "isochrone", httpStatus: isoRes.status });
@@ -253,11 +339,35 @@ export default function AppMap() {
           paint: { "line-color": ["get", "lineColor"], "line-width": 1.5, "line-opacity": 0.9 },
         });
       }
+
+      // Amenity markers: one circle layer on top of the isochrone fills, colored
+      // per category via the feature's own `color` (the isochrone-layer pattern).
+      // The white stroke gives figure/ground pop AND a secondary encoding beyond
+      // hue (the palette's residual CVD proximity is covered by this + the legend).
+      map.addSource("amenities", { type: "geojson", data: EMPTY_FC as GeoJSON.FeatureCollection });
+      map.addLayer({
+        id: "amenity-markers",
+        type: "circle",
+        source: "amenities",
+        paint: {
+          "circle-radius": 5,
+          "circle-color": ["get", "color"],
+          "circle-stroke-color": "#ffffff",
+          "circle-stroke-width": 1.5,
+          "circle-opacity": 0.9,
+        },
+      });
+
       styleLoaded = true;
       if (pending) {
         const p = pending;
         pending = null;
         renderSelection(p.origin, p.label, p.rings, p.mode);
+      }
+      if (pendingAmenities) {
+        const a = pendingAmenities;
+        pendingAmenities = null;
+        renderAmenities(a);
       }
       el.dataset.mapLoaded = "true";
     });
@@ -267,6 +377,7 @@ export default function AppMap() {
     return () => {
       abortRef.current?.abort();
       suggestAbortRef.current?.abort();
+      amenityAbortRef.current?.abort();
       if (suggestTimerRef.current) clearTimeout(suggestTimerRef.current);
       map.remove();
       maplibregl.removeProtocol("pmtiles");
@@ -373,6 +484,7 @@ export default function AppMap() {
 
   const sel = selState;
   const combo = comboState;
+  const amenityCounts = amenity.counts;
 
   return (
     <div className="absolute inset-0">
@@ -486,6 +598,32 @@ export default function AppMap() {
                 </div>
               </>
             )}
+          </div>
+        )}
+
+        {/* Nearby amenities within the 15-min walking isochrone (brief §5).
+            Mode-independent: shown for the selected address in both views. */}
+        {amenity.status !== "idle" && (
+          <div className="pointer-events-auto flex max-w-md flex-col items-center gap-1.5 rounded-2xl border border-white/10 bg-black/50 px-4 py-2.5 text-center backdrop-blur">
+            <span className="text-xs font-medium text-zinc-300">Within a 15-min walk</span>
+            {amenity.status === "loading" ? (
+              <span className="text-xs text-zinc-500">Finding nearby amenities…</span>
+            ) : amenity.status === "error" ? (
+              <span className="text-xs text-amber-300">Amenities unavailable right now</span>
+            ) : amenityCounts ? (
+              <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-xs">
+                {AMENITY_CATEGORIES.map((c) => (
+                  <span key={c.key} className="flex items-center gap-1.5">
+                    <span
+                      className="inline-block h-2 w-2 rounded-full ring-1 ring-white/40"
+                      style={{ background: c.color }}
+                    />
+                    <span className="font-medium tabular-nums text-zinc-100">{amenityCounts[c.key]}</span>
+                    <span className="text-zinc-400">{c.label}</span>
+                  </span>
+                ))}
+              </div>
+            ) : null}
           </div>
         )}
       </div>
