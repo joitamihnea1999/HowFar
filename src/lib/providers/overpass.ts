@@ -23,17 +23,27 @@ import { walkingIsochrone } from "@/lib/providers/ors";
  * `nearbyAmenities` then clips them to the real walking isochrone so the counts
  * are "within the walking isochrone" (brief §5), not "within a circle".
  *
- * Keyless, fair-use (~10k req/day). We POST an identifying User-Agent and fall
- * back to the kumi mirror if the primary endpoint is down/slow/rate-limited.
+ * Keyless, fair-use (~10k req/day). We POST an identifying User-Agent and RACE
+ * a small pool of public instances (Promise.any): the first healthy responder
+ * wins and the losers are aborted. Public Overpass instances are individually
+ * flaky — any one can be overloaded/down at any moment (a sequential
+ * primary→mirror fallback fails hard whenever the mirror is the one that's
+ * down) — so racing a few of them turns "all must be up in order" into "any one
+ * must be up". This is cold-path only (30d cache), a small pool, with an
+ * identifying UA and abort-on-win, which keeps us a good fair-use citizen.
  */
 
-const PRIMARY_URL = "https://overpass-api.de/api/interpreter";
-const PRIMARY_HOST = "overpass-api.de";
-const MIRROR_URL = "https://overpass.kumi.systems/api/interpreter";
-const MIRROR_HOST = "overpass.kumi.systems";
-const MIN_INTERVAL_MS = 1100; // be a good fair-use citizen
-const PRIMARY_TIMEOUT_MS = 20_000; // Overpass can be slow under load
-const MIRROR_TIMEOUT_MS = 12_000; // bounded so primary+mirror don't stack to ~40s
+// Ordered by observed reliability (probed 2026-07-17): maps.mail.ru answered the
+// live query every round (~2s); overpass-api.de is variable (fast, or 504 under
+// load); kumi is kept as a third hedge (was fully down when probed, may recover).
+// Racing means a currently-dead host costs nothing — it simply never wins.
+const ENDPOINTS: { url: string; host: string }[] = [
+  { url: "https://maps.mail.ru/osm/tools/overpass/api/interpreter", host: "maps.mail.ru" },
+  { url: "https://overpass-api.de/api/interpreter", host: "overpass-api.de" },
+  { url: "https://overpass.kumi.systems/api/interpreter", host: "overpass.kumi.systems" },
+];
+const MIN_INTERVAL_MS = 1100; // be a good fair-use citizen (per host)
+const ENDPOINT_TIMEOUT_MS = 18_000; // per-host abort; the race isn't sequential so this is the whole budget
 const TTL_MS = 30 * 24 * 60 * 60 * 1000; // amenities change slowly
 
 interface OverpassElement {
@@ -61,19 +71,20 @@ export interface NearbyAmenitiesResult {
   amenities: Amenity[];
 }
 
-/** POST the QL to one host. Throws (raw or ProviderError) on any failure so the
- * caller can fall through to the mirror. A soft failure — HTTP 200 with a
- * timeout/quota `remark` or a non-array `elements` — counts as a failure too. */
+/** POST the QL to one host. Throws (raw or ProviderError) on any failure so a
+ * losing host can't sink the race. A soft failure — HTTP 200 with a
+ * timeout/quota `remark` or a non-array `elements` — counts as a failure too.
+ * `signal` cancels this request when a sibling host wins the race. */
 async function fetchFromHost(
-  url: string,
-  host: string,
-  timeoutMs: number,
+  endpoint: { url: string; host: string },
   query: string,
+  signal: AbortSignal,
 ): Promise<OverpassElement[]> {
-  const res = await providerFetch(url, {
-    rateHost: host,
+  const res = await providerFetch(endpoint.url, {
+    rateHost: endpoint.host,
     minIntervalMs: MIN_INTERVAL_MS,
-    timeoutMs,
+    timeoutMs: ENDPOINT_TIMEOUT_MS,
+    signal,
     init: {
       method: "POST",
       headers: {
@@ -83,33 +94,35 @@ async function fetchFromHost(
       body: `data=${encodeURIComponent(query)}`,
     },
   });
-  if (!res.ok) throw new ProviderError(`overpass ${host} responded ${res.status}`);
+  if (!res.ok) throw new ProviderError(`overpass ${endpoint.host} responded ${res.status}`);
   const body = (await res.json()) as OverpassBody;
   if (!Array.isArray(body.elements)) {
-    throw new ProviderError(`overpass ${host} returned no element array`);
+    throw new ProviderError(`overpass ${endpoint.host} returned no element array`);
   }
   // Overpass signals server-side timeout/quota via a 200 + `remark`, often with
-  // empty/partial elements — treat that as a failure worth retrying the mirror.
+  // empty/partial elements — treat that as a failure so another host can win.
   if (body.remark && /timed out|timeout|quota|error|exceeded/i.test(body.remark)) {
-    throw new ProviderError(`overpass ${host} remark: ${body.remark}`);
+    throw new ProviderError(`overpass ${endpoint.host} remark: ${body.remark}`);
   }
   return body.elements;
 }
 
-/** Try the primary endpoint, then the mirror; ProviderError only if both fail. */
+/** Race the endpoint pool: the first host to return a valid response wins and
+ * the rest are aborted; ProviderError only if EVERY host fails. */
 async function fetchOverpassElements(lat: number, lng: number): Promise<OverpassElement[]> {
   const query = buildOverpassQuery(lat, lng);
+  const controller = new AbortController();
+  const attempts = ENDPOINTS.map((ep) => fetchFromHost(ep, query, controller.signal));
   try {
-    return await fetchFromHost(PRIMARY_URL, PRIMARY_HOST, PRIMARY_TIMEOUT_MS, query);
-  } catch (primaryErr) {
-    try {
-      return await fetchFromHost(MIRROR_URL, MIRROR_HOST, MIRROR_TIMEOUT_MS, query);
-    } catch (mirrorErr) {
-      throw new ProviderError(
-        `overpass unavailable (primary: ${(primaryErr as Error).message}; ` +
-          `mirror: ${(mirrorErr as Error).message})`,
-      );
-    }
+    return await Promise.any(attempts);
+  } catch (err) {
+    const reasons =
+      err instanceof AggregateError
+        ? err.errors.map((e) => (e as Error).message).join("; ")
+        : String(err);
+    throw new ProviderError(`overpass unavailable (all endpoints failed: ${reasons})`);
+  } finally {
+    controller.abort(); // cancel the losers (no-op once they've settled)
   }
 }
 

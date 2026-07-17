@@ -107,53 +107,46 @@ describe("fetchOverpassAmenities (parse / classify / dedup / cap)", () => {
     expect((await fetchOverpassAmenities(44.4268, 26.1025))[0].name).toBe("");
   });
 
-  it("serves a cache hit without a second fetch", async () => {
+  it("serves a cache hit without a second race", async () => {
     providerFetch.mockResolvedValue(resp([node(1, 44.44, 26.12, { amenity: "pharmacy" })]));
     await fetchOverpassAmenities(44.4, 26.1);
     await fetchOverpassAmenities(44.4, 26.1);
-    expect(providerFetch).toHaveBeenCalledTimes(1);
+    // One race = 3 endpoints queried; the 2nd call is served from cache (adds 0).
+    expect(providerFetch).toHaveBeenCalledTimes(3);
   });
 });
 
-describe("fetchOverpassAmenities (mirror fallback)", () => {
-  it("falls back to the mirror on a non-ok primary response", async () => {
-    providerFetch
-      .mockResolvedValueOnce(resp([], undefined, false, 504))
-      .mockResolvedValueOnce(resp([node(1, 44.44, 26.12, { amenity: "pharmacy" })]));
+describe("fetchOverpassAmenities (endpoint race)", () => {
+  it("races all pool endpoints in parallel and returns a healthy result", async () => {
+    providerFetch.mockResolvedValue(resp([node(1, 44.44, 26.12, { amenity: "pharmacy" })]));
     const out = await fetchOverpassAmenities(44.4, 26.1);
-    expect(providerFetch).toHaveBeenCalledTimes(2);
     expect(out).toHaveLength(1);
+    expect(providerFetch).toHaveBeenCalledTimes(3); // all pool endpoints raced, not sequential
   });
 
-  it("falls back to the mirror on a soft 200 with a timeout remark", async () => {
+  it("wins from a healthy host when siblings return non-ok or a soft timeout remark", async () => {
     providerFetch
-      .mockResolvedValueOnce(resp([], "runtime error: Query timed out"))
-      .mockResolvedValueOnce(resp([node(1, 44.44, 26.12, { amenity: "pharmacy" })]));
+      .mockResolvedValueOnce(resp([], undefined, false, 504)) // host 1: hard fail
+      .mockResolvedValueOnce(resp([], "runtime error: Query timed out")) // host 2: soft-remark fail
+      .mockResolvedValueOnce(resp([node(1, 44.44, 26.12, { amenity: "pharmacy" })])); // host 3: wins
     const out = await fetchOverpassAmenities(44.4, 26.1);
-    expect(providerFetch).toHaveBeenCalledTimes(2);
     expect(out).toHaveLength(1);
+    expect(providerFetch).toHaveBeenCalledTimes(3);
   });
 
-  it("falls back to the mirror when `elements` is not an array", async () => {
+  it("wins despite a sibling network error and a non-array body", async () => {
     providerFetch
-      .mockResolvedValueOnce(resp("nope"))
-      .mockResolvedValueOnce(resp([node(1, 44.44, 26.12, { amenity: "pharmacy" })]));
-    await fetchOverpassAmenities(44.4, 26.1);
-    expect(providerFetch).toHaveBeenCalledTimes(2);
+      .mockRejectedValueOnce(new TypeError("network down")) // host 1
+      .mockResolvedValueOnce(resp("nope")) // host 2: not an array
+      .mockResolvedValueOnce(resp([node(1, 44.44, 26.12, { amenity: "pharmacy" })])); // host 3 wins
+    expect(await fetchOverpassAmenities(44.4, 26.1)).toHaveLength(1);
+    expect(providerFetch).toHaveBeenCalledTimes(3);
   });
 
-  it("falls back to the mirror on a primary network error", async () => {
-    providerFetch
-      .mockRejectedValueOnce(new TypeError("network down"))
-      .mockResolvedValueOnce(resp([node(1, 44.44, 26.12, { amenity: "pharmacy" })]));
-    await fetchOverpassAmenities(44.4, 26.1);
-    expect(providerFetch).toHaveBeenCalledTimes(2);
-  });
-
-  it("throws ProviderError when BOTH hosts fail", async () => {
+  it("throws ProviderError only when EVERY endpoint fails", async () => {
     providerFetch.mockResolvedValue(resp([], undefined, false, 504));
     await expect(fetchOverpassAmenities(44.4, 26.1)).rejects.toThrow(/overpass unavailable/i);
-    expect(providerFetch).toHaveBeenCalledTimes(2);
+    expect(providerFetch).toHaveBeenCalledTimes(3);
   });
 });
 
@@ -199,7 +192,7 @@ describe("nearbyAmenities (clip to the 15-min walk ring)", () => {
     providerFetch.mockResolvedValue(resp([]));
     await nearbyAmenities(44.4268, 26.1025);
     expect(walkingIsochrone).toHaveBeenCalledTimes(1);
-    expect(providerFetch).toHaveBeenCalledTimes(1);
+    expect(providerFetch).toHaveBeenCalledTimes(3); // one Overpass race (3 endpoints), run parallel to the isochrone
   });
 
   it("caps RENDERED markers per category but reports the TRUE clipped counts", async () => {

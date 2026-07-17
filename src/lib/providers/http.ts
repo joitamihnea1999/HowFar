@@ -56,12 +56,22 @@ export function withRateLimit<T>(host: string, minIntervalMs: number, fn: () => 
   return run;
 }
 
-/** fetch() with a hard timeout that aborts the underlying request. */
-export async function timedFetch(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+/** fetch() with a hard timeout that aborts the underlying request. An optional
+ * `externalSignal` is merged in (via AbortSignal.any) so a caller racing several
+ * hosts can cancel the losers the moment one wins. */
+export async function timedFetch(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  externalSignal?: AbortSignal,
+): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const signal = externalSignal
+    ? AbortSignal.any([controller.signal, externalSignal])
+    : controller.signal;
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    return await fetch(url, { ...init, signal });
   } finally {
     clearTimeout(timer);
   }
@@ -74,12 +84,14 @@ export interface ProviderFetchOptions {
   minIntervalMs: number;
   /** Abort the request after this many ms. */
   timeoutMs: number;
+  /** Optional caller-owned signal (e.g. abort the losers of a multi-host race). */
+  signal?: AbortSignal;
   init?: RequestInit;
 }
 
 /** Rate-limited + timeout-bounded fetch for provider calls. */
 export function providerFetch(url: string, opts: ProviderFetchOptions): Promise<Response> {
   return withRateLimit(opts.rateHost, opts.minIntervalMs, () =>
-    timedFetch(url, opts.init ?? {}, opts.timeoutMs),
+    timedFetch(url, opts.init ?? {}, opts.timeoutMs, opts.signal),
   );
 }
