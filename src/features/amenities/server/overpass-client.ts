@@ -36,7 +36,16 @@ export interface OverpassElement {
   lon?: number;
   center?: { lat?: number; lon?: number };
   tags?: Record<string, string>;
-  members?: { type?: string; ref?: number; role?: string }[];
+  /** Under `out geom` (task 024), node members carry lat/lon inline and way
+   * members carry their full point list in `geometry`. */
+  members?: {
+    type?: string;
+    ref?: number;
+    role?: string;
+    lat?: number;
+    lon?: number;
+    geometry?: { lat?: number; lon?: number }[];
+  }[];
 }
 
 interface OverpassBody {

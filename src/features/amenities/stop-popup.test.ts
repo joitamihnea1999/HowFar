@@ -30,6 +30,20 @@ describe("buildStopPopupModel", () => {
     });
   });
 
+  it("rows carry relationId when the line has one (selectable → path drawable, task 024)", () => {
+    const model = buildStopPopupModel("s", "ready", [
+      { mode: "bus", ref: "301", direction: "Piața Romană", relationId: 1766705 },
+      { mode: "bus", ref: "104" }, // no id → plain informational row
+    ]) as unknown as { rows: Record<string, unknown>[] };
+    expect(model.rows[0]).toEqual({
+      modeLabel: "Bus",
+      ref: "301",
+      direction: "Piața Romană",
+      relationId: 1766705,
+    });
+    expect(model.rows[1]).not.toHaveProperty("relationId");
+  });
+
   it("ready with a directionless line → row omits direction (never invented)", () => {
     const [row] = (buildStopPopupModel("s", "ready", [{ mode: "bus", ref: "104" }]) as {
       rows: unknown[];

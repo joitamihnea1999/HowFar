@@ -35,6 +35,38 @@ export function legendColor(mode: Mode, minutes: number): string | undefined {
   return RAMPS[mode][minutes]?.line;
 }
 
+/** Which time band(s) the map displays (task 024). All three rings are always
+ * FETCHED (one provider call, cached); the filter only drives layer visibility. */
+export type RingFilter = "all" | 15 | 30 | 45;
+
+/** Owner-picked (2026-07-18): a fresh selection shows the 15-min band only —
+ * matching the amenity clip — and widens on demand. */
+export const DEFAULT_RING_FILTER: RingFilter = 15;
+
+/** Control order: the narrow-to-wide bands, then the full stack. */
+export const RING_FILTER_OPTIONS: readonly RingFilter[] = [15, 30, 45, "all"];
+
+/**
+ * Per-layer visibility for a ring filter, over the per-minute layers that
+ * `addIsochroneLayers` creates (they already filter features by `minutes`, so
+ * showing one band is purely a layout toggle — no data repaint, works on a
+ * live selection).
+ */
+export function ringLayerVisibility(filter: RingFilter): Record<string, "visible" | "none"> {
+  const out: Record<string, "visible" | "none"> = {};
+  for (const m of RING_MINUTES) {
+    const v = filter === "all" || filter === m ? "visible" : "none";
+    out[`iso-fill-${m}`] = v;
+    out[`iso-line-${m}`] = v;
+  }
+  return out;
+}
+
+/** The legend rows for a filter — mirrors exactly what the map shows. */
+export function visibleLegendMinutes(filter: RingFilter): readonly number[] {
+  return filter === "all" ? LEGEND_MINUTES : [filter];
+}
+
 /**
  * Rings → GeoJSON features carrying per-mode `fillColor`/`lineColor` so the two
  * modes can share one set of MapLibre layers painting via `["get","fillColor"]`.

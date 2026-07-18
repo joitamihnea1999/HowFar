@@ -138,6 +138,39 @@ describe("parseRouteRelations", () => {
     ]);
   });
 
+  it("carries the OSM relation id so the client can draw the route's path (task 024)", () => {
+    const { lines } = parseRouteRelations(
+      [{ type: "relation", id: 1766705, tags: { type: "route", route: "bus", ref: "301", to: "Piața Romană" } }],
+      "stop",
+    );
+    expect(lines).toEqual([
+      { mode: "bus", ref: "301", direction: "Piața Romană", relationId: 1766705 },
+    ]);
+  });
+
+  it("omits relationId for a malformed id (row still informs, just can't draw)", () => {
+    for (const id of [0, -3, 1.5, "12" as unknown as number, undefined]) {
+      const { lines } = parseRouteRelations(
+        [{ type: "relation", id, tags: { type: "route", route: "bus", ref: "9", to: "X" } }],
+        "stop",
+      );
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).not.toHaveProperty("relationId");
+    }
+  });
+
+  it("dedup keeps the FIRST relation's id per (mode,ref,direction) — variants collapse deterministically", () => {
+    const tags = { type: "route", route: "bus", ref: "5", to: "A" };
+    const { lines } = parseRouteRelations(
+      [
+        { type: "relation", id: 100, tags },
+        { type: "relation", id: 200, tags }, // short-turn variant, same key → dropped
+      ],
+      "stop",
+    );
+    expect(lines).toEqual([{ mode: "bus", ref: "5", direction: "A", relationId: 100 }]);
+  });
+
   it("returns an empty list (with the fallback name) for a non-array or empty input", () => {
     expect(parseRouteRelations(null, "Gara de Nord")).toEqual({ name: "Gara de Nord", lines: [] });
     expect(parseRouteRelations([], "Gara de Nord")).toEqual({ name: "Gara de Nord", lines: [] });

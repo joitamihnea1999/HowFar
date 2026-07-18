@@ -15,6 +15,9 @@ export interface StopPopupRow {
   ref: string;
   /** Destination headsign; omitted when unknown (never invented). */
   direction?: string;
+  /** OSM route relation id — present ⇒ the row is selectable and can draw its
+   * path (task 024); absent ⇒ plain informational row. */
+  relationId?: number;
 }
 
 export type StopPopupModel =
@@ -45,10 +48,11 @@ export function buildStopPopupModel(
   const t = title.trim() || FALLBACK_TITLE;
   if (phase === "loading") return { kind: "loading", title: t };
   if (phase === "error") return { kind: "error", title: t };
-  const rows: StopPopupRow[] = (lines ?? []).map((l) =>
-    l.direction
-      ? { modeLabel: modeLabel(l.mode), ref: l.ref, direction: l.direction }
-      : { modeLabel: modeLabel(l.mode), ref: l.ref },
-  );
+  const rows: StopPopupRow[] = (lines ?? []).map((l) => {
+    const row: StopPopupRow = { modeLabel: modeLabel(l.mode), ref: l.ref };
+    if (l.direction) row.direction = l.direction;
+    if (typeof l.relationId === "number") row.relationId = l.relationId;
+    return row;
+  });
   return rows.length ? { kind: "ready", title: t, rows } : { kind: "empty", title: t };
 }

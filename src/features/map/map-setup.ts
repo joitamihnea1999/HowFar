@@ -58,22 +58,104 @@ export function addIsochroneLayers(map: LayerHost): void {
   }
 }
 
+/** Highlighted transit-route color (task 024): near-white reads as "figure" on
+ * the dark basemap and collides with no category hue or mode ramp. */
+export const ROUTE_PATH_COLOR = "#fafafa";
+const ROUTE_PATH_CASING = "#09090b";
+
+/** Selected transit line (task 024): dark casing under a bright line, plus the
+ * route's stops as casing-colored dots ringed in the line color. One GeoJSON
+ * source; the layers split track from stops by geometry type. Added BETWEEN
+ * the isochrone fills and the amenity markers, so a drawn path never covers
+ * the interactive dots. */
+export function addRoutePathLayers(map: LayerHost): void {
+  map.addSource("route-path", { type: "geojson", data: EMPTY_FC as GeoJSON.FeatureCollection });
+  const isLine = ["==", ["geometry-type"], "LineString"] as maplibregl.FilterSpecification;
+  const round = { "line-cap": "round" as const, "line-join": "round" as const };
+  map.addLayer({
+    id: "route-path-casing",
+    type: "line",
+    source: "route-path",
+    filter: isLine,
+    layout: round,
+    paint: { "line-color": ROUTE_PATH_CASING, "line-width": 7, "line-opacity": 0.85 },
+  });
+  map.addLayer({
+    id: "route-path-line",
+    type: "line",
+    source: "route-path",
+    filter: isLine,
+    layout: round,
+    paint: { "line-color": ROUTE_PATH_COLOR, "line-width": 3, "line-opacity": 0.95 },
+  });
+  map.addLayer({
+    id: "route-path-stops",
+    type: "circle",
+    source: "route-path",
+    filter: ["==", ["geometry-type"], "Point"] as maplibregl.FilterSpecification,
+    paint: {
+      "circle-radius": 4.5,
+      "circle-color": ROUTE_PATH_CASING,
+      "circle-stroke-color": ROUTE_PATH_COLOR,
+      "circle-stroke-width": 2,
+    },
+  });
+  // The stop NAMES are the point of the feature ("know all the places it
+  // stops") — halo-on-dark labels; MapLibre's symbol collision thins them
+  // automatically where stops crowd.
+  map.addLayer({
+    id: "route-path-labels",
+    type: "symbol",
+    source: "route-path",
+    filter: ["==", ["geometry-type"], "Point"] as maplibregl.FilterSpecification,
+    layout: {
+      "text-field": ["get", "name"],
+      "text-font": ["Noto Sans Medium"],
+      "text-size": 11,
+      "text-anchor": "top",
+      "text-offset": [0, 0.7],
+    },
+    paint: {
+      "text-color": ROUTE_PATH_COLOR,
+      "text-halo-color": ROUTE_PATH_CASING,
+      "text-halo-width": 1.5,
+    },
+  });
+}
+
+/** Amenity marker sizing: rest vs hover (task 024). The hover radius nearly
+ * doubles the target and is what the shared 12px pick pad is calibrated to. */
+export const AMENITY_RADIUS = 5;
+export const AMENITY_RADIUS_HOVER = 9;
+
+/** Feature-state-driven value: `hovered` when the pointer's pick lands on the
+ * marker (AppMap sets `hover` via setFeatureState), else `rest`. */
+function hoverCase(hovered: number, rest: number): maplibregl.DataDrivenPropertyValueSpecification<number> {
+  return ["case", ["boolean", ["feature-state", "hover"], false], hovered, rest];
+}
+
 /** Amenity markers: one circle layer on top of the isochrone fills, colored
  * per category via the feature's own `color` (the isochrone-layer pattern).
  * The white stroke gives figure/ground pop AND a secondary encoding beyond
- * hue (the palette's residual CVD proximity is covered by this + the legend). */
+ * hue (the palette's residual CVD proximity is covered by this + the legend).
+ * `generateId` gives every feature a stable numeric id for the hover feature
+ * state — `osmId` cannot serve (optional, and only unique per osmType). */
 export function addAmenityLayers(map: LayerHost): void {
-  map.addSource("amenities", { type: "geojson", data: EMPTY_FC as GeoJSON.FeatureCollection });
+  map.addSource("amenities", {
+    type: "geojson",
+    data: EMPTY_FC as GeoJSON.FeatureCollection,
+    generateId: true,
+  });
   map.addLayer({
     id: "amenity-markers",
     type: "circle",
     source: "amenities",
     paint: {
-      "circle-radius": 5,
+      "circle-radius": hoverCase(AMENITY_RADIUS_HOVER, AMENITY_RADIUS),
       "circle-color": ["get", "color"],
       "circle-stroke-color": "#ffffff",
-      "circle-stroke-width": 1.5,
-      "circle-opacity": 0.9,
+      "circle-stroke-width": hoverCase(2.5, 1.5),
+      "circle-opacity": hoverCase(1, 0.9),
     },
   });
 }

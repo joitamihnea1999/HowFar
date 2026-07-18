@@ -42,17 +42,32 @@ function amenities(items: { lat: number; lng: number; name: string; category: st
   };
 }
 
-/** Pixel (relative to the map element) of a lng/lat offset from the origin,
- * given the container size, at zoom 13 centred on the origin. */
-function offsetPixel(box: { width: number; height: number }, dLng: number, dLat: number) {
+/** Pixel delta of a lng/lat offset from the origin at zoom 13 (Web-Mercator,
+ * the same math MapLibre uses). */
+function offsetDelta(dLng: number, dLat: number) {
   const worldSize = 512 * 2 ** 13;
   const mercY = (lat: number) => {
     const s = Math.sin((lat * Math.PI) / 180);
     return (worldSize / 2) * (1 - Math.log((1 + s) / (1 - s)) / (2 * Math.PI));
   };
-  const dx = (dLng / 360) * worldSize;
-  const dy = mercY(ORIGIN.lat + dLat) - mercY(ORIGIN.lat);
-  return { x: box.width / 2 + dx, y: box.height / 2 + dy };
+  return { dx: (dLng / 360) * worldSize, dy: mercY(ORIGIN.lat + dLat) - mercY(ORIGIN.lat) };
+}
+
+/** Where the selected ORIGIN renders, in map-element pixels: the centre of the
+ * dock-padded viewport, i.e. shifted right by half the flyTo left padding the
+ * dock introduces (exposed as data-camera-pad-left, task 024). */
+async function originPixel(map: Locator) {
+  const box = await map.boundingBox();
+  if (!box) throw new Error("map has no box");
+  const pad = Number((await map.getAttribute("data-camera-pad-left")) ?? "0");
+  return { box, x: box.width / 2 + pad / 2, y: box.height / 2 };
+}
+
+/** Map-element pixel of a lng/lat offset from the (padded-centred) origin. */
+async function offsetPixel(map: Locator, dLng: number, dLat: number) {
+  const o = await originPixel(map);
+  const d = offsetDelta(dLng, dLat);
+  return { box: o.box, x: o.x + d.dx, y: o.y + d.dy };
 }
 
 async function stubBase(page: Page) {
@@ -74,11 +89,10 @@ async function loadAndSearch(page: Page): Promise<Locator> {
   return map;
 }
 
-/** Click the transit marker (rendered ~70px east of centre). */
+/** Click the transit marker (rendered ~70px east of the padded centre). */
 async function clickStop(page: Page, map: Locator) {
-  const box = await map.boundingBox();
-  if (!box) throw new Error("map has no box");
-  await map.click({ position: offsetPixel(box, STOP_DLNG, 0) });
+  const p = await offsetPixel(map, STOP_DLNG, 0);
+  await map.click({ position: { x: p.x, y: p.y } });
 }
 
 const popup = (page: Page) => page.locator('[data-testid="stop-popup"]');
@@ -170,12 +184,14 @@ test("a stop-lines failure shows an error state, not a stuck spinner", async ({ 
   await expect(popup(page).getByText(/unavailable/i)).toBeVisible();
 });
 
-test("clicking a NON-transit marker still starts a selection (only transit is inspectable)", async ({ page }) => {
+// Task 024 REVERSED the pre-024 contract ("only transit is inspectable"): the
+// owner asked for EVERY amenity to open its info instead of reselecting.
+test("clicking a NON-transit marker opens its info popup WITHOUT starting a selection", async ({ page }) => {
   let reverseCalls = 0;
   await stubBase(page);
   await page.route("**/api/reverse**", (route) => {
     reverseCalls += 1;
-    route.fulfill({ json: { lat: GROCERY.lat, lng: GROCERY.lng, label: "A grocery spot" } });
+    route.fulfill({ json: { lat: GROCERY.lat, lng: GROCERY.lng, label: "Should not happen" } });
   });
   await page.route("**/api/amenities**", (route) =>
     route.fulfill({ json: amenities([{ ...GROCERY, name: "Mega Image", category: "groceries", osmType: "node", osmId: 5 }]) }),
@@ -183,12 +199,260 @@ test("clicking a NON-transit marker still starts a selection (only transit is in
   await page.route("**/api/stop-lines**", (route) => route.fulfill({ json: { name: "", lines: [] } }));
 
   const map = await loadAndSearch(page);
-  await clickStop(page, map); // clicks the grocery marker's slot
+  // Click ~9px off the marker center — inside the forgiving 12px pad that a
+  // 5px circle would have missed (the owner's precise-click complaint).
+  const pos = await offsetPixel(map, STOP_DLNG, 0);
+  await map.click({ position: { x: pos.x + 9, y: pos.y } });
 
-  // No popup; the click fell through to a normal map-click selection (reverse hit).
-  await expect(popup(page)).toHaveCount(0);
+  const poi = page.locator('[data-testid="poi-popup"]');
+  await expect(poi).toBeVisible();
+  await expect(poi.getByText("Mega Image")).toBeVisible();
+  await expect(poi.getByText("Groceries")).toBeVisible();
+  // …and the click did NOT start a selection.
+  expect(reverseCalls).toBe(0);
+  await expect(map).toHaveAttribute("data-selection", /Piața Unirii/);
+});
+
+test("a click in a marker-free gap still starts a normal selection", async ({ page }) => {
+  let reverseCalls = 0;
+  await stubBase(page);
+  await page.route("**/api/reverse**", (route) => {
+    reverseCalls += 1;
+    route.fulfill({ json: { lat: ORIGIN.lat - 0.006, lng: ORIGIN.lng, label: "A fresh spot" } });
+  });
+  await page.route("**/api/amenities**", (route) =>
+    route.fulfill({ json: amenities([{ ...STOP, name: "East Stop", category: "transit", osmType: "node", osmId: 111 }]) }),
+  );
+
+  const map = await loadAndSearch(page);
+  // South of centre: well clear of the only marker (east) and any overlay.
+  const pos = await offsetPixel(map, 0, -0.006);
+  await map.click({ position: { x: pos.x, y: pos.y } });
+
   await expect.poll(() => reverseCalls).toBeGreaterThan(0);
-  await expect(map).toHaveAttribute("data-selection", /grocery spot/i);
+  await expect(map).toHaveAttribute("data-selection", /fresh spot/i);
+});
+
+test("an amenity sitting exactly on the searched origin is still clickable (origin pin is pointer-transparent)", async ({
+  page,
+}) => {
+  await stubBase(page);
+  await page.route("**/api/amenities**", (route) =>
+    route.fulfill({
+      json: amenities([{ ...ORIGIN, name: "Origin Stop", category: "transit", osmType: "node", osmId: 33 }]),
+    }),
+  );
+  await page.route("**/api/stop-lines**", (route) =>
+    route.fulfill({ json: { name: "Origin Stop", lines: [{ mode: "bus", ref: "104", direction: "Somewhere" }] } }),
+  );
+
+  const map = await loadAndSearch(page);
+  // The origin's padded-centre pixel = the origin DOM marker's spot; before
+  // task 024 the pin swallowed this click (parked limitation from task 021).
+  const o = await originPixel(map);
+  await map.click({ position: { x: o.x, y: o.y } });
+
+  await expect(popup(page)).toBeVisible();
+  await expect(popup(page).getByText("Bus 104")).toBeVisible();
+});
+
+test("a transit stop with no OSM identity falls back to the info popup (never silence)", async ({ page }) => {
+  await stubBase(page);
+  await page.route("**/api/amenities**", (route) =>
+    route.fulfill({ json: amenities([{ ...STOP, name: "Ghost Stop", category: "transit" }]) }),
+  );
+
+  const map = await loadAndSearch(page);
+  await clickStop(page, map);
+
+  const poi = page.locator('[data-testid="poi-popup"]');
+  await expect(poi).toBeVisible();
+  await expect(poi.getByText("Ghost Stop")).toBeVisible();
+  await expect(poi.getByText("Transit stops")).toBeVisible();
+});
+
+test("hovering near a marker arms the hover state; leaving clears it", async ({ page }) => {
+  await stubBase(page);
+  await page.route("**/api/amenities**", (route) =>
+    route.fulfill({ json: amenities([{ ...STOP, name: "East Stop", category: "transit", osmType: "node", osmId: 111 }]) }),
+  );
+
+  const map = await loadAndSearch(page);
+  const pos = await offsetPixel(map, STOP_DLNG, 0);
+
+  // ~8px off the marker center: within the pick pad → hover arms.
+  await page.mouse.move(pos.box.x + pos.x + 8, pos.box.y + pos.y);
+  await expect(map).toHaveAttribute("data-amenity-hover", /\d/);
+
+  // Far south: outside the pad → hover clears.
+  await page.mouse.move(pos.box.x + pos.box.width / 2, pos.box.y + pos.box.height - 40);
+  await expect(map).not.toHaveAttribute("data-amenity-hover", /.*/);
+});
+
+// --- Route paths (task 024): a line row draws its full path + stops ---------
+
+const ROUTE_PATH = {
+  segments: [
+    [
+      [26.1085, 44.4268],
+      [26.12, 44.43],
+      [26.13, 44.44],
+    ],
+  ],
+  stops: [
+    { lat: 44.4268, lng: 26.1085, name: "Piața Romană" },
+    { lat: 44.44, lng: 26.13, name: "Cartier Dămăroaia" },
+  ],
+};
+
+async function stubRouteScene(page: Page) {
+  await stubBase(page);
+  await page.route("**/api/amenities**", (route) =>
+    route.fulfill({
+      json: amenities([{ ...STOP, name: "Piața Romană", category: "transit", osmType: "node", osmId: 444384784 }]),
+    }),
+  );
+  await page.route("**/api/stop-lines**", (route) =>
+    route.fulfill({
+      json: {
+        name: "Piața Romană",
+        lines: [
+          { mode: "bus", ref: "331", direction: "Cartier Dămăroaia", relationId: 1776396 },
+          { mode: "bus", ref: "104" }, // no relationId → informational row, no button
+        ],
+      },
+    }),
+  );
+}
+
+test("clicking a line row draws its path; re-click and popup-close both clear it", async ({ page }) => {
+  await stubRouteScene(page);
+  await page.route("**/api/route-path**", (route) => route.fulfill({ json: ROUTE_PATH }));
+
+  const map = await loadAndSearch(page);
+  await clickStop(page, map);
+  await expect(popup(page)).toHaveAttribute("data-state", "ready");
+
+  // The id-carrying row is a button; the id-less row is not.
+  const row = popup(page).getByRole("button", { name: /Bus 331/ });
+  await expect(row).toBeVisible();
+  await expect(popup(page).getByRole("button", { name: /Bus 104/ })).toHaveCount(0);
+
+  await row.click();
+  await expect(map).toHaveAttribute("data-route-path", "1776396");
+
+  // Re-click the active row → path off (popup stays).
+  await row.click();
+  await expect(map).not.toHaveAttribute("data-route-path", /.*/);
+  await expect(popup(page)).toBeVisible();
+
+  // Draw again, then close the popup with its × → path clears with it.
+  await row.click();
+  await expect(map).toHaveAttribute("data-route-path", "1776396");
+  await page.locator(".maplibregl-popup-close-button").click();
+  await expect(popup(page)).toHaveCount(0);
+  await expect(map).not.toHaveAttribute("data-route-path", /.*/);
+});
+
+test("a new selection clears the drawn path along with the popup", async ({ page }) => {
+  await stubRouteScene(page);
+  await page.route("**/api/route-path**", (route) => route.fulfill({ json: ROUTE_PATH }));
+
+  const map = await loadAndSearch(page);
+  await clickStop(page, map);
+  await popup(page).getByRole("button", { name: /Bus 331/ }).click();
+  await expect(map).toHaveAttribute("data-route-path", "1776396");
+
+  // A genuinely-new selection (search — position-independent: the path's
+  // fitBounds just moved the camera) → popup + path both go.
+  await page.route("**/api/geocode**", (route) =>
+    route.fulfill({ json: { lat: 44.42, lng: 26.09, label: "Elsewhere, București" } }),
+  );
+  await page.getByRole("combobox").fill("Elsewhere");
+  await page.getByRole("button", { name: "Go" }).click();
+  await expect(map).toHaveAttribute("data-selection", /Elsewhere/);
+  await expect(popup(page)).toHaveCount(0);
+  await expect(map).not.toHaveAttribute("data-route-path", /.*/);
+});
+
+test("clicking the drawn route is a no-op; clicking bare map away from it clears via a new selection", async ({
+  page,
+}) => {
+  await stubRouteScene(page);
+  // A flat horizontal line at the exact vertical center of its own bounds, so
+  // after fitBounds it deterministically crosses the padded-viewport center.
+  await page.route("**/api/route-path**", (route) =>
+    route.fulfill({
+      json: {
+        segments: [
+          [
+            [26.1, 44.43],
+            [26.14, 44.43],
+          ],
+        ],
+        stops: [
+          { lat: 44.425, lng: 26.1, name: "West End" },
+          { lat: 44.435, lng: 26.14, name: "East End" },
+        ],
+      },
+    }),
+  );
+  let reverseCalls = 0;
+  await page.route("**/api/reverse**", (route) => {
+    reverseCalls += 1;
+    route.fulfill({ json: { lat: 44.42, lng: 26.12, label: "A fresh spot" } });
+  });
+
+  const map = await loadAndSearch(page);
+  await clickStop(page, map);
+  await popup(page).getByRole("button", { name: /Bus 331/ }).click();
+  await expect(map).toHaveAttribute("data-route-path", "1776396");
+  await page.waitForTimeout(1600); // let fitBounds settle before projecting
+
+  const box = await map.boundingBox();
+  if (!box) throw new Error("map has no box");
+  // fitBounds pads {left: 60+dock, others: 60} and the bounds fit by WIDTH, so
+  // the flat line renders at the vertical center of the padded area, spanning
+  // its full width. Click near the line's RIGHT end — the stop popup (auto-
+  // anchored near the clicked stop, left of center) can't reach out there.
+  const lineX = box.width - 60 - 120;
+  const lineY = box.height / 2;
+
+  // ON the line → no-op: path + popup + selection all stay.
+  await map.click({ position: { x: lineX, y: lineY } });
+  await expect(map).toHaveAttribute("data-route-path", "1776396");
+  await expect(popup(page)).toBeVisible();
+  expect(reverseCalls).toBe(0);
+
+  // Bare map well below the line → a normal selection starts and tears down
+  // the popup + path (the map-click clear the owner's flow relies on).
+  await map.click({ position: { x: lineX, y: lineY + 250 } });
+  await expect(map).toHaveAttribute("data-selection", /fresh spot/i);
+  await expect(popup(page)).toHaveCount(0);
+  await expect(map).not.toHaveAttribute("data-route-path", /.*/);
+});
+
+test("a route-path failure marks the row, never draws, and stays recoverable", async ({ page }) => {
+  await stubRouteScene(page);
+  let healthy = false;
+  await page.route("**/api/route-path**", (route) =>
+    healthy
+      ? route.fulfill({ json: ROUTE_PATH })
+      : route.fulfill({ status: 502, json: { error: "Upstream provider error" } }),
+  );
+
+  const map = await loadAndSearch(page);
+  await clickStop(page, map);
+  const row = popup(page).getByRole("button", { name: /Bus 331/ });
+
+  await row.click();
+  await expect(row).toHaveClass(/hf-stop-popup__route--error/);
+  await expect(map).not.toHaveAttribute("data-route-path", /.*/);
+
+  // The provider recovers; clicking the row again succeeds.
+  healthy = true;
+  await row.click();
+  await expect(map).toHaveAttribute("data-route-path", "1776396");
 });
 
 test("a slow first stop's response never paints under a second stop's popup (stale-guard)", async ({ page }) => {
@@ -214,12 +478,12 @@ test("a slow first stop's response never paints under a second stop's popup (sta
   });
 
   const map = await loadAndSearch(page);
-  const box = await map.boundingBox();
-  if (!box) throw new Error("no box");
+  const east = await offsetPixel(map, STOP_DLNG, 0);
+  const south = await offsetPixel(map, 0, -0.006);
 
   // Click East (slow) then IMMEDIATELY South (fast) — do not wait for East.
-  await map.click({ position: offsetPixel(box, STOP_DLNG, 0) });
-  await map.click({ position: offsetPixel(box, 0, -0.006) });
+  await map.click({ position: { x: east.x, y: east.y } });
+  await map.click({ position: { x: south.x, y: south.y } });
 
   await expect(popup(page).getByText("South Dest")).toBeVisible();
   // Let East's delayed response arrive…

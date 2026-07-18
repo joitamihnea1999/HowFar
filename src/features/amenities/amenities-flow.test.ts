@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { isNewAmenityOrigin, originKey } from "./amenities-flow";
+import {
+  AMENITY_MAX_AUTO_RETRIES,
+  isNewAmenityOrigin,
+  isRetryableAmenityFailure,
+  originKey,
+} from "./amenities-flow";
 
 describe("originKey", () => {
   it("rounds to 5 decimals so a pre-round and a rounded origin share a key", () => {
@@ -22,5 +27,27 @@ describe("isNewAmenityOrigin", () => {
 
   it("is true for a different origin (a genuinely-new selection → refetch)", () => {
     expect(isNewAmenityOrigin(originKey(44.4, 26.1), originKey(44.5, 26.2))).toBe(true);
+  });
+});
+
+describe("isRetryableAmenityFailure", () => {
+  it("retries transient failures: network errors (null) and provider 5xx", () => {
+    expect(isRetryableAmenityFailure(null)).toBe(true);
+    expect(isRetryableAmenityFailure(500)).toBe(true);
+    expect(isRetryableAmenityFailure(502)).toBe(true);
+    expect(isRetryableAmenityFailure(504)).toBe(true);
+  });
+
+  it("never retries deterministic failures: 422 out-of-area, other 4xx, malformed 200", () => {
+    expect(isRetryableAmenityFailure(422)).toBe(false);
+    expect(isRetryableAmenityFailure(400)).toBe(false);
+    expect(isRetryableAmenityFailure(404)).toBe(false);
+    // A completed 200 whose body failed shape validation reports its real
+    // status — same body would come back on a retry.
+    expect(isRetryableAmenityFailure(200)).toBe(false);
+  });
+
+  it("caps automatic retries at one (stacked ~18s provider budgets otherwise)", () => {
+    expect(AMENITY_MAX_AUTO_RETRIES).toBe(1);
   });
 });

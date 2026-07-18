@@ -70,7 +70,9 @@ const inFlight = new Map<string, Promise<StopLine[]>>();
  * here (the caller already knows it) — this returns lines only, so the cache is
  * keyed purely by OSM identity and never poisoned by a client-supplied name. */
 export async function stopLines(osmType: OsmType, id: number): Promise<StopLine[]> {
-  const key = `stop-lines:v1:${osmType}/${id}`;
+  // v2: StopLine gained relationId (task 024) — the bump keeps v1 hits (parsed
+  // before ids existed) from serving rows whose paths could never be drawn.
+  const key = `stop-lines:v2:${osmType}/${id}`;
   const hit = await getCachedSafe<StopLine[]>(key);
   if (hit) return hit;
 

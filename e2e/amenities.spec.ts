@@ -178,6 +178,75 @@ test("a selection that resolves before the map style loads still paints amenity 
   await expect(map).toHaveAttribute("data-amenity-count", "5", { timeout: 10_000 });
 });
 
+test("a transient amenities failure self-heals via one automatic retry (no user action)", async ({ page }) => {
+  await stubBase(page);
+  let calls = 0;
+  await page.route("**/api/amenities**", (route) => {
+    calls += 1;
+    return calls === 1
+      ? route.fulfill({ status: 502, json: { error: "Upstream provider error" } })
+      : route.fulfill({ json: AMENITIES });
+  });
+
+  const map = await waitForMap(page);
+  await search(page);
+
+  // The 502 must NOT surface: the panel stays on "loading" through the retry
+  // window and lands on counts — the owner-reported "click again and it works"
+  // now happens by itself.
+  await expect(page.getByText(/amenities unavailable/i)).not.toBeVisible();
+  await expect(map).toHaveAttribute("data-amenity-count", "5", { timeout: 10_000 });
+  expect(calls).toBe(2); // the failed attempt + exactly one automatic retry
+});
+
+test("a persistent amenities failure surfaces a Retry button that refetches the same origin", async ({
+  page,
+}) => {
+  await stubBase(page);
+  let healthy = false;
+  let calls = 0;
+  await page.route("**/api/amenities**", (route) => {
+    calls += 1;
+    return healthy
+      ? route.fulfill({ json: AMENITIES })
+      : route.fulfill({ status: 502, json: { error: "Upstream provider error" } });
+  });
+
+  const map = await waitForMap(page);
+  await search(page);
+
+  // Initial attempt + auto-retry both 502 → the error state with Retry appears.
+  await expect(page.getByText(/amenities unavailable/i)).toBeVisible({ timeout: 10_000 });
+  expect(calls).toBe(2);
+
+  // Provider recovers; the button refetches the SAME origin and paints.
+  healthy = true;
+  await page.getByRole("button", { name: "Retry" }).click();
+  await expect(map).toHaveAttribute("data-amenity-count", "5", { timeout: 10_000 });
+  expect(calls).toBe(3);
+});
+
+test("a mode toggle after an amenities error refetches instead of stranding the error", async ({ page }) => {
+  await stubBase(page);
+  let healthy = false;
+  await page.route("**/api/amenities**", (route) =>
+    healthy
+      ? route.fulfill({ json: AMENITIES })
+      : route.fulfill({ status: 502, json: { error: "Upstream provider error" } }),
+  );
+
+  const map = await waitForMap(page);
+  await search(page);
+  await expect(page.getByText(/amenities unavailable/i)).toBeVisible({ timeout: 10_000 });
+
+  // The toggle recomputes the SAME origin — before task 024 the stale origin key
+  // swallowed this refetch and the error persisted forever.
+  healthy = true;
+  await page.getByRole("button", { name: "Transit" }).click();
+  await expect(map).toHaveAttribute("data-mode", "transit");
+  await expect(map).toHaveAttribute("data-amenity-count", "5", { timeout: 10_000 });
+});
+
 test("a failed mode-toggle recompute clears amenities instead of leaving orphan markers", async ({ page }) => {
   await stubBase(page);
   // Walk succeeds; the transit recompute fails (last-registered route wins).

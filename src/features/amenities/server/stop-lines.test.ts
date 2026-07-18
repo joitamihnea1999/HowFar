@@ -91,7 +91,7 @@ describe("stopLines — direct-first, stop_area fallback", () => {
     raceOverpass.mockResolvedValue([]);
     await expect(stopLines("node", 999)).resolves.toEqual([]);
     expect(raceOverpass).toHaveBeenCalledTimes(2);
-    const emptyExpiry = store.get("stop-lines:v1:node/999::expires") as Date;
+    const emptyExpiry = store.get("stop-lines:v2:node/999::expires") as Date;
     expect(emptyExpiry.getTime() - Date.now()).toBeLessThan(2 * 24 * 60 * 60 * 1000);
   });
 
@@ -123,7 +123,7 @@ describe("stopLines — direct-first, stop_area fallback", () => {
   it("caches a full result for LONGER than an empty one", async () => {
     raceOverpass.mockResolvedValueOnce([routeRel({ route: "bus", ref: "1", to: "X" })]);
     await stopLines("node", 8);
-    const fullExpiry = store.get("stop-lines:v1:node/8::expires") as Date;
+    const fullExpiry = store.get("stop-lines:v2:node/8::expires") as Date;
     expect(fullExpiry.getTime() - Date.now()).toBeGreaterThan(2 * 24 * 60 * 60 * 1000);
   });
 });

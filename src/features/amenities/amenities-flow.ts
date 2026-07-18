@@ -22,3 +22,26 @@ export function originKey(lat: number, lng: number): string {
 export function isNewAmenityOrigin(currentKey: string | null, nextKey: string): boolean {
   return currentKey !== nextKey;
 }
+
+/** Automatic retries per user-visible attempt. One is enough: the dominant
+ * failure is a public Overpass instance transiently refusing the whole race
+ * ("too busy" 504s / timeouts) — observed to succeed seconds later, which is
+ * why a manual re-click always "fixed" it. More would stack ~18s worst-case
+ * server budgets behind one spinner. */
+export const AMENITY_MAX_AUTO_RETRIES = 1;
+
+/** Delay before the automatic retry. Long enough for a briefly-saturated
+ * provider to breathe, short enough that the panel still feels responsive. */
+export const AMENITY_RETRY_DELAY_MS = 1500;
+
+/**
+ * True when a failed amenity fetch is worth retrying (automatically or via the
+ * Retry button): transient provider failures only. `null` = the request never
+ * completed (network drop / fetch TypeError) — transient. 5xx = upstream
+ * provider trouble (the 502 all-hosts-failed race) — transient. Anything else
+ * (422 out-of-area, other 4xx, a completed 200 with a malformed body) is
+ * deterministic for this origin: retrying would re-fail identically.
+ */
+export function isRetryableAmenityFailure(httpStatus: number | null): boolean {
+  return httpStatus === null || httpStatus >= 500;
+}

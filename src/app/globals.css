@@ -25,10 +25,13 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
-/* Transit-stop line popup (task 021). Dark-glass, matching the map overlay UI;
-   overrides MapLibre's default light popup chrome, including the tip triangle
-   colour for every anchor position. */
-.maplibregl-popup-content {
+/* Transit-stop/POI popup (tasks 021/024). Dark-glass, matching the map overlay
+   UI; overrides MapLibre's default light popup chrome, including the tip
+   triangle colour for every anchor position. Every selector is prefixed with
+   the popup ROOT class so it outranks maplibre-gl.css by specificity — the
+   two stylesheets' bundle order is build-dependent (a later maplibre chunk
+   silently reverted these to the white chrome, caught by screenshot, task 024). */
+.maplibregl-popup .maplibregl-popup-content {
   background: rgba(10, 10, 12, 0.92);
   color: #e4e4e7;
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -37,28 +40,28 @@ body {
   padding: 0.7rem 0.85rem;
   backdrop-filter: blur(8px);
 }
-.maplibregl-popup-anchor-top .maplibregl-popup-tip,
-.maplibregl-popup-anchor-top-left .maplibregl-popup-tip,
-.maplibregl-popup-anchor-top-right .maplibregl-popup-tip {
+.maplibregl-popup.maplibregl-popup-anchor-top .maplibregl-popup-tip,
+.maplibregl-popup.maplibregl-popup-anchor-top-left .maplibregl-popup-tip,
+.maplibregl-popup.maplibregl-popup-anchor-top-right .maplibregl-popup-tip {
   border-bottom-color: rgba(10, 10, 12, 0.92);
 }
-.maplibregl-popup-anchor-bottom .maplibregl-popup-tip,
-.maplibregl-popup-anchor-bottom-left .maplibregl-popup-tip,
-.maplibregl-popup-anchor-bottom-right .maplibregl-popup-tip {
+.maplibregl-popup.maplibregl-popup-anchor-bottom .maplibregl-popup-tip,
+.maplibregl-popup.maplibregl-popup-anchor-bottom-left .maplibregl-popup-tip,
+.maplibregl-popup.maplibregl-popup-anchor-bottom-right .maplibregl-popup-tip {
   border-top-color: rgba(10, 10, 12, 0.92);
 }
-.maplibregl-popup-anchor-left .maplibregl-popup-tip {
+.maplibregl-popup.maplibregl-popup-anchor-left .maplibregl-popup-tip {
   border-right-color: rgba(10, 10, 12, 0.92);
 }
-.maplibregl-popup-anchor-right .maplibregl-popup-tip {
+.maplibregl-popup.maplibregl-popup-anchor-right .maplibregl-popup-tip {
   border-left-color: rgba(10, 10, 12, 0.92);
 }
-.maplibregl-popup-close-button {
+.maplibregl-popup .maplibregl-popup-close-button {
   color: #a1a1aa;
   font-size: 1.1rem;
   padding: 0 0.35rem;
 }
-.maplibregl-popup-close-button:hover {
+.maplibregl-popup .maplibregl-popup-close-button:hover {
   background: transparent;
   color: #ffffff;
 }
@@ -98,4 +101,47 @@ body {
 }
 .hf-stop-popup__dir {
   color: #a1a1aa;
+}
+
+/* A selectable line row (task 024): clicking draws the line's full path +
+   stops on the map; the active row stays highlighted, an error turns amber. */
+.hf-stop-popup__route {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  width: 100%;
+  padding: 0.15rem 0.4rem;
+  margin: -0.15rem -0.4rem;
+  border: 0;
+  border-radius: 0.45rem;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+.hf-stop-popup__route:hover {
+  background: rgba(255, 255, 255, 0.09);
+}
+.hf-stop-popup__route:focus-visible {
+  outline: 2px solid rgba(250, 250, 250, 0.6);
+  outline-offset: 1px;
+}
+.hf-stop-popup__route--loading {
+  animation: hf-route-pulse 1s ease-in-out infinite;
+}
+.hf-stop-popup__route--active {
+  background: rgba(250, 250, 250, 0.16);
+}
+.hf-stop-popup__route--active .hf-stop-popup__ref {
+  color: #ffffff;
+}
+.hf-stop-popup__route--error .hf-stop-popup__ref,
+.hf-stop-popup__route--error .hf-stop-popup__dir {
+  color: #fcd34d;
+}
+@keyframes hf-route-pulse {
+  50% {
+    opacity: 0.55;
+  }
 }

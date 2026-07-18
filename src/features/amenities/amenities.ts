@@ -105,6 +105,17 @@ const COLOR_BY_KEY = Object.fromEntries(
   AMENITY_CATEGORIES.map((c) => [c.key, c.color]),
 ) as Record<AmenityCategoryKey, string>;
 
+const LABEL_BY_KEY = Object.fromEntries(AMENITY_CATEGORIES.map((c) => [c.key, c.label])) as Record<
+  AmenityCategoryKey,
+  string
+>;
+
+/** Human label for a category key ("groceries" → "Groceries"); unknown keys get
+ * a generic fallback — used as popup title/subtitle for unnamed POIs (task 024). */
+export function amenityCategoryLabel(key: string): string {
+  return (LABEL_BY_KEY as Record<string, string>)[key] ?? "Place";
+}
+
 /** Build the merged Overpass QL for all five categories around a point.
  * `out center;` (body verbosity) returns tags + node coords + way/relation
  * centers — `out tags;` would omit coordinates and drop every node. */

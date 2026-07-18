@@ -10,9 +10,11 @@ import { AMENITY_CATEGORIES, type AmenityCounts } from "@/features/amenities/ame
 interface AmenityPanelProps {
   status: "idle" | "loading" | "ready" | "error";
   counts: AmenityCounts | null;
+  /** Refetch the failed origin — shown as a Retry button in the error state. */
+  onRetry: () => void;
 }
 
-export default function AmenityPanel({ status, counts }: AmenityPanelProps) {
+export default function AmenityPanel({ status, counts, onRetry }: AmenityPanelProps) {
   if (status === "idle") return null;
   return (
     <div className="pointer-events-auto flex max-w-md flex-col items-center gap-1.5 rounded-2xl border border-white/10 bg-black/50 px-4 py-2.5 text-center backdrop-blur">
@@ -20,7 +22,16 @@ export default function AmenityPanel({ status, counts }: AmenityPanelProps) {
       {status === "loading" ? (
         <span className="text-xs text-zinc-500">Finding nearby amenities…</span>
       ) : status === "error" ? (
-        <span className="text-xs text-amber-300">Amenities unavailable right now</span>
+        <span className="flex items-center gap-2 text-xs text-amber-300">
+          Amenities unavailable right now
+          <button
+            type="button"
+            onClick={onRetry}
+            className="rounded-full border border-amber-300/40 px-2.5 py-0.5 font-medium text-amber-200 transition-colors hover:border-amber-200 hover:text-amber-100"
+          >
+            Retry
+          </button>
+        </span>
       ) : counts ? (
         <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-xs">
           {AMENITY_CATEGORIES.map((c) => (

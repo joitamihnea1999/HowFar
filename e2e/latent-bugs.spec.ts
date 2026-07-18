@@ -91,7 +91,8 @@ test("a map click with a malformed reverse-geocode body still renders the isochr
   );
 
   const map = await waitForMap(page);
-  await map.click({ position: { x: 400, y: 320 } });
+  // x clears the left-docked control column (task 024) so this stays a bare-map click.
+  await map.click({ position: { x: 760, y: 320 } });
 
   // Reach still renders; the click keeps the generic label; no error banner.
   await expect(map).toHaveAttribute("data-isochrone-rings", "3");

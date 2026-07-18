@@ -76,7 +76,8 @@ test("clicking the map reverse-geocodes and renders the isochrone", async ({ pag
   await stubIsochrone(page);
 
   const map = await waitForMap(page);
-  await map.click({ position: { x: 400, y: 320 } });
+  // x clears the left-docked control column (task 024) so this stays a bare-map click.
+  await map.click({ position: { x: 760, y: 320 } });
 
   await expect(map).toHaveAttribute("data-isochrone-rings", "3");
   await expect(map).toHaveAttribute("data-selection", /clicked spot/i);
@@ -96,10 +97,10 @@ test("a superseded slow selection never overwrites the newer one", async ({ page
   const map = await waitForMap(page);
   // Click in the LOWER half of the map: click A's 700 ms-delayed reverse can
   // resolve between the two clicks on a slow runner, summoning the amenity panel
-  // (top-centre overlay) over an upper click point and stalling click B's
-  // actionability. The lower half is always clear of the overlay.
-  await map.click({ position: { x: 350, y: 520 } });
-  await map.click({ position: { x: 500, y: 560 } });
+  // over an upper click point and stalling click B's actionability. The lower
+  // half is clear of the overlay — and x clears the left dock (task 024).
+  await map.click({ position: { x: 710, y: 520 } });
+  await map.click({ position: { x: 860, y: 560 } });
 
   // B resolves first (A is delayed + aborted); the map must end on B, not A.
   await expect(map).toHaveAttribute("data-selection", /Spot B/);

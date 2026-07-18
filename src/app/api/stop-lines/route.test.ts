@@ -44,7 +44,8 @@ describe("GET /api/stop-lines", () => {
   });
 
   it("200 + {name, lines} on success, echoing the client's name", async () => {
-    const lines = [{ mode: "subway", ref: "M2", direction: "Pipera" }];
+    // relationId rides through untouched (task 024: the client draws paths by it).
+    const lines = [{ mode: "subway", ref: "M2", direction: "Pipera", relationId: 2947020 }];
     stopLines.mockResolvedValue(lines);
     const res = await call(`?type=node&id=582555685&${inArea}&name=Pia%C8%9Ba%20Roman%C4%83`);
     expect(res.status).toBe(200);

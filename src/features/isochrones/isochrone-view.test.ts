@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { buildIsochroneFeatures, legendColor, MARKER_COLOR, MODE_LABEL, RING_MINUTES } from "./isochrone-view";
+import {
+  buildIsochroneFeatures,
+  DEFAULT_RING_FILTER,
+  legendColor,
+  MARKER_COLOR,
+  MODE_LABEL,
+  RING_FILTER_OPTIONS,
+  RING_MINUTES,
+  ringLayerVisibility,
+  visibleLegendMinutes,
+} from "./isochrone-view";
 import type { Ring } from "@/features/map/selection-flow";
 
 const RINGS: Ring[] = [
@@ -41,5 +51,34 @@ describe("legendColor / constants", () => {
     expect(RING_MINUTES).toEqual([45, 30, 15]);
     expect(MARKER_COLOR.transit).toBe("#a78bfa");
     expect(MODE_LABEL.walk).toBe("Walking");
+  });
+});
+
+describe("ring filter (task 024)", () => {
+  it("defaults to the 15-min band (owner-picked) and offers each band plus All", () => {
+    expect(DEFAULT_RING_FILTER).toBe(15);
+    expect(RING_FILTER_OPTIONS).toEqual([15, 30, 45, "all"]);
+  });
+
+  it('"all" makes every per-minute fill+line layer visible', () => {
+    const vis = ringLayerVisibility("all");
+    expect(Object.keys(vis)).toHaveLength(RING_MINUTES.length * 2);
+    expect(Object.values(vis).every((v) => v === "visible")).toBe(true);
+  });
+
+  it("a single band shows exactly its own fill+line pair and hides the rest", () => {
+    for (const band of [15, 30, 45] as const) {
+      const vis = ringLayerVisibility(band);
+      for (const m of RING_MINUTES) {
+        const expected = m === band ? "visible" : "none";
+        expect(vis[`iso-fill-${m}`]).toBe(expected);
+        expect(vis[`iso-line-${m}`]).toBe(expected);
+      }
+    }
+  });
+
+  it("the legend mirrors the filter: one row for a band, all rows for All", () => {
+    expect(visibleLegendMinutes(30)).toEqual([30]);
+    expect(visibleLegendMinutes("all")).toEqual([15, 30, 45]);
   });
 });
