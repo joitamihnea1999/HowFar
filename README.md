@@ -58,6 +58,14 @@ npm run dev                 # http://localhost:3000
 | `npm test` · `npm run test:coverage` | Vitest unit suite · same with enforced coverage thresholds |
 | `npm run test:e2e` | Playwright e2e (needs `npm run build` first + DB up) |
 | `npm run tiles:fetch [YYYYMMDD]` | (Re)fetch the Bucharest basemap extract |
+| `npm run security:google-keys` | Value-safe scan of the working tree, Git index, and full history |
+
+### Secret safety
+
+Keep real credentials only in ignored `.env` files locally and in Railway variables for
+deployment. Google credentials must remain server-side and must never use a `NEXT_PUBLIC_`
+name. This clone uses the committed pre-commit scanner; enable it in another clone with
+`git config core.hooksPath .githooks`. CI repeats the scan against the complete Git history.
 
 ### Health endpoints
 
