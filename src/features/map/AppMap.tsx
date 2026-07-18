@@ -13,6 +13,8 @@ import {
   type AmenityCounts,
 } from "@/features/amenities/amenities";
 import { isNewAmenityOrigin, originKey } from "@/features/amenities/amenities-flow";
+import type { StopLine } from "@/features/amenities/stop-lines";
+import { buildStopPopupModel, STOP_POPUP_TEXT, type StopPopupModel } from "@/features/amenities/stop-popup";
 import { BUCHAREST_MAX_BOUNDS } from "@/lib/bounds";
 import { buildIsochroneFeatures, MARKER_COLOR } from "@/features/isochrones/isochrone-view";
 import AmenityPanel from "@/features/map/AmenityPanel";
@@ -51,6 +53,10 @@ import {
 // Piața Unirii — the classic Bucharest reference point.
 const BUCHAREST_CENTER: [number, number] = [26.1025, 44.4268];
 const SUGGEST_DEBOUNCE_MS = 250;
+// Client-side deadline on the stop-lines fetch so a degraded Overpass can't leave
+// the popup on "Finding lines…" for the server's full ~18s host budget (task 021
+// — the "never hang on loading" lesson from the search box, task 013).
+const STOP_LINES_TIMEOUT_MS = 9000;
 
 interface GeoPoint {
   lat: number;
@@ -79,6 +85,15 @@ export default function AppMap() {
   const amenityKeyRef = useRef<string | null>(null);
   const clearAmenitiesRef = useRef<(() => void) | null>(null);
   const [amenity, setAmenity] = useState<AmenityUi>({ status: "idle", counts: null });
+
+  // Transit-stop line popup (task 021): a click on a transit marker opens a
+  // MapLibre popup with the lines serving it. Independent of the selection
+  // machine (it never starts an isochrone); a generation + abort guard drops a
+  // stale response when the user clicks another stop or starts a new selection.
+  const popupRef = useRef<maplibregl.Popup | null>(null);
+  const stopLinesAbortRef = useRef<AbortController | null>(null);
+  const stopLinesGenRef = useRef(0);
+  const closeStopPopupRef = useRef<(() => void) | null>(null);
 
   // The two extracted state machines drive the render via useState, but each is
   // mirrored in a ref so a dispatch can be read back synchronously in the same
@@ -157,6 +172,7 @@ export default function AppMap() {
 
     function clearSelection() {
       pending = null;
+      closeStopPopupRef.current?.(); // a new selection dismisses any open stop popup
       (map.getSource("isochrone") as maplibregl.GeoJSONSource | undefined)?.setData(
         EMPTY_FC as GeoJSON.FeatureCollection,
       );
@@ -227,6 +243,142 @@ export default function AppMap() {
           if ((err as Error)?.name === "AbortError" || gen !== amenityGenRef.current) return;
           setAmenity({ status: "error", counts: null });
         });
+    }
+
+    // --- Transit-stop line popup ------------------------------------------
+    // Build the popup DOM from the pure model. textContent everywhere (never
+    // innerHTML) — OSM names/headsigns are untrusted; this is the XSS guard.
+    function renderStopPopup(model: StopPopupModel): HTMLElement {
+      const root = document.createElement("div");
+      root.className = "hf-stop-popup";
+      root.dataset.testid = "stop-popup";
+      root.dataset.state = model.kind;
+
+      const title = document.createElement("div");
+      title.className = "hf-stop-popup__title";
+      title.textContent = model.title;
+      root.appendChild(title);
+
+      const message = (text: string) => {
+        const m = document.createElement("div");
+        m.className = "hf-stop-popup__msg";
+        m.textContent = text;
+        root.appendChild(m);
+      };
+
+      if (model.kind === "loading") message(STOP_POPUP_TEXT.loading);
+      else if (model.kind === "error") message(STOP_POPUP_TEXT.error);
+      else if (model.kind === "empty") message(STOP_POPUP_TEXT.empty);
+      else {
+        const list = document.createElement("ul");
+        list.className = "hf-stop-popup__lines";
+        for (const row of model.rows) {
+          const li = document.createElement("li");
+          li.className = "hf-stop-popup__line";
+          const ref = document.createElement("span");
+          ref.className = "hf-stop-popup__ref";
+          ref.textContent = `${row.modeLabel} ${row.ref}`;
+          li.appendChild(ref);
+          if (row.direction) {
+            const dir = document.createElement("span");
+            dir.className = "hf-stop-popup__dir";
+            dir.textContent = `→ ${row.direction}`;
+            li.appendChild(dir);
+          }
+          list.appendChild(li);
+        }
+        root.appendChild(list);
+      }
+      return root;
+    }
+
+    // Tear down the popup AND invalidate its in-flight fetch (bumping the gen so
+    // a late response can't repaint a removed popup). Called on a new stop click
+    // and at the start of any new selection.
+    function closeStopPopup() {
+      stopLinesAbortRef.current?.abort();
+      stopLinesGenRef.current += 1;
+      popupRef.current?.remove();
+      popupRef.current = null;
+    }
+    closeStopPopupRef.current = closeStopPopup;
+
+    function openStopPopup(feature: maplibregl.MapGeoJSONFeature, coords: [number, number]) {
+      const props = feature.properties ?? {};
+      const osmType = typeof props.osmType === "string" ? props.osmType : "";
+      const osmId = Number(props.osmId);
+      const name = typeof props.name === "string" ? props.name : "";
+      closeStopPopup();
+      // No usable identity ⇒ can't look up lines. Bail with no popup — but the
+      // caller has ALREADY decided this is a transit hit, so we never fall
+      // through to a reselection that would wipe the user's markers (task 021).
+      if (!osmType || !Number.isInteger(osmId) || osmId <= 0) return;
+
+      const gen = stopLinesGenRef.current;
+      const controller = new AbortController();
+      stopLinesAbortRef.current = controller;
+
+      const popup = new maplibregl.Popup({ closeButton: true, closeOnClick: false, maxWidth: "280px" })
+        .setLngLat(coords)
+        .setDOMContent(renderStopPopup(buildStopPopupModel(name, "loading")))
+        .addTo(map);
+      popupRef.current = popup;
+
+      // Client deadline: transition to the error state (and abort) if the server
+      // is slow, so the popup never sits on "Finding lines…" indefinitely.
+      const timer = setTimeout(() => {
+        if (gen === stopLinesGenRef.current) {
+          popup.setDOMContent(renderStopPopup(buildStopPopupModel(name, "error")));
+        }
+        controller.abort();
+      }, STOP_LINES_TIMEOUT_MS);
+
+      const q = `?type=${encodeURIComponent(osmType)}&id=${osmId}&lat=${coords[1]}&lng=${coords[0]}&name=${encodeURIComponent(name)}`;
+      fetch(`/api/stop-lines${q}`, { signal: controller.signal })
+        .then(async (res) => {
+          if (gen !== stopLinesGenRef.current) return;
+          if (!res.ok) return void popup.setDOMContent(renderStopPopup(buildStopPopupModel(name, "error")));
+          const data = (await res.json()) as { lines?: unknown };
+          if (gen !== stopLinesGenRef.current) return;
+          const lines = (Array.isArray(data.lines) ? data.lines : []) as StopLine[];
+          popup.setDOMContent(renderStopPopup(buildStopPopupModel(name, "ready", lines)));
+        })
+        .catch((err) => {
+          if ((err as Error)?.name === "AbortError" || gen !== stopLinesGenRef.current) return;
+          popup.setDOMContent(renderStopPopup(buildStopPopupModel(name, "error")));
+        })
+        .finally(() => clearTimeout(timer));
+    }
+
+    // Pick the amenity marker NEAREST the click within a ±PICK_PAD px box, and
+    // return it ONLY when it's a transit stop. The padding keeps a near-miss from
+    // silently recomputing the isochrone elsewhere (touch-friendliness);
+    // nearest-wins keeps a click aimed at a closer non-transit marker from being
+    // stolen by a transit dot that merely shares the box (task 021).
+    const PICK_PAD = 8;
+    function pickTransitStop(point: maplibregl.Point): { feature: maplibregl.MapGeoJSONFeature; coords: [number, number] } | null {
+      const bbox: [maplibregl.PointLike, maplibregl.PointLike] = [
+        [point.x - PICK_PAD, point.y - PICK_PAD],
+        [point.x + PICK_PAD, point.y + PICK_PAD],
+      ];
+      const hits = map.queryRenderedFeatures(bbox, { layers: ["amenity-markers"] });
+      let nearest: maplibregl.MapGeoJSONFeature | null = null;
+      let nearestD = Infinity;
+      for (const f of hits) {
+        if (f.geometry.type !== "Point") continue;
+        const [lng, lat] = f.geometry.coordinates;
+        const p = map.project([lng, lat]);
+        const d = (p.x - point.x) ** 2 + (p.y - point.y) ** 2;
+        if (d < nearestD) {
+          nearestD = d;
+          nearest = f;
+        }
+      }
+      // Intercept only when the CLOSEST amenity is transit; otherwise the click
+      // belongs to a nearer non-transit marker (or bare map) → normal selection.
+      if (!nearest || nearest.properties?.category !== "transit" || nearest.geometry.type !== "Point") return null;
+      const [lng, lat] = nearest.geometry.coordinates;
+      return { feature: nearest, coords: [lng, lat] };
     }
 
     async function select(input: SelectInput, opts?: { recompute?: boolean }) {
@@ -340,12 +492,21 @@ export default function AppMap() {
       el.dataset.mapLoaded = "true";
     });
 
-    map.on("click", (e) => selectRef.current?.({ kind: "click", lat: e.lngLat.lat, lng: e.lngLat.lng }));
+    map.on("click", (e) => {
+      // A transit-stop click opens its line popup and does NOT start a selection
+      // (no geocode/reverse/isochrone) — even if identity is missing, it never
+      // falls through to a reselection. Anything else selects as before.
+      const hit = pickTransitStop(e.point);
+      if (hit) return void openStopPopup(hit.feature, hit.coords);
+      selectRef.current?.({ kind: "click", lat: e.lngLat.lat, lng: e.lngLat.lng });
+    });
 
     return () => {
       abortRef.current?.abort();
       suggestAbortRef.current?.abort();
       amenityAbortRef.current?.abort();
+      stopLinesAbortRef.current?.abort();
+      popupRef.current?.remove();
       if (suggestTimerRef.current) clearTimeout(suggestTimerRef.current);
       map.remove();
       maplibregl.removeProtocol("pmtiles");

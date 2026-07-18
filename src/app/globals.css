@@ -24,3 +24,78 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Transit-stop line popup (task 021). Dark-glass, matching the map overlay UI;
+   overrides MapLibre's default light popup chrome, including the tip triangle
+   colour for every anchor position. */
+.maplibregl-popup-content {
+  background: rgba(10, 10, 12, 0.92);
+  color: #e4e4e7;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.9rem;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+  padding: 0.7rem 0.85rem;
+  backdrop-filter: blur(8px);
+}
+.maplibregl-popup-anchor-top .maplibregl-popup-tip,
+.maplibregl-popup-anchor-top-left .maplibregl-popup-tip,
+.maplibregl-popup-anchor-top-right .maplibregl-popup-tip {
+  border-bottom-color: rgba(10, 10, 12, 0.92);
+}
+.maplibregl-popup-anchor-bottom .maplibregl-popup-tip,
+.maplibregl-popup-anchor-bottom-left .maplibregl-popup-tip,
+.maplibregl-popup-anchor-bottom-right .maplibregl-popup-tip {
+  border-top-color: rgba(10, 10, 12, 0.92);
+}
+.maplibregl-popup-anchor-left .maplibregl-popup-tip {
+  border-right-color: rgba(10, 10, 12, 0.92);
+}
+.maplibregl-popup-anchor-right .maplibregl-popup-tip {
+  border-left-color: rgba(10, 10, 12, 0.92);
+}
+.maplibregl-popup-close-button {
+  color: #a1a1aa;
+  font-size: 1.1rem;
+  padding: 0 0.35rem;
+}
+.maplibregl-popup-close-button:hover {
+  background: transparent;
+  color: #ffffff;
+}
+
+.hf-stop-popup__title {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: #fafafa;
+  margin-bottom: 0.4rem;
+  padding-right: 0.7rem;
+}
+.hf-stop-popup__msg {
+  font-size: 0.78rem;
+  color: #a1a1aa;
+}
+.hf-stop-popup__lines {
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.hf-stop-popup__line {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+}
+.hf-stop-popup__ref {
+  font-weight: 600;
+  color: #e4e4e7;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.hf-stop-popup__dir {
+  color: #a1a1aa;
+}

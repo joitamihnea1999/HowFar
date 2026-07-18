@@ -87,12 +87,16 @@ export const WALK_CLIP_MINUTES = 15;
 export const MAX_PER_CATEGORY = 150;
 
 /** A single resolved POI — the canonical flat shape the route returns and the
- * client renders/counts. */
+ * client renders/counts. `osmType`/`osmId` carry the OSM identity so a transit
+ * stop can be looked up for its serving lines (task 021); optional because a
+ * malformed element without an id still renders as a plain marker. */
 export interface Amenity {
   lat: number;
   lng: number;
   name: string;
   category: AmenityCategoryKey;
+  osmType?: string;
+  osmId?: number;
 }
 
 export type AmenityCounts = Record<AmenityCategoryKey, number>;
@@ -165,11 +169,23 @@ export function countByCategory(items: Amenity[]): AmenityCounts {
 }
 
 /** Amenities → GeoJSON points carrying the per-category color so one circle
- * layer paints via `["get","color"]` (the isochrone-layer pattern). */
+ * layer paints via `["get","color"]` (the isochrone-layer pattern). `osmType`/
+ * `osmId` ride along so a click on a transit marker can look up its lines
+ * (task 021); omitted when absent so `feature.properties` never carries
+ * `undefined` (MapLibre would stringify it). */
 export function buildAmenityFeatures(items: Amenity[]): GeoJSON.Feature[] {
-  return items.map((a) => ({
-    type: "Feature",
-    properties: { category: a.category, color: COLOR_BY_KEY[a.category], name: a.name },
-    geometry: { type: "Point", coordinates: [a.lng, a.lat] },
-  }));
+  return items.map((a) => {
+    const properties: Record<string, string | number> = {
+      category: a.category,
+      color: COLOR_BY_KEY[a.category],
+      name: a.name,
+    };
+    if (a.osmType) properties.osmType = a.osmType;
+    if (typeof a.osmId === "number") properties.osmId = a.osmId;
+    return {
+      type: "Feature",
+      properties,
+      geometry: { type: "Point", coordinates: [a.lng, a.lat] },
+    };
+  });
 }

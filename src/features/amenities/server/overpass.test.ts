@@ -54,8 +54,8 @@ describe("fetchOverpassAmenities (parse / classify / dedup / cap)", () => {
     );
     const out = await fetchOverpassAmenities(44.4268, 26.1025);
     expect(out).toEqual([
-      { lat: 44.44, lng: 26.12, name: "Kaufland", category: "groceries" },
-      { lat: 44.45, lng: 26.11, name: "Cișmigiu", category: "parks" },
+      { lat: 44.44, lng: 26.12, name: "Kaufland", category: "groceries", osmType: "node", osmId: 1 },
+      { lat: 44.45, lng: 26.11, name: "Cișmigiu", category: "parks", osmType: "way", osmId: 2 },
     ]);
   });
 
@@ -70,7 +70,9 @@ describe("fetchOverpassAmenities (parse / classify / dedup / cap)", () => {
       ]),
     );
     const out = await fetchOverpassAmenities(44.4268, 26.1025);
-    expect(out).toEqual([{ lat: 44.44, lng: 26.12, name: "Catena", category: "pharmacies" }]);
+    expect(out).toEqual([
+      { lat: 44.44, lng: 26.12, name: "Catena", category: "pharmacies", osmType: "node", osmId: 5 },
+    ]);
   });
 
   it("does not throw on null/garbled array entries; still parses the valid ones", async () => {
@@ -78,7 +80,7 @@ describe("fetchOverpassAmenities (parse / classify / dedup / cap)", () => {
       resp([null, "nope", { center: null }, node(1, 44.44, 26.12, { amenity: "pharmacy", name: "OK" })]),
     );
     expect(await fetchOverpassAmenities(44.4268, 26.1025)).toEqual([
-      { lat: 44.44, lng: 26.12, name: "OK", category: "pharmacies" },
+      { lat: 44.44, lng: 26.12, name: "OK", category: "pharmacies", osmType: "node", osmId: 1 },
     ]);
   });
 
@@ -218,7 +220,9 @@ describe("nearbyAmenities (clip to the 15-min walk ring)", () => {
     const result = await nearbyAmenities(44.4268, 26.1025);
     expect(result.walkMinutes).toBe(15);
     expect(result.origin).toEqual({ lat: 44.4268, lng: 26.1025 });
-    expect(result.amenities).toEqual([{ lat: 44.45, lng: 26.1, name: "In", category: "pharmacies" }]);
+    expect(result.amenities).toEqual([
+      { lat: 44.45, lng: 26.1, name: "In", category: "pharmacies", osmType: "node", osmId: 1 },
+    ]);
     expect(result.counts.pharmacies).toBe(1);
   });
 

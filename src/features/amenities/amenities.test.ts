@@ -133,4 +133,22 @@ describe("buildAmenityFeatures", () => {
   it("maps empty input to empty features", () => {
     expect(buildAmenityFeatures([])).toEqual([]);
   });
+
+  it("carries osmType/osmId into properties so a transit click can look up its lines", () => {
+    const [f] = buildAmenityFeatures([
+      { lat: 44.44, lng: 26.09, name: "Piața Romană", category: "transit", osmType: "node", osmId: 444384784 },
+    ]);
+    expect(f.properties).toMatchObject({
+      category: "transit",
+      name: "Piața Romană",
+      osmType: "node",
+      osmId: 444384784,
+    });
+  });
+
+  it("omits osmType/osmId entirely when absent (never a stringified undefined)", () => {
+    const [f] = buildAmenityFeatures([{ lat: 1, lng: 1, name: "x", category: "parks" }]);
+    expect(f.properties).not.toHaveProperty("osmType");
+    expect(f.properties).not.toHaveProperty("osmId");
+  });
 });

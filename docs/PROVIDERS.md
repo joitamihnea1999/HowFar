@@ -118,6 +118,21 @@ methodology below is re-runnable whenever providers or the city data change.
   share resources fairly" → configured fallback host.
 - No key; server-side; 1–2 merged category queries per fresh address, cached. Orders of magnitude
   inside the guideline.
+- **Transit stop lines/direction (task 021):** a click on a transit-stop marker looks up the lines
+  serving it from OSM `type=route` relations, on-demand and cached (30d full / 1d empty). **Two-stage,
+  direct-first** (probed live 2026-07-17, refined after code review): stage 1 asks for the routes
+  the stop is a DIRECT member of (`<seed>(id);(rel(bn|bw|br)[type=route];)`) — correct and
+  per-platform accurate for bus/tram stops. Only if that is empty (a metro/rail *station* node, which
+  is not a direct route member) does stage 2 expand via the station's `public_transport=stop_area` to
+  the platform/`stop_position` member nodes and take THEIR routes. Direct-first is essential: a single
+  always-expand query over-reaches at interchanges (verified live — a Piața Unirii bus stop with 1
+  real route gained 8 unrelated sibling-platform tram routes under the area hop). Direction is the
+  `to` (destination) headsign, never `from`. Shares the endpoint race with the amenity query, passing
+  `treatEmptyAsFailure:false` — a stop with no mapped routes legitimately returns `[]`, and the race
+  prefers a non-empty host so a fast degraded mirror's `[]` can't cache a false "no lines". The
+  `/api/stop-lines` route rejects out-of-Bucharest coordinates (keeps casual off-area traffic off the
+  community servers) but the real fair-use bound is the per-host rate limiter + single-flight + TTL'd
+  cache, not the geo-guard (which doesn't bind id→coords).
 
 ### Air quality + climate — Open-Meteo ✅ PICKED
 - Terms/pricing (<https://open-meteo.com/en/terms>, <https://open-meteo.com/en/pricing>): free
