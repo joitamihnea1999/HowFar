@@ -94,8 +94,12 @@ test("a superseded slow selection never overwrites the newer one", async ({ page
   await stubIsochrone(page);
 
   const map = await waitForMap(page);
-  await map.click({ position: { x: 350, y: 300 } });
-  await map.click({ position: { x: 450, y: 340 } });
+  // Click in the LOWER half of the map: click A's 700 ms-delayed reverse can
+  // resolve between the two clicks on a slow runner, summoning the amenity panel
+  // (top-centre overlay) over an upper click point and stalling click B's
+  // actionability. The lower half is always clear of the overlay.
+  await map.click({ position: { x: 350, y: 520 } });
+  await map.click({ position: { x: 500, y: 560 } });
 
   // B resolves first (A is delayed + aborted); the map must end on B, not A.
   await expect(map).toHaveAttribute("data-selection", /Spot B/);
