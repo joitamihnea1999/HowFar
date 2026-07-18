@@ -112,7 +112,10 @@ describe("buildRings", () => {
     // Catch a catastrophic perf cliff (the abandoned union approach was ~65 s);
     // ceiling is generous for CI/coverage variance (real ~40–100 ms).
     expect(ms).toBeLessThan(2000);
-  });
+    // Explicit per-test timeout: the dense payload + full vertex-bounds sweep can
+    // brush the 5s vitest default under coverage instrumentation. Headroom only —
+    // the real perf ceiling above (ms < 2000) is the actual regression guard.
+  }, 20_000);
 
   it("uses the documented walk speed and measured detour constants", () => {
     expect(WALK_SPEED_M_PER_MIN).toBe(80);
@@ -162,7 +165,7 @@ describe("buildRings", () => {
     // Real measured time ~120-250 ms locally; the generous ceiling absorbs
     // CI coverage-instrumentation inflation (same rationale as the 500-stop test).
     expect(ms).toBeLessThan(2000);
-  });
+  }, 20_000); // per-test timeout headroom under coverage (ms < 2000 is the real guard)
 
   it("yields three EMPTY MultiPolygons (still 3 rings, ascending) when nothing reaches the box", () => {
     // Origin far outside the launch box and no stops: no cell is stamped, every
