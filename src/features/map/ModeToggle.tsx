@@ -13,28 +13,48 @@ interface ModeToggleProps {
 
 export default function ModeToggle({ mode, onSwitch }: ModeToggleProps) {
   return (
-    <div
-      role="group"
-      aria-label="Travel mode"
-      className="pointer-events-auto flex gap-1 rounded-full border border-white/15 bg-black/50 p-1 backdrop-blur"
-    >
-      {(["walk", "transit"] as Mode[]).map((m) => (
-        <button
-          key={m}
-          type="button"
-          onClick={() => onSwitch(m)}
-          aria-pressed={mode === m}
-          className={`rounded-full px-5 py-1.5 text-sm font-medium transition-colors ${
-            mode === m
-              ? m === "walk"
-                ? "bg-teal-400/90 text-zinc-950"
-                : "bg-violet-400/90 text-zinc-950"
-              : "text-zinc-300 hover:text-zinc-100"
-          }`}
-        >
-          {m === "walk" ? "Walk" : "Transit"}
-        </button>
-      ))}
+    <div className="min-w-0">
+      <span className="mb-1.5 block px-1 text-[0.58rem] font-semibold uppercase tracking-[0.14em] text-[#78857b]">
+        Travel by
+      </span>
+      <div
+        role="group"
+        aria-label="Travel mode"
+        className="grid grid-cols-2 rounded-xl border border-white/[.09] bg-[#080b09]/65 p-1"
+      >
+        {(["walk", "transit"] as Mode[]).map((m) => {
+          const active = mode === m;
+          const walk = m === "walk";
+          return (
+            <button
+              key={m}
+              type="button"
+              onClick={() => onSwitch(m)}
+              aria-pressed={active}
+              className={`inline-flex min-h-11 items-center justify-center gap-1.5 rounded-[0.65rem] px-2 text-xs font-semibold transition-[background-color,color,box-shadow] sm:text-[0.8rem] ${
+                active
+                  ? walk
+                    ? "bg-[#2dd4bf] text-[#07221d] shadow-[0_5px_16px_rgba(45,212,191,.16)]"
+                    : "bg-[#a78bfa] text-[#1d1238] shadow-[0_5px_16px_rgba(167,139,250,.18)]"
+                  : "text-[#9ca9a0] hover:bg-white/[.055] hover:text-[#edf2ed]"
+              }`}
+            >
+              {walk ? (
+                <svg aria-hidden="true" viewBox="0 0 20 20" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.7">
+                  <circle cx="11.5" cy="3.5" r="1.5" />
+                  <path d="m9.5 7 2.8 2.2 2.5.3M11.5 9l-2 3-3.2 1.2M9.4 12.1l2.3 4M9.5 7 7.8 9.6 5.5 9" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              ) : (
+                <svg aria-hidden="true" viewBox="0 0 20 20" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.6">
+                  <rect x="4" y="3" width="12" height="11" rx="3" />
+                  <path d="M7 14l-1.2 2M13 14l1.2 2M7 7h6M7 10h.1M13 10h.1" strokeLinecap="round" />
+                </svg>
+              )}
+              {walk ? "Walk" : "Transit"}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

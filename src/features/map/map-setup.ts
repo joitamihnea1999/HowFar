@@ -16,6 +16,9 @@ export const EMPTY_FC = { type: "FeatureCollection" as const, features: [] as un
 /** The narrow slice of `maplibregl.Map` the layer helpers touch. */
 type LayerHost = Pick<maplibregl.Map, "addSource" | "addLayer">;
 
+export const ISOCHRONE_FILL_OPACITY = 0.2;
+export const ISOCHRONE_LINE_OPACITY = 0.94;
+
 /** Style for the self-hosted Protomaps basemap. `tilesUrl` is the absolute
  * `/api/tiles` URL (the caller computes it from `window.location.origin`). */
 export function createMapStyle(tilesUrl: string): maplibregl.StyleSpecification {
@@ -46,14 +49,23 @@ export function addIsochroneLayers(map: LayerHost): void {
       type: "fill",
       source: "isochrone",
       filter,
-      paint: { "fill-color": ["get", "fillColor"], "fill-opacity": 0.22 },
+      paint: {
+        "fill-color": ["get", "fillColor"],
+        "fill-opacity": ISOCHRONE_FILL_OPACITY,
+        "fill-opacity-transition": { duration: 320, delay: 0 },
+      },
     });
     map.addLayer({
       id: `iso-line-${minutes}`,
       type: "line",
       source: "isochrone",
       filter,
-      paint: { "line-color": ["get", "lineColor"], "line-width": 1.5, "line-opacity": 0.9 },
+      paint: {
+        "line-color": ["get", "lineColor"],
+        "line-width": 2,
+        "line-opacity": ISOCHRONE_LINE_OPACITY,
+        "line-opacity-transition": { duration: 320, delay: 0 },
+      },
     });
   }
 }
@@ -78,7 +90,7 @@ export function addRoutePathLayers(map: LayerHost): void {
     source: "route-path",
     filter: isLine,
     layout: round,
-    paint: { "line-color": ROUTE_PATH_CASING, "line-width": 7, "line-opacity": 0.85 },
+    paint: { "line-color": ROUTE_PATH_CASING, "line-width": 8, "line-opacity": 0.88 },
   });
   map.addLayer({
     id: "route-path-line",
@@ -86,7 +98,7 @@ export function addRoutePathLayers(map: LayerHost): void {
     source: "route-path",
     filter: isLine,
     layout: round,
-    paint: { "line-color": ROUTE_PATH_COLOR, "line-width": 3, "line-opacity": 0.95 },
+    paint: { "line-color": ROUTE_PATH_COLOR, "line-width": 3.5, "line-opacity": 0.97 },
   });
   map.addLayer({
     id: "route-path-stops",
@@ -94,7 +106,7 @@ export function addRoutePathLayers(map: LayerHost): void {
     source: "route-path",
     filter: ["==", ["geometry-type"], "Point"] as maplibregl.FilterSpecification,
     paint: {
-      "circle-radius": 4.5,
+      "circle-radius": 5,
       "circle-color": ROUTE_PATH_CASING,
       "circle-stroke-color": ROUTE_PATH_COLOR,
       "circle-stroke-width": 2,
@@ -125,8 +137,8 @@ export function addRoutePathLayers(map: LayerHost): void {
 
 /** Amenity marker sizing: rest vs hover (task 024). The hover radius nearly
  * doubles the target and is what the shared 12px pick pad is calibrated to. */
-export const AMENITY_RADIUS = 5;
-export const AMENITY_RADIUS_HOVER = 9;
+export const AMENITY_RADIUS = 7;
+export const AMENITY_RADIUS_HOVER = 10;
 
 /** Feature-state-driven value: `hovered` when the pointer's pick lands on the
  * marker (AppMap sets `hover` via setFeatureState), else `rest`. */
@@ -154,8 +166,43 @@ export function addAmenityLayers(map: LayerHost): void {
       "circle-radius": hoverCase(AMENITY_RADIUS_HOVER, AMENITY_RADIUS),
       "circle-color": ["get", "color"],
       "circle-stroke-color": "#ffffff",
-      "circle-stroke-width": hoverCase(2.5, 1.5),
-      "circle-opacity": hoverCase(1, 0.9),
+      "circle-stroke-width": hoverCase(2.5, 1.75),
+      "circle-opacity": hoverCase(1, 0.96),
+    },
+  });
+  // A compact, always-consistent non-color encoding. Single ASCII glyphs stay
+  // legible at city zoom without competing with place-name labels; the circle
+  // remains the sole hit layer so this symbol cannot change pick behavior.
+  map.addLayer({
+    id: "amenity-glyphs",
+    type: "symbol",
+    source: "amenities",
+    minzoom: 12.5,
+    layout: {
+      "text-field": [
+        "match",
+        ["get", "category"],
+        "groceries",
+        "G",
+        "pharmacies",
+        "+",
+        "parks",
+        "P",
+        "schools",
+        "S",
+        "transit",
+        "T",
+        "•",
+      ],
+      "text-font": ["Noto Sans Medium"],
+      "text-size": 8.5,
+      "text-allow-overlap": true,
+      "text-ignore-placement": true,
+    },
+    paint: {
+      "text-color": "#08100d",
+      "text-halo-color": "rgba(255,255,255,0.18)",
+      "text-halo-width": 0.5,
     },
   });
 }

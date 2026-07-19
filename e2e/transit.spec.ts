@@ -131,9 +131,9 @@ test("toggling mode while the first search is still loading does not strand the 
   await expect(combobox).toHaveValue("Piata Unirii"); // controlled input committed
   await page.getByRole("button", { name: "Go" }).click();
 
-  // Loading: the submit button relabels to "…". Wait for it so the toggle is
-  // genuinely mid-flight (no prior selection to fall back on).
-  await expect(page.getByRole("button", { name: "…" })).toBeVisible({ timeout: 5000 });
+  // Loading: the submit button's accessible name becomes "Searching". Wait for
+  // it so the toggle is genuinely mid-flight (no prior selection to fall back on).
+  await expect(page.getByRole("button", { name: "Searching" })).toBeVisible({ timeout: 5000 });
   await page.getByRole("button", { name: "Transit" }).click();
 
   // Aborting the in-flight search must return the UI to idle immediately — the

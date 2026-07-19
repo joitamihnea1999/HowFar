@@ -47,6 +47,16 @@ describe("AuthControl", () => {
     expect(rendered).toContain("Sign in with GitHub");
   });
 
+  it("multiple providers: collapses choices behind one compact sign-in control", async () => {
+    state.providers = ["google", "github"];
+    const rendered = text(await AuthControl());
+    expect(rendered).toContain("Sign in");
+    expect(rendered).toContain("Continue with");
+    expect(rendered).toContain("Google");
+    expect(rendered).toContain("GitHub");
+    expect(rendered).not.toContain("Sign in with GoogleSign in with GitHub");
+  });
+
   it("unavailable: renders the muted note when no provider is configured", async () => {
     const rendered = text(await AuthControl());
     expect(rendered).toContain("Sign-in unavailable");

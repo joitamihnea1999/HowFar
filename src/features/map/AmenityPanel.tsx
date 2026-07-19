@@ -1,51 +1,222 @@
-import { AMENITY_CATEGORIES, type AmenityCounts } from "@/features/amenities/amenities";
+"use client";
 
-/**
- * Nearby amenities within the 15-min walking isochrone (brief §5).
- * Mode-independent: shown for the selected address in both views. Pure
- * presentation — fetch/generation/abort live in AppMap; `counts` are the
- * server's TRUE clipped totals, not a recount of the capped markers.
- */
+import { useMemo, useRef, useState } from "react";
+
+import {
+  AMENITY_CATEGORIES,
+  amenityCategoryLabel,
+  type Amenity,
+  type AmenityCategoryKey,
+  type AmenityCounts,
+} from "@/features/amenities/amenities";
 
 interface AmenityPanelProps {
   status: "idle" | "loading" | "ready" | "error";
   counts: AmenityCounts | null;
-  /** Refetch the failed origin — shown as a Retry button in the error state. */
+  items: Amenity[];
   onRetry: () => void;
+  onInspect: (item: Amenity) => void;
 }
 
-export default function AmenityPanel({ status, counts, onRetry }: AmenityPanelProps) {
-  if (status === "idle") return null;
+function CategoryIcon({ category, className = "size-4" }: { category: AmenityCategoryKey; className?: string }) {
+  const common = { className, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8 };
+  if (category === "groceries")
+    return (
+      <svg {...common} aria-hidden="true">
+        <path d="M4 5h2l1.6 9h9.8l1.5-6H7M10 18.5h.1M16.5 18.5h.1" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  if (category === "pharmacies")
+    return (
+      <svg {...common} aria-hidden="true">
+        <path d="M9 4h6v5h5v6h-5v5H9v-5H4V9h5V4Z" strokeLinejoin="round" />
+      </svg>
+    );
+  if (category === "parks")
+    return (
+      <svg {...common} aria-hidden="true">
+        <path d="M12 21v-7M8.5 17.5 12 14l3.5 3.5M12 3c-4 2.2-6 5.1-6 8a6 6 0 0 0 12 0c0-2.9-2-5.8-6-8Z" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  if (category === "schools")
+    return (
+      <svg {...common} aria-hidden="true">
+        <path d="m3 9 9-5 9 5-9 5-9-5Z" strokeLinejoin="round" />
+        <path d="M7 12v4.5c3 2 7 2 10 0V12M21 9v6" strokeLinecap="round" />
+      </svg>
+    );
   return (
-    <div className="pointer-events-auto flex max-w-md flex-col items-center gap-1.5 rounded-2xl border border-white/10 bg-black/50 px-4 py-2.5 text-center backdrop-blur">
-      <span className="text-xs font-medium text-zinc-300">Within a 15-min walk</span>
+    <svg {...common} aria-hidden="true">
+      <rect x="5" y="3" width="14" height="14" rx="3" />
+      <path d="M8 17l-1.5 3M16 17l1.5 3M8 8h8M9 13h.1M15 13h.1" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export default function AmenityPanel({ status, counts, items, onRetry, onInspect }: AmenityPanelProps) {
+  const [browserOpen, setBrowserOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const browseButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  const filteredItems = useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase();
+    if (!needle) return items;
+    return items.filter((item) =>
+      `${item.name} ${amenityCategoryLabel(item.category)}`.toLocaleLowerCase().includes(needle),
+    );
+  }, [items, query]);
+
+  if (status === "idle") return null;
+
+  const closeBrowser = (returnFocus = true) => {
+    setBrowserOpen(false);
+    if (returnFocus) requestAnimationFrame(() => browseButtonRef.current?.focus());
+  };
+
+  return (
+    <section aria-labelledby="nearby-title" aria-live="polite" aria-busy={status === "loading"} className="mt-2">
+      <div className="flex items-start justify-between gap-3 px-1 pb-2.5 pt-1">
+        <div>
+          <h2 id="nearby-title" className="text-sm font-semibold tracking-[-0.02em] text-[#f4f7f2]">
+            Nearby essentials
+          </h2>
+          <p className="mt-0.5 text-[0.68rem] text-[#78857b]">Within a 15-min walk</p>
+        </div>
+        {status === "ready" && items.length > 0 ? (
+          <button
+            ref={browseButtonRef}
+            data-testid="amenity-browser-trigger"
+            type="button"
+            aria-expanded={browserOpen}
+            aria-controls="nearby-place-browser"
+            onClick={() => setBrowserOpen((open) => !open)}
+            className="inline-flex min-h-11 items-center gap-1.5 rounded-xl border border-white/[.1] bg-white/[.045] px-3 text-[0.7rem] font-semibold text-[#cbd4cc] transition-colors hover:border-white/[.2] hover:bg-white/[.075]"
+          >
+            <svg aria-hidden="true" viewBox="0 0 20 20" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.7">
+              <path d="M4 5h12M4 10h12M4 15h12" strokeLinecap="round" />
+            </svg>
+            Browse places
+          </button>
+        ) : null}
+      </div>
+
       {status === "loading" ? (
-        <span className="text-xs text-zinc-500">Finding nearby amenities…</span>
+        <div role="status" className="grid grid-cols-2 gap-2 px-1 pb-1">
+          {[0, 1, 2, 3].map((value) => (
+            <span key={value} className="h-12 animate-pulse rounded-xl bg-white/[.045]" />
+          ))}
+          <span className="sr-only">Finding nearby amenities…</span>
+        </div>
       ) : status === "error" ? (
-        <span className="flex items-center gap-2 text-xs text-amber-300">
-          Amenities unavailable right now
+        <div role="alert" className="flex items-center justify-between gap-3 rounded-xl border border-[#f6c86b]/16 bg-[#f6c86b]/[.07] px-3 py-2.5">
+          <span className="text-xs leading-5 text-[#e5c989]">Amenities unavailable right now</span>
           <button
             type="button"
             onClick={onRetry}
-            className="rounded-full border border-amber-300/40 px-2.5 py-0.5 font-medium text-amber-200 transition-colors hover:border-amber-200 hover:text-amber-100"
+            className="min-h-11 shrink-0 rounded-xl border border-[#f6c86b]/30 px-3 text-xs font-semibold text-[#f6d990] transition-colors hover:bg-[#f6c86b]/10"
           >
             Retry
           </button>
-        </span>
+        </div>
       ) : counts ? (
-        <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-xs">
-          {AMENITY_CATEGORIES.map((c) => (
-            <span key={c.key} className="flex items-center gap-1.5">
+        <div className="grid grid-cols-2 gap-1.5 px-1 pb-1">
+          {AMENITY_CATEGORIES.map((category) => (
+            <div
+              key={category.key}
+              className="flex min-h-12 items-center gap-2 rounded-xl border border-white/[.07] bg-white/[.035] px-2.5 py-2"
+            >
               <span
-                className="inline-block h-2 w-2 rounded-full ring-1 ring-white/40"
-                style={{ background: c.color }}
-              />
-              <span className="font-medium tabular-nums text-zinc-100">{counts[c.key]}</span>
-              <span className="text-zinc-400">{c.label}</span>
-            </span>
+                className="grid size-7 shrink-0 place-items-center rounded-lg text-[#08100d] ring-1 ring-white/20"
+                style={{ background: category.color }}
+              >
+                <CategoryIcon category={category.key} className="size-3.5" />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold tabular-nums leading-none text-[#f4f7f2]">
+                  {counts[category.key]}
+                </span>
+                <span className="mt-1 block truncate text-[0.62rem] leading-none text-[#849087]">{category.label}</span>
+              </span>
+            </div>
           ))}
         </div>
       ) : null}
-    </div>
+
+      {browserOpen ? (
+        <div
+          id="nearby-place-browser"
+          data-testid="amenity-browser"
+          role="region"
+          aria-label="Nearby places"
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              closeBrowser();
+            }
+          }}
+          className="hf-surface-in mt-2 rounded-[1rem] border border-white/[.1] bg-[#080b09]/84 p-2"
+        >
+          <div className="flex items-center gap-2">
+            <label className="relative min-w-0 flex-1">
+              <span className="sr-only">Filter nearby places</span>
+              <svg aria-hidden="true" viewBox="0 0 20 20" className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-[#78857b]" fill="none" stroke="currentColor" strokeWidth="1.7">
+                <circle cx="9" cy="9" r="5" />
+                <path d="m13 13 3 3" strokeLinecap="round" />
+              </svg>
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                autoFocus
+                placeholder="Filter places"
+                className="h-11 w-full rounded-xl border border-white/[.1] bg-white/[.045] pl-9 pr-3 text-xs text-[#edf2ed] placeholder:text-[#667269]"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => closeBrowser()}
+              aria-label="Close nearby places"
+              className="grid size-11 shrink-0 place-items-center rounded-xl border border-white/[.1] text-[#9ca9a0] transition-colors hover:bg-white/[.06] hover:text-[#f4f7f2]"
+            >
+              ×
+            </button>
+          </div>
+          <p className="px-1 pb-1 pt-2 text-[0.62rem] font-medium text-[#667269]">
+            {filteredItems.length} {filteredItems.length === 1 ? "place" : "places"}
+          </p>
+          <ul className="max-h-52 space-y-1 overflow-y-auto overscroll-contain pr-1">
+            {filteredItems.map((item, index) => (
+              <li key={`${item.category}-${item.osmType ?? "poi"}-${item.osmId ?? `${item.lat}-${item.lng}`}-${index}`}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onInspect(item);
+                    closeBrowser(false);
+                  }}
+                  className="flex min-h-11 w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors hover:bg-white/[.055]"
+                >
+                  <span
+                    className="grid size-7 shrink-0 place-items-center rounded-lg text-[#08100d]"
+                    style={{ background: AMENITY_CATEGORIES.find((category) => category.key === item.category)?.color }}
+                  >
+                    <CategoryIcon category={item.category} className="size-3.5" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs font-medium text-[#e8ede8]">
+                      {item.name || amenityCategoryLabel(item.category)}
+                    </span>
+                    <span className="mt-0.5 block text-[0.62rem] text-[#78857b]">
+                      {amenityCategoryLabel(item.category)}
+                    </span>
+                  </span>
+                  <svg aria-hidden="true" viewBox="0 0 20 20" className="size-3.5 shrink-0 text-[#667269]" fill="none" stroke="currentColor" strokeWidth="1.7">
+                    <path d="M5 10h9M11 7l3 3-3 3" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </section>
   );
 }

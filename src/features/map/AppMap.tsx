@@ -2,6 +2,7 @@
 
 import maplibregl from "maplibre-gl";
 import { Protocol } from "pmtiles";
+import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -38,12 +39,15 @@ import {
 } from "@/features/isochrones/isochrone-view";
 import AmenityPanel from "@/features/map/AmenityPanel";
 import AttributionBadge from "@/features/map/AttributionBadge";
+import EmptyState from "@/features/map/EmptyState";
 import {
   addAmenityLayers,
   addIsochroneLayers,
   addRoutePathLayers,
   createMapStyle,
   EMPTY_FC,
+  ISOCHRONE_FILL_OPACITY,
+  ISOCHRONE_LINE_OPACITY,
 } from "@/features/map/map-setup";
 import { cameraPadding } from "@/features/map/camera";
 import { MARKER_PICK_PAD_PX, pickNearestWithin } from "@/features/map/marker-pick";
@@ -82,6 +86,11 @@ const SUGGEST_DEBOUNCE_MS = 250;
 const STOP_LINES_TIMEOUT_MS = 9000;
 // Same rationale for the route-path fetch behind a clicked line row (task 024).
 const ROUTE_PATH_TIMEOUT_MS = 9000;
+/** Staged All-mode ring reveal: start delay + per-band dwell (ms). Dwell is long
+ * enough to be perceptible and for tests to observe paint without racing a
+ * sub-poll-interval transient. */
+const RING_REVEAL_START_MS = 80;
+const RING_REVEAL_STAGE_MS = 280;
 
 interface GeoPoint {
   lat: number;
@@ -91,9 +100,25 @@ interface GeoPoint {
 
 /** Amenities are a property of the resolved address, independent of the travel
  * mode — so they live outside the selection state machine, in their own UI slice. */
-type AmenityUi = { status: "idle" | "loading" | "ready" | "error"; counts: AmenityCounts | null };
+type AmenityUi = {
+  status: "idle" | "loading" | "ready" | "error";
+  counts: AmenityCounts | null;
+  items: Amenity[];
+};
 
-export default function AppMap() {
+/** Shared result-surface predicate for the React shell and camera resize path. */
+function hasResultSurface(
+  sel: Pick<SelectionState, "status" | "label" | "message">,
+  amenityStatus: AmenityUi["status"],
+): boolean {
+  return sel.status === "loading" || Boolean(sel.label || sel.message) || amenityStatus !== "idle";
+}
+
+interface AppMapProps {
+  utilityHeader?: ReactNode;
+}
+
+export default function AppMap({ utilityHeader }: AppMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const markerRef = useRef<maplibregl.Marker | null>(null);
@@ -114,7 +139,15 @@ export default function AppMap() {
   const amenityRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clearAmenitiesRef = useRef<(() => void) | null>(null);
   const fetchAmenitiesRef = useRef<((origin: Origin, attempt: number) => void) | null>(null);
-  const [amenity, setAmenity] = useState<AmenityUi>({ status: "idle", counts: null });
+  const inspectAmenityRef = useRef<((item: Amenity) => void) | null>(null);
+  const [amenity, setAmenity] = useState<AmenityUi>({ status: "idle", counts: null, items: [] });
+  // Mirrored so the map effect's resize handler (empty deps) can read the latest
+  // amenity status without re-binding listeners. Updated in an effect — not during
+  // render — to satisfy the react-hooks/refs lint rule.
+  const amenityRef = useRef(amenity);
+  useEffect(() => {
+    amenityRef.current = amenity;
+  }, [amenity]);
 
   // Transit-stop line popup (task 021): a click on a transit marker opens a
   // MapLibre popup with the lines serving it. Independent of the selection
@@ -150,6 +183,9 @@ export default function AppMap() {
   const applyRingFilterRef = useRef<((filter: RingFilter) => void) | null>(null);
 
   function selectRingFilter(next: RingFilter) {
+    // No-op re-clicks of the active filter must not cancel an in-flight staged
+    // reveal (applyRingFilter snaps every band to full opacity).
+    if (next === ringFilterRef.current) return;
     ringFilterRef.current = next;
     setRingFilter(next);
     applyRingFilterRef.current?.(next);
@@ -190,12 +226,131 @@ export default function AppMap() {
       attributionControl: { compact: false },
     });
     mapRef.current = map;
+    map.addControl(new maplibregl.NavigationControl({ showCompass: true, showZoom: true }), "bottom-right");
 
     // Buffer the latest selection until the style (and isochrone source/layers)
     // exist — a search that resolves before `load` would otherwise drop its rings.
     let styleLoaded = false;
     let pending: { origin: Origin; label: string; rings: Ring[]; mode: Mode } | null = null;
     let pendingAmenities: { items: Amenity[]; counts: AmenityCounts } | null = null;
+    let ringRevealTimers: Array<ReturnType<typeof setTimeout>> = [];
+
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+    function applyCameraPadding(hasResults: boolean) {
+      const padding = cameraPadding(el.clientWidth, el.clientHeight, hasResults);
+      // Permanent MapLibre edge insets — route fit and interrupted flyTo paths
+      // read map.getPadding(), so dataset stamps alone are not enough.
+      map.setPadding(padding);
+      const live = map.getPadding();
+      const applied = {
+        top: live.top ?? padding.top,
+        right: live.right ?? padding.right,
+        bottom: live.bottom ?? padding.bottom,
+        left: live.left ?? padding.left,
+      };
+      el.dataset.cameraPadTop = String(applied.top);
+      el.dataset.cameraPadRight = String(applied.right);
+      el.dataset.cameraPadBottom = String(applied.bottom);
+      el.dataset.cameraPadLeft = String(applied.left);
+      return applied;
+    }
+
+    function cancelRingReveal(clearReadback = true) {
+      for (const timer of ringRevealTimers) clearTimeout(timer);
+      ringRevealTimers = [];
+      if (clearReadback) {
+        delete el.dataset.ringReveal;
+        delete el.dataset.ringRevealSequence;
+        delete el.dataset.ringPaintTrace;
+        delete el.dataset.ringPaint15;
+        delete el.dataset.ringPaint30;
+        delete el.dataset.ringPaint45;
+      }
+    }
+
+    function setRingTransition(duration: number) {
+      for (const minutes of RING_MINUTES) {
+        map.setPaintProperty(`iso-fill-${minutes}`, "fill-opacity-transition", { duration, delay: 0 });
+        map.setPaintProperty(`iso-line-${minutes}`, "line-opacity-transition", { duration, delay: 0 });
+      }
+    }
+
+    function stampRingPaintReadbacks() {
+      for (const minutes of RING_MINUTES) {
+        el.dataset[`ringPaint${minutes}`] = String(
+          map.getPaintProperty(`iso-fill-${minutes}`, "fill-opacity"),
+        );
+      }
+    }
+
+    /** Cumulative paint trace: each stage records live fill opacities in
+     * RING_MINUTES order (45,30,15). Tests assert the settled attribute instead
+     * of racing a sub-poll-interval intermediate. */
+    function appendRingPaintTrace(stage: string) {
+      const paints = RING_MINUTES.map((minutes) =>
+        String(map.getPaintProperty(`iso-fill-${minutes}`, "fill-opacity")),
+      ).join(",");
+      const entry = `${stage}:${paints}`;
+      const prev = el.dataset.ringPaintTrace;
+      el.dataset.ringPaintTrace = prev ? `${prev}|${entry}` : entry;
+    }
+
+    function setRingRevealed(minutes: (typeof RING_MINUTES)[number], revealed: boolean) {
+      map.setPaintProperty(`iso-fill-${minutes}`, "fill-opacity", revealed ? ISOCHRONE_FILL_OPACITY : 0);
+      map.setPaintProperty(`iso-line-${minutes}`, "line-opacity", revealed ? ISOCHRONE_LINE_OPACITY : 0);
+      // Paint-property READ-BACK (not requested-state echo): keeps the signature
+      // transition objectively testable through MapLibre's live style.
+      stampRingPaintReadbacks();
+    }
+
+    // Largest-to-smallest reads as the city opening up, then resolving around
+    // the selected address. The active ring filter still owns layer visibility;
+    // this only animates the bands that are currently visible.
+    function revealRings() {
+      cancelRingReveal(false);
+      delete el.dataset.ringPaintTrace;
+      if (reducedMotion.matches) {
+        setRingTransition(0); // no inherited 320ms fade under reduced motion
+        for (const minutes of RING_MINUTES) setRingRevealed(minutes, true);
+        el.dataset.ringReveal = "settled";
+        el.dataset.ringRevealSequence = "instant";
+        appendRingPaintTrace("instant");
+        return;
+      }
+
+      // Reveal what the user can actually see. A single-band filter resolves
+      // that band immediately; All tells the full outer-to-inner story. Hidden
+      // bands remain at their final opacity so changing filters never exposes a
+      // band stranded at zero. The zero-duration hide prevents a flash/fade-out
+      // before the reveal transition begins.
+      const stages = ringFilterRef.current === "all" ? [...RING_MINUTES] : [ringFilterRef.current];
+      setRingTransition(0);
+      for (const minutes of stages) setRingRevealed(minutes, false);
+      setRingTransition(320);
+      el.dataset.ringReveal = "starting";
+      el.dataset.ringRevealSequence = "";
+      appendRingPaintTrace("start");
+      const sequence: number[] = [];
+      for (const [index, minutes] of stages.entries()) {
+        ringRevealTimers.push(
+          setTimeout(() => {
+            setRingRevealed(minutes, true);
+            sequence.push(minutes);
+            el.dataset.ringReveal = String(minutes);
+            el.dataset.ringRevealSequence = sequence.join(",");
+            appendRingPaintTrace(String(minutes));
+          }, RING_REVEAL_START_MS + index * RING_REVEAL_STAGE_MS),
+        );
+      }
+      ringRevealTimers.push(
+        setTimeout(() => {
+          el.dataset.ringReveal = "settled";
+          appendRingPaintTrace("settled");
+          ringRevealTimers = [];
+        }, RING_REVEAL_START_MS + (stages.length - 1) * RING_REVEAL_STAGE_MS + 340),
+      );
+    }
 
     function renderSelection(origin: Origin, label: string, rings: Ring[], mode: Mode) {
       if (!styleLoaded) {
@@ -207,10 +362,21 @@ export default function AppMap() {
         type: "FeatureCollection",
         features: buildIsochroneFeatures(rings, mode),
       });
+      revealRings();
 
-      // Recreate the marker so its color matches the active mode.
+      // A compact halo pin marks the exact origin without the visual weight or
+      // transparent tail of MapLibre's default teardrop marker.
       markerRef.current?.remove();
-      markerRef.current = new maplibregl.Marker({ color: MARKER_COLOR[mode] });
+      const markerElement = document.createElement("div");
+      markerElement.className = "hf-origin-marker";
+      markerElement.setAttribute("aria-hidden", "true");
+      markerElement.style.setProperty("--hf-origin-color", MARKER_COLOR[mode]);
+      const aura = document.createElement("span");
+      aura.className = "hf-origin-marker__aura";
+      const core = document.createElement("span");
+      core.className = "hf-origin-marker__core";
+      markerElement.append(aura, core);
+      markerRef.current = new maplibregl.Marker({ element: markerElement, anchor: "center" });
       // Pointer-transparent: the origin pin is display-only, so it must never
       // swallow a click/hover meant for an amenity marker underneath (task 024
       // — closes the exact-origin transit stop limitation parked in task 021).
@@ -219,9 +385,15 @@ export default function AppMap() {
       markerRef.current.setLngLat([origin.lng, origin.lat]).addTo(map);
       // Padded so the selection centers in the map area the dock doesn't cover
       // (the SHARED contract with any fitBounds — see features/map/camera.ts).
-      const padding = cameraPadding(el.clientWidth);
-      el.dataset.cameraPadLeft = String(padding.left);
-      map.flyTo({ center: [origin.lng, origin.lat], zoom: 13, essential: true, padding });
+      const padding = applyCameraPadding(true);
+      map.flyTo({
+        center: [origin.lng, origin.lat],
+        zoom: 13,
+        essential: false,
+        duration: reducedMotion.matches ? 0 : 900,
+        padding,
+      });
+      el.dataset.cameraMotion = reducedMotion.matches ? "instant" : "animated";
 
       el.dataset.selection = label;
       el.dataset.isochroneRings = String(rings.length);
@@ -230,6 +402,7 @@ export default function AppMap() {
 
     function clearSelection() {
       pending = null;
+      cancelRingReveal();
       closeStopPopupRef.current?.(); // a new selection dismisses any open stop popup
       (map.getSource("isochrone") as maplibregl.GeoJSONSource | undefined)?.setData(
         EMPTY_FC as GeoJSON.FeatureCollection,
@@ -238,6 +411,7 @@ export default function AppMap() {
       delete el.dataset.selection;
       delete el.dataset.isochroneRings;
       delete el.dataset.mode;
+      delete el.dataset.cameraMotion;
     }
 
     // `counts` are the server's TRUE clipped totals (may exceed the rendered
@@ -248,7 +422,7 @@ export default function AppMap() {
       // response can land before `load`, exactly like the isochrone.
       if (!styleLoaded) {
         pendingAmenities = { items, counts };
-        setAmenity({ status: "ready", counts });
+        setAmenity({ status: "ready", counts, items });
         return;
       }
       resetAmenityHover(); // generated ids are about to be reassigned
@@ -257,7 +431,7 @@ export default function AppMap() {
         features: buildAmenityFeatures(items) as GeoJSON.Feature[],
       });
       el.dataset.amenityCount = String(items.length);
-      setAmenity({ status: "ready", counts });
+      setAmenity({ status: "ready", counts, items });
     }
 
     // Drop amenity markers/counts and supersede any in-flight fetch or pending
@@ -275,7 +449,7 @@ export default function AppMap() {
         EMPTY_FC as GeoJSON.FeatureCollection,
       );
       delete el.dataset.amenityCount;
-      setAmenity({ status: "idle", counts: null });
+      setAmenity({ status: "idle", counts: null, items: [] });
     }
     clearAmenitiesRef.current = clearAmenities;
 
@@ -292,7 +466,7 @@ export default function AppMap() {
       amenityAbortRef.current?.abort();
       const controller = new AbortController();
       amenityAbortRef.current = controller;
-      setAmenity({ status: "loading", counts: null });
+      setAmenity({ status: "loading", counts: null, items: [] });
 
       const failWith = (httpStatus: number | null) => {
         if (isRetryableAmenityFailure(httpStatus) && attempt < AMENITY_MAX_AUTO_RETRIES) {
@@ -303,7 +477,7 @@ export default function AppMap() {
           return;
         }
         amenityKeyRef.current = null;
-        setAmenity({ status: "error", counts: null });
+        setAmenity({ status: "error", counts: null, items: [] });
       };
 
       fetch(`/api/amenities?lat=${origin.lat}&lng=${origin.lng}`, { signal: controller.signal })
@@ -343,6 +517,7 @@ export default function AppMap() {
     // clears. One active line at a time.
     let activeRouteRelId: number | null = null;
     let activeRouteButton: HTMLButtonElement | null = null;
+    let activeRouteBounds: ReturnType<typeof routePathBounds> = null;
 
     function setActiveRouteButton(button: HTMLButtonElement | null, state?: "loading" | "active" | "error") {
       activeRouteButton?.classList.remove(
@@ -358,6 +533,7 @@ export default function AppMap() {
       routePathAbortRef.current?.abort();
       routePathGenRef.current += 1;
       activeRouteRelId = null;
+      activeRouteBounds = null;
       setActiveRouteButton(null);
       if (styleLoaded) {
         (map.getSource("route-path") as maplibregl.GeoJSONSource | undefined)?.setData(
@@ -365,6 +541,85 @@ export default function AppMap() {
         );
       }
       delete el.dataset.routePath;
+      delete el.dataset.routeFramed;
+      delete el.dataset.routeCorridorHeight;
+      delete el.dataset.routeFrame;
+    }
+
+    function routeFitPadding() {
+      const dock = applyCameraPadding(true);
+      // Keep a real viewing corridor even when the short-landscape command and
+      // result docks consume most of the height. Larger canvases still receive
+      // the preferred 40px breathing room on every available edge.
+      const verticalRoom = Math.max(0, el.clientHeight - dock.top - dock.bottom - 72);
+      const horizontalRoom = Math.max(0, el.clientWidth - dock.left - dock.right - 96);
+      const verticalExtra = Math.min(40, verticalRoom / 2);
+      const horizontalExtra = Math.min(40, horizontalRoom / 2);
+      // MapLibre's bounds solver already includes the map's current (dock)
+      // padding. These values are additional breathing room only; passing the
+      // absolute dock values would double-count them and make a 390px viewport
+      // mathematically impossible to fit.
+      return {
+        top: verticalExtra,
+        bottom: verticalExtra,
+        right: horizontalExtra,
+        left: horizontalExtra,
+      };
+    }
+
+    function stampRouteFraming() {
+      if (!activeRouteBounds) return;
+      const [southWest, northEast] = activeRouteBounds;
+      const a = map.project(southWest);
+      const b = map.project(northEast);
+      const currentPadding = map.getPadding();
+      const padding = {
+        top: currentPadding.top ?? 0,
+        right: currentPadding.right ?? 0,
+        bottom: currentPadding.bottom ?? 0,
+        left: currentPadding.left ?? 0,
+      };
+      const minX = Math.min(a.x, b.x);
+      const maxX = Math.max(a.x, b.x);
+      const minY = Math.min(a.y, b.y);
+      const maxY = Math.max(a.y, b.y);
+      el.dataset.routeFramed = String(
+        minX >= padding.left - 2 &&
+          maxX <= el.clientWidth - padding.right + 2 &&
+          minY >= padding.top - 2 &&
+          maxY <= el.clientHeight - padding.bottom + 2,
+      );
+      el.dataset.routeCorridorHeight = String(
+        Math.round(el.clientHeight - padding.top - padding.bottom),
+      );
+      el.dataset.routeFrame = [
+        minX.toFixed(1),
+        maxX.toFixed(1),
+        minY.toFixed(1),
+        maxY.toFixed(1),
+        padding.left.toFixed(1),
+        padding.right.toFixed(1),
+        padding.top.toFixed(1),
+        padding.bottom.toFixed(1),
+      ].join(",");
+    }
+
+    function fitActiveRoute(duration: number) {
+      if (!activeRouteBounds) return;
+      const padding = routeFitPadding();
+      const camera = map.cameraForBounds(activeRouteBounds, { padding, maxZoom: 14 });
+      if (!camera) {
+        el.dataset.routeFramed = "false";
+        return;
+      }
+      map.once("moveend", stampRouteFraming);
+      map.easeTo({
+        ...camera,
+        duration,
+        essential: false,
+      });
+      requestAnimationFrame(stampRouteFraming);
+      el.dataset.cameraMotion = duration === 0 ? "instant" : "animated";
     }
 
     function drawRoutePath(relationId: number, path: RoutePath) {
@@ -385,13 +640,8 @@ export default function AppMap() {
       });
       const bounds = routePathBounds(path);
       if (!bounds) return;
-      // The SHARED camera contract with the selection flyTo (task 024): pad the
-      // dock's footprint so the whole line lands in the VISIBLE map area.
-      const dock = cameraPadding(el.clientWidth);
-      map.fitBounds(bounds, {
-        padding: { top: 60, bottom: 60, right: 60, left: 60 + dock.left },
-        maxZoom: 14,
-      });
+      activeRouteBounds = bounds;
+      fitActiveRoute(reducedMotion.matches ? 0 : 900);
     }
 
     function toggleRoutePath(relationId: number, button: HTMLButtonElement, anchor: [number, number]) {
@@ -551,6 +801,78 @@ export default function AppMap() {
       openPoiPopup(feature, coords);
     }
 
+    // Keyboard-accessible companion to the WebGL markers. It feeds the same
+    // popup router, frames the chosen place inside the shared camera corridor,
+    // then moves focus to MapLibre's close button so the detail is operable.
+    function inspectAmenity(item: Amenity) {
+      el.dataset.amenityInspect = "opening";
+      const returnTarget = document.querySelector<HTMLElement>('[data-testid="amenity-browser-trigger"]');
+      const coords: [number, number] = [item.lng, item.lat];
+      const feature = {
+        type: "Feature",
+        properties: {
+          name: item.name,
+          category: item.category,
+          osmType: item.osmType,
+          osmId: item.osmId,
+        },
+        geometry: { type: "Point", coordinates: coords },
+      } as unknown as maplibregl.MapGeoJSONFeature;
+      map.flyTo({
+        center: coords,
+        zoom: Math.max(14, map.getZoom()),
+        padding: applyCameraPadding(true),
+        essential: false,
+        duration: reducedMotion.matches ? 0 : 650,
+      });
+      openAmenityPopup(feature, coords);
+      const popup = popupRef.current;
+      if (!popup) {
+        el.dataset.amenityInspect = "unavailable";
+        return;
+      }
+      el.dataset.amenityInspect = item.name || amenityCategoryLabel(item.category);
+      popup.getElement().dataset.keyboardManaged = "true";
+      popup.on("close", () => returnTarget?.focus());
+      popup.getElement().addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          popup.remove();
+          return;
+        }
+        // MapLibre places its close control after the supplied content in DOM
+        // order. Make the visual close -> details order explicit for keyboard
+        // users, and keep Shift+Tab symmetrical when a route row is present.
+        const close = popup.getElement().querySelector<HTMLButtonElement>(".maplibregl-popup-close-button");
+        const firstAction = popup.getElement().querySelector<HTMLButtonElement>(".hf-stop-popup__route");
+        if (event.key === "Tab" && !event.shiftKey && event.target === close && firstAction) {
+          event.preventDefault();
+          firstAction.focus();
+        } else if (event.key === "Tab" && event.shiftKey && event.target === firstAction && close) {
+          event.preventDefault();
+          close.focus();
+        }
+      });
+      focusKeyboardPopup(popup);
+    }
+    inspectAmenityRef.current = inspectAmenity;
+
+    // Async transit details can update a popup after keyboard focus has moved
+    // into it. Restore focus to its stable close control after each replacement
+    // so loading -> ready/error never drops the user back to the document body.
+    function focusKeyboardPopup(popup: maplibregl.Popup) {
+      if (popup.getElement().dataset.keyboardManaged !== "true") return;
+      requestAnimationFrame(() => {
+        if (popupRef.current !== popup) return;
+        popup.getElement().querySelector<HTMLButtonElement>(".maplibregl-popup-close-button")?.focus();
+      });
+    }
+
+    function updateStopPopup(popup: maplibregl.Popup, model: StopPopupModel, coords: [number, number]) {
+      popup.setDOMContent(renderStopPopup(model, coords));
+      focusKeyboardPopup(popup);
+    }
+
     // Tear down the popup AND invalidate its in-flight fetch (bumping the gen so
     // a late response can't repaint a removed popup). Called on a new stop click
     // and at the start of any new selection.
@@ -591,7 +913,7 @@ export default function AppMap() {
       // is slow, so the popup never sits on "Finding lines…" indefinitely.
       const timer = setTimeout(() => {
         if (gen === stopLinesGenRef.current) {
-          popup.setDOMContent(renderStopPopup(buildStopPopupModel(name, "error"), coords));
+          updateStopPopup(popup, buildStopPopupModel(name, "error"), coords);
         }
         controller.abort();
       }, STOP_LINES_TIMEOUT_MS);
@@ -600,16 +922,15 @@ export default function AppMap() {
       fetch(`/api/stop-lines${q}`, { signal: controller.signal })
         .then(async (res) => {
           if (gen !== stopLinesGenRef.current) return;
-          if (!res.ok)
-            return void popup.setDOMContent(renderStopPopup(buildStopPopupModel(name, "error"), coords));
+          if (!res.ok) return void updateStopPopup(popup, buildStopPopupModel(name, "error"), coords);
           const data = (await res.json()) as { lines?: unknown };
           if (gen !== stopLinesGenRef.current) return;
           const lines = (Array.isArray(data.lines) ? data.lines : []) as StopLine[];
-          popup.setDOMContent(renderStopPopup(buildStopPopupModel(name, "ready", lines), coords));
+          updateStopPopup(popup, buildStopPopupModel(name, "ready", lines), coords);
         })
         .catch((err) => {
           if ((err as Error)?.name === "AbortError" || gen !== stopLinesGenRef.current) return;
-          popup.setDOMContent(renderStopPopup(buildStopPopupModel(name, "error"), coords));
+          updateStopPopup(popup, buildStopPopupModel(name, "error"), coords);
         })
         .finally(() => clearTimeout(timer));
     }
@@ -758,9 +1079,16 @@ export default function AppMap() {
 
     // Flip the per-minute layers' visibility to match a ring filter. The layers
     // are created once (on load) and persist, so this is the ONLY paint work a
-    // filter change needs — data and legend never re-fetch.
+    // filter change needs — data and legend never re-fetch. Cancels any in-flight
+    // staged reveal and snaps every band to full opacity so a mid-reveal switch
+    // (e.g. All → 15) never exposes a layout-visible band stuck at opacity 0.
     function applyRingFilter(filter: RingFilter) {
       if (!styleLoaded) return; // load applies the current filter itself
+      cancelRingReveal(false);
+      setRingTransition(0);
+      for (const minutes of RING_MINUTES) setRingRevealed(minutes, true);
+      el.dataset.ringReveal = "settled";
+      if (!el.dataset.ringRevealSequence) el.dataset.ringRevealSequence = "filter";
       for (const [layerId, visibility] of Object.entries(ringLayerVisibility(filter))) {
         map.setLayoutProperty(layerId, "visibility", visibility);
       }
@@ -784,6 +1112,7 @@ export default function AppMap() {
       addAmenityLayers(map);
 
       styleLoaded = true;
+      applyCameraPadding(false);
       // Layers are born all-visible; bring them in line with the active filter
       // (the ref reads the state mirror set by selectRingFilter — on first load
       // that is the default).
@@ -798,8 +1127,31 @@ export default function AppMap() {
         pendingAmenities = null;
         renderAmenities(a.items, a.counts);
       }
+      if (map.getLayer("amenity-markers") && map.getLayer("amenity-glyphs")) {
+        el.dataset.amenityEncoding = "color+glyph";
+      }
       el.dataset.mapLoaded = "true";
+      const center = map.getCenter();
+      el.dataset.cameraCenter = `${center.lng.toFixed(5)},${center.lat.toFixed(5)}`;
     });
+
+    map.on("moveend", () => {
+      const center = map.getCenter();
+      el.dataset.cameraCenter = `${center.lng.toFixed(5)},${center.lat.toFixed(5)}`;
+    });
+
+    // Keep the visible-map contract in sync through browser resizing and
+    // orientation changes, including after a result has already been framed.
+    const onResize = () => {
+      const hasResults = hasResultSurface(selRef.current, amenityRef.current.status);
+      // applyCameraPadding already commits map.setPadding + dataset read-backs.
+      applyCameraPadding(hasResults);
+      map.resize();
+      // A route is a user-selected subject, not disposable camera state. Refit
+      // it after every responsive shell change so orientation never clips it.
+      if (activeRouteBounds) requestAnimationFrame(() => fitActiveRoute(0));
+    };
+    window.addEventListener("resize", onResize);
 
     // True when the click lands on the ACTIVE drawn route (its line or a stop
     // dot). Inspecting the line one just drew must not tear it down with a
@@ -831,6 +1183,9 @@ export default function AppMap() {
       setHoveredAmenity(hit && hit.feature.id !== undefined ? hit.feature.id : null);
     });
     map.on("mouseout", () => setHoveredAmenity(null));
+    map.on("dragend", () => {
+      el.dataset.mapDrag = String(Number(el.dataset.mapDrag ?? "0") + 1);
+    });
 
     return () => {
       abortRef.current?.abort();
@@ -841,6 +1196,8 @@ export default function AppMap() {
       popupRef.current?.remove();
       if (suggestTimerRef.current) clearTimeout(suggestTimerRef.current);
       if (amenityRetryTimerRef.current) clearTimeout(amenityRetryTimerRef.current);
+      cancelRingReveal();
+      window.removeEventListener("resize", onResize);
       map.remove();
       maplibregl.removeProtocol("pmtiles");
       mapRef.current = null;
@@ -960,42 +1317,96 @@ export default function AppMap() {
   const sel = selState;
   const combo = comboState;
   const amenityCounts = amenity.counts;
+  const hasResults = hasResultSurface(sel, amenity.status);
+  const showFirstRun = !hasResults && sel.lastSelection === null;
 
   return (
-    <div className="absolute inset-0">
-      <div ref={containerRef} data-testid="app-map" className="h-full w-full" />
-
-      {/* Controls overlay. pointer-events-none wrapper; interactive bits opt back
-          in, so the gaps between panels stay clickable map. Mobile: a compact
-          top-center stack (below the page header). md+: a left-docked floating
-          column (task 024) that leaves the map's sightline — where flyTo centers
-          the selection, offset by the shared camera padding — fully clear. */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex flex-col items-center gap-2 px-4 pt-20 sm:pt-24 md:inset-x-auto md:bottom-4 md:left-4 md:w-[350px] md:items-stretch md:overflow-y-auto md:px-0 md:pt-20">
-        <SearchForm
-          query={combo.query}
-          open={combo.open}
-          activeIndex={combo.activeIndex}
-          loading={sel.status === "loading"}
-          onSubmit={onSubmit}
-          onQueryChange={onQueryChange}
-          onKeyDown={onSearchKeyDown}
-          onFocus={() => dispatchCombo({ type: "focus" })}
-          onBlur={closeSuggest}
-        />
-        <div className="flex flex-wrap items-center justify-center gap-2">
-          <ModeToggle mode={sel.mode} onSwitch={switchMode} />
-          <RingSelector value={ringFilter} onSelect={selectRingFilter} />
+    <div className="hf-map-shell absolute inset-0" data-has-results={hasResults ? "true" : "false"}>
+      {/* The overlay plane stays pointer-transparent. Individual command/result
+          surfaces opt back in, keeping the map usable through every gap. */}
+      <div className="pointer-events-none absolute inset-0 z-20">
+        <div className="hf-command-dock absolute inset-x-3 top-[4.7rem] z-30 sm:inset-x-4 sm:top-[5.25rem] md:bottom-auto md:left-4 md:right-auto md:top-[5.15rem] md:w-[388px]">
+          <section
+            data-testid="command-surface"
+            aria-label="Explore a location"
+            className="hf-command-surface pointer-events-auto relative overflow-visible rounded-[1.5rem] border border-white/[.11] bg-[#0d110e]/92 p-3 shadow-[0_24px_70px_rgba(0,0,0,.38)] backdrop-blur-2xl sm:p-3.5 md:p-4"
+          >
+            <div className="hf-command-intro mb-2.5 flex items-center justify-between gap-3 px-1 md:mb-3">
+              <div>
+                <p className="text-[0.65rem] font-semibold uppercase tracking-[0.16em] text-[#c7f36b]">Explore your reach</p>
+                <p className="mt-1 hidden text-xs text-[#78857b] md:block">Start from any address in Bucharest</p>
+              </div>
+              <span className="rounded-full border border-white/[.09] bg-white/[.045] px-2.5 py-1 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-[#9ca9a0]">
+                Bucharest
+              </span>
+            </div>
+            <div className="hf-command-search relative z-20">
+              <SearchForm
+                query={combo.query}
+                open={combo.open}
+                activeIndex={combo.activeIndex}
+                loading={sel.status === "loading"}
+                onSubmit={onSubmit}
+                onQueryChange={onQueryChange}
+                onKeyDown={onSearchKeyDown}
+                onFocus={() => dispatchCombo({ type: "focus" })}
+                onBlur={closeSuggest}
+              />
+              <SuggestList
+                combo={combo}
+                onPick={pickSuggestion}
+                onHover={(index) => dispatchCombo({ type: "hover", index })}
+              />
+            </div>
+            <div className="hf-command-settings mt-3 grid grid-cols-[minmax(0,.82fr)_minmax(184px,1.18fr)] gap-2 max-[350px]:grid-cols-1">
+              <ModeToggle mode={sel.mode} onSwitch={switchMode} />
+              <RingSelector value={ringFilter} onSelect={selectRingFilter} />
+            </div>
+          </section>
         </div>
-        <SuggestList
-          combo={combo}
-          onPick={pickSuggestion}
-          onHover={(index) => dispatchCombo({ type: "hover", index })}
-        />
-        <SelectionCard label={sel.label} message={sel.message} mode={sel.mode} ringFilter={ringFilter} />
-        <AmenityPanel status={amenity.status} counts={amenityCounts} onRetry={retryAmenities} />
+
+        {hasResults ? (
+          <section
+            data-testid="result-sheet"
+            aria-label="Location result"
+            className="hf-result-sheet pointer-events-auto absolute inset-x-3 bottom-[max(2.8rem,calc(env(safe-area-inset-bottom)+2.3rem))] z-20 max-h-[min(30dvh,14.5rem)] overflow-y-auto overscroll-contain rounded-[1.5rem] border border-white/[.11] bg-[#0d110e]/94 p-2.5 shadow-[0_24px_70px_rgba(0,0,0,.4)] backdrop-blur-2xl sm:inset-x-4 md:bottom-auto md:left-4 md:right-auto md:top-[21.3rem] md:max-h-[calc(100dvh-22.3rem)] md:w-[388px] md:p-3"
+          >
+            <SelectionCard
+              label={sel.label}
+              message={sel.message}
+              mode={sel.mode}
+              ringFilter={ringFilter}
+              loading={sel.status === "loading"}
+            />
+            <AmenityPanel
+              key={sel.token}
+              status={amenity.status}
+              counts={amenityCounts}
+              items={amenity.items}
+              onRetry={retryAmenities}
+              onInspect={(item) => inspectAmenityRef.current?.(item)}
+            />
+          </section>
+        ) : showFirstRun ? (
+          <div className="absolute inset-x-3 bottom-[max(3.6rem,calc(env(safe-area-inset-bottom)+3rem))] z-10 sm:inset-x-4 md:bottom-auto md:left-4 md:right-auto md:top-[21.3rem] md:w-[388px]">
+            <EmptyState />
+          </div>
+        ) : null}
       </div>
 
-      <AttributionBadge />
+      {utilityHeader}
+
+      {/* Kept after the command UI in DOM order so keyboard navigation starts
+          with search, while the explicit overlay z-index still places the
+          controls visually above this full-bleed canvas. */}
+      <div
+        ref={containerRef}
+        data-testid="app-map"
+        aria-label="Interactive map of travel reach and nearby places in Bucharest"
+        className="h-full w-full"
+      />
+
+      <AttributionBadge elevated={hasResults} />
     </div>
   );
 }

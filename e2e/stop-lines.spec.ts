@@ -53,14 +53,19 @@ function offsetDelta(dLng: number, dLat: number) {
   return { dx: (dLng / 360) * worldSize, dy: mercY(ORIGIN.lat + dLat) - mercY(ORIGIN.lat) };
 }
 
-/** Where the selected ORIGIN renders, in map-element pixels: the centre of the
- * dock-padded viewport, i.e. shifted right by half the flyTo left padding the
- * dock introduces (exposed as data-camera-pad-left, task 024). */
+/** Where the selected ORIGIN renders in the shared four-edge camera viewport. */
 async function originPixel(map: Locator) {
   const box = await map.boundingBox();
   if (!box) throw new Error("map has no box");
-  const pad = Number((await map.getAttribute("data-camera-pad-left")) ?? "0");
-  return { box, x: box.width / 2 + pad / 2, y: box.height / 2 };
+  const left = Number((await map.getAttribute("data-camera-pad-left")) ?? "0");
+  const right = Number((await map.getAttribute("data-camera-pad-right")) ?? "0");
+  const top = Number((await map.getAttribute("data-camera-pad-top")) ?? "0");
+  const bottom = Number((await map.getAttribute("data-camera-pad-bottom")) ?? "0");
+  return {
+    box,
+    x: (box.width + left - right) / 2,
+    y: (box.height + top - bottom) / 2,
+  };
 }
 
 /** Map-element pixel of a lng/lat offset from the (padded-centred) origin. */

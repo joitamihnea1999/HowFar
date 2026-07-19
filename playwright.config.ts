@@ -13,7 +13,18 @@ export default defineConfig({
     baseURL: `http://localhost:${PORT}`,
     trace: "retain-on-failure",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    {
+      name: "chromium",
+      testIgnore: /ui-mobile\.spec\.ts/,
+      use: { ...devices["Desktop Chrome"] },
+    },
+    {
+      name: "mobile-chromium",
+      testMatch: /ui-mobile\.spec\.ts/,
+      use: { ...devices["Pixel 7"] },
+    },
+  ],
   webServer: {
     command: `npm run start -- --port ${PORT}`,
     // Gate on readiness (db warm), not liveness: the first query pays Prisma

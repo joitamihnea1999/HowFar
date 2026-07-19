@@ -9,6 +9,8 @@ import {
   addRoutePathLayers,
   createMapStyle,
   EMPTY_FC,
+  ISOCHRONE_FILL_OPACITY,
+  ISOCHRONE_LINE_OPACITY,
   ROUTE_PATH_COLOR,
 } from "./map-setup";
 
@@ -70,14 +72,23 @@ describe("addIsochroneLayers", () => {
         type: "fill",
         source: "isochrone",
         filter,
-        paint: { "fill-color": ["get", "fillColor"], "fill-opacity": 0.22 },
+        paint: {
+          "fill-color": ["get", "fillColor"],
+          "fill-opacity": ISOCHRONE_FILL_OPACITY,
+          "fill-opacity-transition": { duration: 320, delay: 0 },
+        },
       });
       expect(line).toEqual({
         id: `iso-line-${minutes}`,
         type: "line",
         source: "isochrone",
         filter,
-        paint: { "line-color": ["get", "lineColor"], "line-width": 1.5, "line-opacity": 0.9 },
+        paint: {
+          "line-color": ["get", "lineColor"],
+          "line-width": 2,
+          "line-opacity": ISOCHRONE_LINE_OPACITY,
+          "line-opacity-transition": { duration: 320, delay: 0 },
+        },
       });
     }
   });
@@ -89,15 +100,16 @@ describe("layer composition", () => {
     addIsochroneLayers(host);
     addRoutePathLayers(host);
     addAmenityLayers(host);
-    expect(layerSpecs.at(-1)?.id).toBe("amenity-markers");
-    expect(layerSpecs.map((l) => l.id).slice(-5)).toEqual([
+    expect(layerSpecs.at(-1)?.id).toBe("amenity-glyphs");
+    expect(layerSpecs.map((l) => l.id).slice(-6)).toEqual([
       "route-path-casing",
       "route-path-line",
       "route-path-stops",
       "route-path-labels",
       "amenity-markers",
+      "amenity-glyphs",
     ]);
-    expect(layerSpecs).toHaveLength(RING_MINUTES.length * 2 + 5);
+    expect(layerSpecs).toHaveLength(RING_MINUTES.length * 2 + 6);
   });
 });
 
@@ -115,7 +127,7 @@ describe("addRoutePathLayers", () => {
         source: "route-path",
         filter: isLine,
         layout: { "line-cap": "round", "line-join": "round" },
-        paint: { "line-color": "#09090b", "line-width": 7, "line-opacity": 0.85 },
+        paint: { "line-color": "#09090b", "line-width": 8, "line-opacity": 0.88 },
       },
       {
         id: "route-path-line",
@@ -123,7 +135,7 @@ describe("addRoutePathLayers", () => {
         source: "route-path",
         filter: isLine,
         layout: { "line-cap": "round", "line-join": "round" },
-        paint: { "line-color": ROUTE_PATH_COLOR, "line-width": 3, "line-opacity": 0.95 },
+        paint: { "line-color": ROUTE_PATH_COLOR, "line-width": 3.5, "line-opacity": 0.97 },
       },
       {
         id: "route-path-stops",
@@ -131,7 +143,7 @@ describe("addRoutePathLayers", () => {
         source: "route-path",
         filter: ["==", ["geometry-type"], "Point"],
         paint: {
-          "circle-radius": 4.5,
+          "circle-radius": 5,
           "circle-color": "#09090b",
           "circle-stroke-color": ROUTE_PATH_COLOR,
           "circle-stroke-width": 2,
@@ -167,7 +179,7 @@ describe("addAmenityLayers", () => {
     rest,
   ];
 
-  it("adds an id-generating geojson source and the category-colored, hover-growing circle layer", () => {
+  it("adds category-colored hover targets plus a compact non-color glyph layer", () => {
     const { host, sources, layerSpecs } = recorder();
     addAmenityLayers(host);
 
@@ -180,11 +192,43 @@ describe("addAmenityLayers", () => {
         type: "circle",
         source: "amenities",
         paint: {
-          "circle-radius": hoverCase(9, 5),
+          "circle-radius": hoverCase(10, 7),
           "circle-color": ["get", "color"],
           "circle-stroke-color": "#ffffff",
-          "circle-stroke-width": hoverCase(2.5, 1.5),
-          "circle-opacity": hoverCase(1, 0.9),
+          "circle-stroke-width": hoverCase(2.5, 1.75),
+          "circle-opacity": hoverCase(1, 0.96),
+        },
+      },
+      {
+        id: "amenity-glyphs",
+        type: "symbol",
+        source: "amenities",
+        minzoom: 12.5,
+        layout: {
+          "text-field": [
+            "match",
+            ["get", "category"],
+            "groceries",
+            "G",
+            "pharmacies",
+            "+",
+            "parks",
+            "P",
+            "schools",
+            "S",
+            "transit",
+            "T",
+            "•",
+          ],
+          "text-font": ["Noto Sans Medium"],
+          "text-size": 8.5,
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: {
+          "text-color": "#08100d",
+          "text-halo-color": "rgba(255,255,255,0.18)",
+          "text-halo-width": 0.5,
         },
       },
     ]);

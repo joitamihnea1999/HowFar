@@ -10,13 +10,16 @@ public data.
 > **Status: M2 in progress — live at
 > [howfar-production-b31c.up.railway.app](https://howfar-production-b31c.up.railway.app).**
 > Working today: address search with type-ahead suggestions (or click anywhere on the map),
-> then walking **and** public-transport isochrones (15/30/45 min) drawn on a self-hosted
-> dark basemap, with a Walk/Transit toggle. Transit reachability is computed in-process
-> from per-stop travel times — no provider offers transit isochrones. Foundation from
+> walking **and** public-transport isochrones (15/30/45 min), nearby essentials in five
+> categories, inspectable places and transit lines, and full route paths with named stops.
+> The responsive dark map UI uses a search-first command surface, adaptive result sheet,
+> keyboard place browser, touch gestures, and reduced-motion-aware map transitions.
+> Transit reachability is computed in-process from per-stop travel times — no provider
+> offers transit isochrones. Foundation from
 > M0/M1 underneath: MySQL + Prisma persistence, expiring API-response cache, social
 > sign-in, tests + [CI green](https://github.com/joitamihnea1999/HowFar/actions), Railway
-> deploy over private networking. Next in M2: nearby amenities, air-quality summary, and
-> the transparent livability score. Custom domain: not yet attached.
+> deploy over private networking. Next in M2: air-quality summary and the transparent
+> livability score. Custom domain: not yet attached.
 > Docs: [`docs/BRIEF.md`](docs/BRIEF.md) (product brief) ·
 > [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (code tour, provider checklist) ·
 > [`docs/PROVIDERS.md`](docs/PROVIDERS.md) (verified data-provider decisions).

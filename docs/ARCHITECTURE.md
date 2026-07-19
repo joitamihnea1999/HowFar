@@ -29,7 +29,8 @@ map click   ──► /api/reverse ──► Nominatim    (label only — the cl
 /api/amenities ──► Overpass ∥ ORS walk ring ──► clip server-side (POIs within the 15-min walk)
      │
      ▼
-AppMap renders {origin, rings[]} + amenity markers — GeoJSON sources, per-feature colors
+AppMap renders {origin, rings[]} + amenity markers — staged rings, color + category glyphs,
+                                                     synchronized map/list inspection
 ```
 
 Each provider route follows the same skeleton: parse/validate input
@@ -57,8 +58,10 @@ server code only.
 | `src/app/api/tiles/route.ts` | Serves the self-hosted PMTiles basemap with HTTP Range semantics |
 | `src/features/map/AppMap.tsx` | MapLibre client component: selection/fetch orchestration wiring the pieces below |
 | `src/features/map/selection-flow.ts` | Selection state machine (token staleness, mode snapshot, failure mapping); owns the `Mode`/`Ring`/`Origin` types |
-| `src/features/map/map-setup.ts` | Pure basemap style + source/layer specs (unit-tested) |
-| `src/features/map/{SearchForm,SuggestList,ModeToggle,SelectionCard,AmenityPanel,AttributionBadge}.tsx` | Pure-props presentation leaves — no state, no decisions |
+| `src/features/map/map-setup.ts` | Pure basemap style + source/layer specs, including route and non-color amenity encoding (unit-tested) |
+| `src/features/map/camera.ts` | Shared four-edge camera padding for desktop, portrait mobile, short-height, and touch-landscape shells |
+| `src/features/map/{SearchForm,SuggestList,ModeToggle,RingSelector,SelectionCard,EmptyState,AttributionBadge}.tsx` | Focused presentation leaves for the responsive command/result shell |
+| `src/features/map/AmenityPanel.tsx` | Count summary plus bounded, filterable keyboard/touch place browser; delegates map inspection back to `AppMap` |
 | `src/features/search/combobox.ts` | Autocomplete state machine (generation staleness, keyboard nav) |
 | `src/features/search/server/{nominatim,photon}.ts` | Geocode/reverse + type-ahead provider clients |
 | `src/features/isochrones/isochrone-view.ts` | Pure ring view-model: per-mode ramps, GeoJSON features, legend |
@@ -75,7 +78,7 @@ server code only.
 | `src/lib/api-util.ts` | Route helpers: param parsing, geofence guard, error→status mapping |
 | `src/lib/{env,db,health,timeout,bounds,byte-range}.ts` | Env validation, Prisma pool, DB probe, deadline helper, launch bbox, Range parsing |
 | `src/auth.ts` | Auth.js wiring only — decisions live in `features/auth` |
-| `e2e/` | Playwright specs against the production build (see Testing) |
+| `e2e/` | Playwright specs against the production build, including desktop Chromium and a real-touch Pixel project (see Testing) |
 
 **Deliberate cross-feature edges** (documented so nobody "fixes" them):
 amenities → isochrones (`server/overpass.ts` calls `server/ors.ts` — the §5

@@ -20,24 +20,31 @@ const OPTION_LABEL: Record<string, string> = {
 
 export default function RingSelector({ value, onSelect }: RingSelectorProps) {
   return (
-    <div
-      role="group"
-      aria-label="Travel time"
-      className="pointer-events-auto flex gap-1 rounded-full border border-white/15 bg-black/50 p-1 backdrop-blur"
-    >
-      {RING_FILTER_OPTIONS.map((option) => (
-        <button
-          key={String(option)}
-          type="button"
-          onClick={() => onSelect(option)}
-          aria-pressed={value === option}
-          className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-            value === option ? "bg-zinc-100/90 text-zinc-950" : "text-zinc-300 hover:text-zinc-100"
-          }`}
-        >
-          {OPTION_LABEL[String(option)]}
-        </button>
-      ))}
+    <div className="min-w-0">
+      <span className="mb-1.5 block px-1 text-[0.58rem] font-semibold uppercase tracking-[0.14em] text-[#78857b]">
+        Time budget
+      </span>
+      <div
+        role="group"
+        aria-label="Travel time"
+        className="grid grid-cols-4 rounded-xl border border-white/[.09] bg-[#080b09]/65 p-1"
+      >
+        {RING_FILTER_OPTIONS.map((option) => (
+          <button
+            key={String(option)}
+            type="button"
+            onClick={() => onSelect(option)}
+            aria-pressed={value === option}
+            className={`min-h-11 rounded-[0.65rem] px-1 text-[0.65rem] font-semibold tracking-[-0.01em] transition-[background-color,color,box-shadow] sm:text-[0.7rem] ${
+              value === option
+                ? "bg-[#edf2ed] text-[#111713] shadow-[0_5px_16px_rgba(0,0,0,.2)]"
+                : "text-[#8b978e] hover:bg-white/[.055] hover:text-[#edf2ed]"
+            }`}
+          >
+            {OPTION_LABEL[String(option)]}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
