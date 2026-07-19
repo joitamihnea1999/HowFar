@@ -630,14 +630,22 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       // Stamp the dataset from a RENDER read-back, not the input: the e2e
       // contract is "the path is on the map", so the attribute must only appear
       // once the source actually holds features (gen-guarded — a clear/replace
-      // before idle must not resurrect it).
+      // before idle must not resurrect it). A single once("idle") is not enough
+      // after permanent setPadding + easeTo: idle can fire before the source is
+      // queryable, leaving data-route-path unset while route-framed is already
+      // true (CI flake on stop-lines selection-clear).
       const gen = routePathGenRef.current;
-      map.once("idle", () => {
+      let attempts = 0;
+      const stampWhenRendered = () => {
         if (gen !== routePathGenRef.current) return;
         if (map.querySourceFeatures("route-path").length > 0) {
           el.dataset.routePath = String(relationId);
+          return;
         }
-      });
+        if (attempts++ < 12) map.once("idle", stampWhenRendered);
+      };
+      map.once("idle", stampWhenRendered);
+      requestAnimationFrame(() => requestAnimationFrame(stampWhenRendered));
       const bounds = routePathBounds(path);
       if (!bounds) return;
       activeRouteBounds = bounds;
