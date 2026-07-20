@@ -9,11 +9,18 @@ import {
   type AmenityCategoryKey,
   type AmenityCounts,
 } from "@/features/amenities/amenities";
+import {
+  ALL_AMENITY_CATEGORY_KEYS,
+  filterAmenityItems,
+  toggleAmenityCategory,
+} from "@/features/amenities/amenity-selection";
 
 interface AmenityPanelProps {
   status: "idle" | "loading" | "ready" | "error";
   counts: AmenityCounts | null;
   items: Amenity[];
+  selectedCategories: AmenityCategoryKey[];
+  onSelectedCategoriesChange: (categories: AmenityCategoryKey[]) => void;
   onRetry: () => void;
   onInspect: (item: Amenity) => void;
 }
@@ -53,18 +60,23 @@ function CategoryIcon({ category, className = "size-4" }: { category: AmenityCat
   );
 }
 
-export default function AmenityPanel({ status, counts, items, onRetry, onInspect }: AmenityPanelProps) {
+export default function AmenityPanel({
+  status,
+  counts,
+  items,
+  selectedCategories,
+  onSelectedCategoriesChange,
+  onRetry,
+  onInspect,
+}: AmenityPanelProps) {
   const [browserOpen, setBrowserOpen] = useState(false);
   const [query, setQuery] = useState("");
   const browseButtonRef = useRef<HTMLButtonElement | null>(null);
 
-  const filteredItems = useMemo(() => {
-    const needle = query.trim().toLocaleLowerCase();
-    if (!needle) return items;
-    return items.filter((item) =>
-      `${item.name} ${amenityCategoryLabel(item.category)}`.toLocaleLowerCase().includes(needle),
-    );
-  }, [items, query]);
+  const filteredItems = useMemo(
+    () => filterAmenityItems(items, selectedCategories, query),
+    [items, query, selectedCategories],
+  );
 
   if (status === "idle") return null;
 
@@ -119,26 +131,61 @@ export default function AmenityPanel({ status, counts, items, onRetry, onInspect
           </button>
         </div>
       ) : counts ? (
-        <div className="grid grid-cols-2 gap-1.5 px-1 pb-1">
-          {AMENITY_CATEGORIES.map((category) => (
-            <div
-              key={category.key}
-              className="flex min-h-12 items-center gap-2 rounded-xl border border-white/[.07] bg-white/[.035] px-2.5 py-2"
+        <div className="px-1 pb-1">
+          <div className="mb-1.5 flex items-center justify-end gap-1.5">
+            <button
+              type="button"
+              disabled={selectedCategories.length === ALL_AMENITY_CATEGORY_KEYS.length}
+              onClick={() => onSelectedCategoriesChange(ALL_AMENITY_CATEGORY_KEYS)}
+              className="min-h-11 rounded-xl px-2.5 text-[0.65rem] font-semibold text-[#aeb9b0] transition-colors hover:bg-white/[.06] disabled:cursor-default disabled:opacity-40"
             >
-              <span
-                className="grid size-7 shrink-0 place-items-center rounded-lg text-[#08100d] ring-1 ring-white/20"
-                style={{ background: category.color }}
-              >
-                <CategoryIcon category={category.key} className="size-3.5" />
-              </span>
-              <span className="min-w-0">
-                <span className="block text-sm font-semibold tabular-nums leading-none text-[#f4f7f2]">
-                  {counts[category.key]}
-                </span>
-                <span className="mt-1 block truncate text-[0.62rem] leading-none text-[#849087]">{category.label}</span>
-              </span>
-            </div>
-          ))}
+              Show all
+            </button>
+            <button
+              type="button"
+              disabled={selectedCategories.length === 0}
+              onClick={() => onSelectedCategoriesChange([])}
+              className="min-h-11 rounded-xl px-2.5 text-[0.65rem] font-semibold text-[#aeb9b0] transition-colors hover:bg-white/[.06] disabled:cursor-default disabled:opacity-40"
+            >
+              Hide all
+            </button>
+          </div>
+          <div className="grid grid-cols-2 gap-1.5">
+            {AMENITY_CATEGORIES.map((category) => {
+              const selected = selectedCategories.includes(category.key);
+              return (
+                <button
+                  key={category.key}
+                  type="button"
+                  aria-pressed={selected}
+                  aria-label={`${category.label}: ${counts[category.key]} places`}
+                  onClick={() =>
+                    onSelectedCategoriesChange(toggleAmenityCategory(selectedCategories, category.key))
+                  }
+                  className={`flex min-h-12 items-center gap-2 rounded-xl border px-2.5 py-2 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c7f36b] ${
+                    selected
+                      ? "border-white/[.14] bg-white/[.07]"
+                      : "border-white/[.05] bg-transparent opacity-55 hover:opacity-80"
+                  }`}
+                >
+                  <span
+                    className="grid size-7 shrink-0 place-items-center rounded-lg text-[#08100d] ring-1 ring-white/20"
+                    style={{ background: category.color }}
+                  >
+                    <CategoryIcon category={category.key} className="size-3.5" />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-sm font-semibold tabular-nums leading-none text-[#f4f7f2]">
+                      {counts[category.key]}
+                    </span>
+                    <span className="mt-1 block truncate text-[0.62rem] leading-none text-[#849087]">
+                      {category.label}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       ) : null}
 
@@ -181,7 +228,7 @@ export default function AmenityPanel({ status, counts, items, onRetry, onInspect
             </button>
           </div>
           <p className="px-1 pb-1 pt-2 text-[0.62rem] font-medium text-[#667269]">
-            {filteredItems.length} {filteredItems.length === 1 ? "place" : "places"}
+            {filteredItems.length} of {items.length} {items.length === 1 ? "place" : "places"} shown
           </p>
           <ul className="max-h-52 space-y-1 overflow-y-auto overscroll-contain pr-1">
             {filteredItems.map((item, index) => (
@@ -214,6 +261,13 @@ export default function AmenityPanel({ status, counts, items, onRetry, onInspect
                 </button>
               </li>
             ))}
+            {filteredItems.length === 0 ? (
+              <li className="rounded-xl px-3 py-4 text-center text-xs text-[#849087]">
+                {selectedCategories.length === 0
+                  ? "No amenity categories selected."
+                  : "No places match this filter."}
+              </li>
+            ) : null}
           </ul>
         </div>
       ) : null}

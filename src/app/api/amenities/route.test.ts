@@ -1,8 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { nearbyAmenities } = vi.hoisted(() => ({ nearbyAmenities: vi.fn() }));
-vi.mock("@/features/amenities/server/overpass", () => ({ nearbyAmenities }));
+vi.mock("@/features/amenities/server/catalogue", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/features/amenities/server/catalogue")>()),
+  nearbyAmenities,
+}));
 
+import { CatalogueUnavailableError } from "@/features/amenities/server/catalogue";
 import { ProviderError } from "@/lib/provider-http";
 
 import { GET } from "./route";
@@ -46,6 +50,18 @@ describe("GET /api/amenities", () => {
     nearbyAmenities.mockRejectedValue(new ProviderError("overpass unavailable"));
     expect((await call("?lat=44.4268&lng=26.1025")).status).toBe(502);
     expect(logged).toHaveBeenCalledExactlyOnceWith("[api:amenities] ProviderError: overpass unavailable");
+    logged.mockRestore();
+  });
+
+  it("503 when the local catalogue is unavailable", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    nearbyAmenities.mockRejectedValue(new CatalogueUnavailableError("No active amenity catalogue"));
+    const response = await call("?lat=44.4268&lng=26.1025");
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "Amenity catalogue unavailable" });
+    expect(logged).toHaveBeenCalledExactlyOnceWith(
+      "[api:amenities] CatalogueUnavailableError: No active amenity catalogue",
+    );
     logged.mockRestore();
   });
 });

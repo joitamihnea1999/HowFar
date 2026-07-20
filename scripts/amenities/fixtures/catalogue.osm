@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Synthetic OSM-format fixture. Coordinates/tags are test data, not copied OSM data. -->
+<osm version="0.6" generator="HowFar synthetic amenity fixture">
+  <node id="1" version="1" lat="44.42680" lon="26.10250">
+    <tag k="shop" v="supermarket"/>
+    <tag k="name" v="Fixture Market"/>
+  </node>
+  <node id="2" version="1" lat="44.42720" lon="26.10300">
+    <tag k="amenity" v="pharmacy"/>
+    <tag k="name" v="Fixture Pharmacy"/>
+  </node>
+  <node id="3" version="1" lat="44.42760" lon="26.10350">
+    <tag k="highway" v="bus_stop"/>
+    <tag k="name" v="Fixture Stop"/>
+  </node>
+  <node id="4" version="1" lat="44.42800" lon="26.11650">
+    <tag k="leisure" v="park"/>
+    <tag k="name" v="Boundary Park"/>
+  </node>
+  <node id="5" version="1" lat="44.42500" lon="26.10850">
+    <tag k="leisure" v="garden"/>
+  </node>
+  <node id="6" version="1" lat="44.42550" lon="26.10900">
+    <tag k="leisure" v="park"/>
+    <tag k="name" v="Old Park"/>
+    <tag k="disused" v="yes"/>
+  </node>
+
+  <node id="1001" version="1" lat="44.42400" lon="26.10000"/>
+  <node id="1002" version="1" lat="44.42400" lon="26.10400"/>
+  <node id="1003" version="1" lat="44.42600" lon="26.10400"/>
+  <node id="1004" version="1" lat="44.42600" lon="26.10000"/>
+  <node id="1101" version="1" lat="44.42300" lon="26.11300"/>
+  <node id="1102" version="1" lat="44.42300" lon="26.13000"/>
+  <node id="1103" version="1" lat="44.43100" lon="26.13000"/>
+  <node id="1104" version="1" lat="44.43100" lon="26.11300"/>
+  <node id="1201" version="1" lat="44.43200" lon="26.10100"/>
+  <node id="1202" version="1" lat="44.43200" lon="26.10400"/>
+  <node id="1203" version="1" lat="44.43400" lon="26.10400"/>
+  <node id="1204" version="1" lat="44.43400" lon="26.10100"/>
+  <node id="1301" version="1" lat="44.43200" lon="26.10600"/>
+  <node id="1302" version="1" lat="44.43200" lon="26.10800"/>
+  <node id="1303" version="1" lat="44.43400" lon="26.10800"/>
+  <node id="1304" version="1" lat="44.43400" lon="26.10600"/>
+  <node id="1401" version="1" lat="44.41800" lon="26.09800"/>
+  <node id="1402" version="1" lat="44.41800" lon="26.10300"/>
+  <node id="1403" version="1" lat="44.42100" lon="26.10300"/>
+  <node id="1404" version="1" lat="44.42100" lon="26.09800"/>
+
+  <way id="101" version="1">
+    <nd ref="1001"/><nd ref="1002"/><nd ref="1003"/><nd ref="1004"/><nd ref="1001"/>
+    <tag k="amenity" v="school"/>
+    <tag k="name" v="Fixture School"/>
+  </way>
+  <way id="102" version="1">
+    <nd ref="1101"/><nd ref="1102"/><nd ref="1103"/><nd ref="1104"/><nd ref="1101"/>
+    <tag k="leisure" v="park"/>
+    <tag k="name" v="Boundary Park"/>
+  </way>
+  <way id="103" version="1">
+    <nd ref="1201"/><nd ref="1202"/><nd ref="1203"/><nd ref="1204"/><nd ref="1201"/>
+    <tag k="leisure" v="garden"/>
+    <tag k="name" v="Private Garden"/>
+    <tag k="access" v="private"/>
+  </way>
+  <way id="104" version="1">
+    <nd ref="1301"/><nd ref="1302"/><nd ref="1303"/><nd ref="1304"/><nd ref="1301"/>
+    <tag k="leisure" v="garden"/>
+  </way>
+  <way id="201" version="1">
+    <nd ref="1401"/><nd ref="1402"/><nd ref="1403"/><nd ref="1404"/><nd ref="1401"/>
+  </way>
+  <relation id="301" version="1">
+    <member type="way" ref="201" role="outer"/>
+    <tag k="type" v="multipolygon"/>
+    <tag k="leisure" v="park"/>
+    <tag k="name" v="Relation Park"/>
+  </relation>
+</osm>

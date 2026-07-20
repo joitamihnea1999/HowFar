@@ -91,13 +91,72 @@ test("a selection renders amenity markers + five category counts, preserved acro
   await expect(page.getByText("200")).toBeVisible();
 
   // Toggle to Transit: rings change, amenities PERSIST with no refetch.
-  await page.getByRole("button", { name: "Transit" }).click();
+  await page.getByRole("button", { name: "Transit", exact: true }).click();
   await expect(map).toHaveAttribute("data-mode", "transit");
   await expect(map).toHaveAttribute("data-amenity-count", "5");
   await expect(page.getByText("Within a 15-min walk")).toBeVisible();
   expect(amenityCalls).toBe(1); // one fetch for the address, not one per mode
 
   expect(errors).toEqual([]);
+});
+
+test("category tiles filter map and browser locally, close hidden popups, and persist", async ({ page }) => {
+  let amenityCalls = 0;
+  await stubBase(page);
+  await page.route("**/api/amenities**", (route) => {
+    amenityCalls += 1;
+    route.fulfill({ json: AMENITIES });
+  });
+
+  const map = await waitForMap(page);
+  await search(page);
+  await expect(map).toHaveAttribute("data-amenity-count", "5");
+
+  const parks = page.getByRole("button", { name: "Parks & green: 200 places" });
+  await expect(parks).toHaveAttribute("aria-pressed", "true");
+  expect((await parks.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+
+  // Open a park through the keyboard-accessible browser, then hide that
+  // category: its marker and active popup disappear without a network call.
+  await page.getByRole("button", { name: "Browse places" }).click();
+  await page.getByRole("button", { name: /Parcul Unirii/ }).click();
+  await expect(page.getByTestId("poi-popup")).toBeVisible();
+  await parks.click();
+  await expect(parks).toHaveAttribute("aria-pressed", "false");
+  await expect(map).toHaveAttribute("data-amenity-count", "4");
+  await expect(page.getByTestId("poi-popup")).not.toBeVisible();
+  expect(amenityCalls).toBe(1);
+
+  // Category selection AND text query form one derived browser list.
+  await page.getByRole("button", { name: "Browse places" }).click();
+  await page.getByPlaceholder("Filter places").fill("Parcul");
+  await expect(page.getByText("0 of 5 places shown")).toBeVisible();
+  await expect(page.getByText("No places match this filter.")).toBeVisible();
+  await page.getByRole("button", { name: "Close nearby places" }).click();
+
+  // Native button keyboard behavior, global zero/all controls, and no refetch.
+  await parks.focus();
+  await parks.press("Space");
+  await expect(map).toHaveAttribute("data-amenity-count", "5");
+  await page.getByRole("button", { name: "Hide all" }).click();
+  await expect(map).toHaveAttribute("data-amenity-count", "0");
+  await page.getByRole("button", { name: "Show all" }).click();
+  await expect(map).toHaveAttribute("data-amenity-count", "5");
+  expect(amenityCalls).toBe(1);
+
+  // A versioned local preference survives a fresh page and applies to the next
+  // result before any extra category interaction.
+  await page.getByRole("button", { name: "Pharmacies: 35 places" }).click();
+  await expect(map).toHaveAttribute("data-amenity-count", "4");
+  await page.reload();
+  await expect(map).toHaveAttribute("data-map-loaded", "true", { timeout: 30_000 });
+  await search(page);
+  await expect(map).toHaveAttribute("data-amenity-count", "4");
+  await expect(page.getByRole("button", { name: "Pharmacies: 35 places" })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+  expect(amenityCalls).toBe(2); // one per searched page, never per toggle
 });
 
 test("a slow amenity response is not lost when the user toggles mode mid-flight", async ({ page }) => {
@@ -115,7 +174,7 @@ test("a slow amenity response is not lost when the user toggles mode mid-flight"
 
   // Toggle before amenities resolve — the origin is unchanged, so the in-flight
   // fetch must survive (a toggle must not invalidate the amenity generation).
-  await page.getByRole("button", { name: "Transit" }).click();
+  await page.getByRole("button", { name: "Transit", exact: true }).click();
   await expect(map).toHaveAttribute("data-mode", "transit");
 
   // The delayed response lands and paints, with no second request.
@@ -242,7 +301,7 @@ test("a mode toggle after an amenities error refetches instead of stranding the 
   // The toggle recomputes the SAME origin — before task 024 the stale origin key
   // swallowed this refetch and the error persisted forever.
   healthy = true;
-  await page.getByRole("button", { name: "Transit" }).click();
+  await page.getByRole("button", { name: "Transit", exact: true }).click();
   await expect(map).toHaveAttribute("data-mode", "transit");
   await expect(map).toHaveAttribute("data-amenity-count", "5", { timeout: 10_000 });
 });
@@ -262,7 +321,7 @@ test("a failed mode-toggle recompute clears amenities instead of leaving orphan 
   // Toggle to Transit: the recompute 502s. The walk rings were already dropped
   // when the recompute started, so keeping the amenities would paint markers
   // anchored to nothing — they must clear along with the panel.
-  await page.getByRole("button", { name: "Transit" }).click();
+  await page.getByRole("button", { name: "Transit", exact: true }).click();
   await expect(page.getByText(/could not compute transit reach/i)).toBeVisible();
   await expect(map).not.toHaveAttribute("data-isochrone-rings", /.*/);
   await expect(map).not.toHaveAttribute("data-amenity-count", /.*/);

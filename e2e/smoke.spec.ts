@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-// Prod-shaped smoke: requires `npm run build` beforehand and the MySQL
+// Prod-shaped smoke: requires `npm run build` beforehand and the PostGIS
 // container up + migrated (docker compose up -d db; prisma migrate deploy).
 
 test("liveness and readiness report a connected database", async ({ request }) => {

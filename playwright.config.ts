@@ -3,7 +3,7 @@ import { defineConfig, devices } from "@playwright/test";
 const PORT = 3799;
 
 // Prod-shaped e2e: `npm run build` must have run first (CI does this as a
-// separate step; locally: npm run build && npm run test:e2e). The MySQL
+// separate step; locally: npm run build && npm run test:e2e). The PostGIS
 // container from docker-compose must be up for the db-backed assertions.
 export default defineConfig({
   testDir: "e2e",

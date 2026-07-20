@@ -2,7 +2,7 @@ import type { Prisma } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
 
 /**
- * Server-side cache for external provider responses (Nominatim/ORS/Overpass/
+ * Server-side cache for external provider responses (Nominatim/ORS/
  * Open-Meteo) so the app stays inside free-tier quotas (brief §10). Backed by
  * the `ApiCache` table; `cacheKey` is the caller-chosen identity of a request.
  *
@@ -34,7 +34,7 @@ export async function getCached<T>(key: string, now: Date = new Date()): Promise
 /**
  * Insert or replace a cached response under `key`, valid until `expiresAt`.
  * `value` is caller-trust (like getCached's `<T>`): it must be JSON-serialisable
- * — it lands in a MySQL `JSON` column — but the type is `unknown` so callers can
+ * — it lands in a PostgreSQL `JSONB` column — but the type is `unknown` so callers can
  * store normalized provider payloads (with loosely-typed nested geometry, etc.)
  * without fighting Prisma's strict InputJsonValue at every seam.
  */

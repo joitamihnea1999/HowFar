@@ -11,12 +11,13 @@ Quotes are from the linked pages as fetched that day. Re-verify before major tra
 | Geocode address → coords (+ disambiguation) | search | 1 |
 | Walking isochrones 15/30/45 min | one request, 3 intervals | 1 |
 | Transit reachability 45 min (15/30 derived from per-stop durations) | one-to-all | 1 |
-| Amenities in area (5 core categories) | Overpass QL (merged queries) | 1–2 |
+| Amenities in area (5 core categories) | Local PostGIS catalogue query | 0 |
 | Air quality + climate summary | forecast + air-quality | 2 |
-| **Total** | | **6–7** |
+| **Total** | | **5** |
 
-Every response is cached in MySQL with expiry (brief §10), so repeat addresses cost 0 external
-calls. Go/no-go bar: ≥100 fresh addresses/day headroom on every provider. **All picks clear it.**
+Runtime provider responses are cached in PostgreSQL with expiry (brief §10), so repeat addresses
+cost 0 external calls. Amenities use a shared weekly city snapshot rather than per-address cache
+entries. Go/no-go bar: ≥100 fresh addresses/day headroom on every provider. **All picks clear it.**
 
 ---
 
@@ -26,7 +27,7 @@ calls. Go/no-go bar: ≥100 fresh addresses/day headroom on every provider. **Al
 - Policy: <https://operations.osmfoundation.org/policies/nominatim/>
 - "Maximum of 1 request per second"; long-running/regular scripts limited to 4 req/min.
 - Valid **HTTP Referer or User-Agent** identifying the app is required; **results must be cached**
-  on our side (we do — MySQL); attribution required.
+  on our side (we do — PostgreSQL); attribution required.
 - No key. Apps whose *primary* function is geocoding must self-host — HowFar is not that.
 - Verdict: fine for our volume (1 call per fresh address, server-side, queued ≤1 rps).
 - Photon (photon.komoot.io) — keyless, "reasonable limit" policy, throttling for extensive
@@ -106,18 +107,26 @@ methodology below is re-runnable whenever providers or the city data change.
 - **Fair use accounting:** calibration was a bounded one-off development campaign (~35
   `one-to-many`/intermodal calls total, all ≤128 locations, ≥2 s spacing, identifying
   User-Agent with contact email). Runtime traffic is unchanged: 1 `one-to-all` + ≤1 coalesced
-  ORS call per fresh address, everything MySQL-cached. **The Transitous courtesy contact is
+  ORS call per fresh address, everything PostgreSQL-cached. **The Transitous courtesy contact is
   still an open owner action** (see Action items) — no further calibration campaigns before it
   lands. For later travel modes (bike/car), `one-to-many` supports `mode=BIKE|CAR` — same
   instrument, same budget discipline.
 
-### Amenities / POIs — Overpass API ✅ PICKED
+### Amenities / POIs — weekly OSM catalogue in PostGIS ✅ PICKED
 - Commons/fair use (<https://dev.overpass-api.de/overpass-doc/en/preface/commons.html>, wiki):
   guideline ≈ "10,000 requests per day and … download volume below about 1 GB per day".
 - Mirror: <https://overpass.kumi.systems/> — "free and unlimited access … trusts its users to
   share resources fairly" → configured fallback host.
-- No key; server-side; 1–2 merged category queries per fresh address, cached. Orders of magnitude
-  inside the guideline.
+- No key. One bounded, sequential-host, full-Bucharest `out geom` request runs weekly at
+  Sunday 03:00 UTC, validates and atomically publishes into the isolated `osm_catalogue` schema.
+  Runtime map selections perform no amenity Overpass request: ORS supplies the 15-minute ring and
+  PostGIS intersects it with the active point/polygon dataset. The last good snapshot survives
+  fetch, validation, or publication failure; `/api/catalogue-status` becomes 503 after 10 days.
+- The importer excludes lifecycle/private park features and unnamed generic gardens, then
+  conservatively deduplicates contained and overlapping representations. Full polygon geometry is
+  retained so parks crossing a walking ring appear even when their centroid is outside.
+- OpenStreetMap attribution and ODbL apply. `/api/catalogue-export` offers the active Derived
+  Database as paginated GeoJSON and strictly excludes public-schema auth/cache data.
 - **Transit stop lines/direction (task 021):** a click on a transit-stop marker looks up the lines
   serving it from OSM `type=route` relations, on-demand and cached (30d full / 1d empty). **Two-stage,
   direct-first** (probed live 2026-07-17, refined after code review): stage 1 asks for the routes
@@ -127,7 +136,7 @@ methodology below is re-runnable whenever providers or the city data change.
   the platform/`stop_position` member nodes and take THEIR routes. Direct-first is essential: a single
   always-expand query over-reaches at interchanges (verified live — a Piața Unirii bus stop with 1
   real route gained 8 unrelated sibling-platform tram routes under the area hop). Direction is the
-  `to` (destination) headsign, never `from`. Shares the endpoint race with the amenity query, passing
+  `to` (destination) headsign, never `from`. Uses the separate interactive endpoint race, passing
   `treatEmptyAsFailure:false` — a stop with no mapped routes legitimately returns `[]`, and the race
   prefers a non-empty host so a fast degraded mirror's `[]` can't cache a false "no lines". The
   `/api/stop-lines` route rejects out-of-Bucharest coordinates (keeps casual off-area traffic off the
@@ -166,7 +175,8 @@ methodology below is re-runnable whenever providers or the city data change.
 ### Hosting — Railway (fixed by brief) — cost note
 - Pricing (<https://docs.railway.com/pricing/plans>): Trial = one-time $5 credit, services
   **pause** when it's spent or after 30 days → not suitable for a permanent CV link.
-  **Hobby = $5/month including $5 of usage** — the realistic tier for app + MySQL, persistent.
+  **Hobby = $5/month including $5 of usage** — the realistic tier for app + PostGIS; the weekly
+  importer is a short-lived cron service and consumes compute only while it runs.
 
 ---
 
@@ -175,7 +185,7 @@ methodology below is re-runnable whenever providers or the city data change.
 | §12 question | Decision |
 | --- | --- |
 | Free-tier quotas verified? | Yes — table above, evidence dated 2026-07-14 |
-| Geocoder | **Nominatim** (server-side, MySQL-cached, ≤1 rps, UA set); Photon adopted at M2 for autocomplete |
+| Geocoder | **Nominatim** (server-side, PostgreSQL-cached, ≤1 rps, UA set); Photon adopted at M2 for autocomplete |
 | Map tiles | **Self-hosted Protomaps** Bucharest extract (keyless; constraint-clean) |
 | Air quality | **Open-Meteo** (also climate); OpenAQ parked as optional add-on |
 | v1 travel modes | **Walking (ORS) + public transport (Transitous one-to-all)** — confirmed feasible |

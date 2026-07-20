@@ -1,10 +1,9 @@
 import "dotenv/config";
 import { defineConfig } from "prisma/config";
 
-// `prisma migrate dev` needs a shadow database. We pin its name (same server)
-// so the dev MySQL user can be granted rights on exactly `howfar.*` and
-// `howfar_shadow.*` instead of instance-wide privileges (docker/mysql-init).
-// `migrate deploy` (CI/Railway) never uses a shadow database.
+// `prisma migrate dev` needs a shadow database. Local Docker pre-creates the
+// pinned sibling database with PostGIS available; cloud development may supply
+// an explicit SHADOW_DATABASE_URL. `migrate deploy` never uses the shadow DB.
 function shadowUrl(databaseUrl: string | undefined): string | undefined {
   if (!databaseUrl) return undefined;
   try {
@@ -23,6 +22,7 @@ export default defineConfig({
   },
   datasource: {
     url: process.env["DATABASE_URL"],
-    shadowDatabaseUrl: shadowUrl(process.env["DATABASE_URL"]),
+    shadowDatabaseUrl:
+      process.env["SHADOW_DATABASE_URL"] ?? shadowUrl(process.env["DATABASE_URL"]),
   },
 });

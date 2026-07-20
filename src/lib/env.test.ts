@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { EnvError, parseServerEnv } from "./env";
 
 const valid = {
-  DATABASE_URL: "mysql://user:pass@localhost:3307/howfar",
+  DATABASE_URL: "postgresql://user:pass@localhost:5433/howfar",
   AUTH_SECRET: "s3cret",
 };
 
@@ -21,9 +21,15 @@ describe("parseServerEnv", () => {
     expect(() => parseServerEnv({ AUTH_SECRET: "x" })).toThrowError(/DATABASE_URL/);
   });
 
-  it("rejects non-mysql connection strings (MySQL is mandatory per brief)", () => {
-    expect(() => parseServerEnv({ ...valid, DATABASE_URL: "postgres://nope" })).toThrowError(
-      /must start with mysql/,
+  it("accepts PostgreSQL's postgresql:// and postgres:// URL schemes", () => {
+    expect(parseServerEnv({ ...valid, DATABASE_URL: "postgres://user:pass@localhost/howfar" }).databaseUrl).toBe(
+      "postgres://user:pass@localhost/howfar",
+    );
+  });
+
+  it("rejects non-PostgreSQL connection strings", () => {
+    expect(() => parseServerEnv({ ...valid, DATABASE_URL: "mysql://nope" })).toThrowError(
+      /must start with postgresql:\/\//,
     );
   });
 

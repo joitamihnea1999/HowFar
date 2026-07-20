@@ -4,7 +4,8 @@ generator client {
 }
 
 datasource db {
-  provider = "mysql"
+  provider = "postgresql"
+  schemas  = ["osm_catalogue", "public"]
 }
 
 // ---- Auth.js (NextAuth) adapter models ----
@@ -24,6 +25,8 @@ model User {
   accounts      Account[]
   sessions      Session[]
   savedSearches SavedSearch[]
+
+  @@schema("public")
 }
 
 model Account {
@@ -44,6 +47,7 @@ model Account {
 
   @@unique([provider, providerAccountId])
   @@index([userId])
+  @@schema("public")
 }
 
 model Session {
@@ -55,6 +59,7 @@ model Session {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  @@schema("public")
 }
 
 model VerificationToken {
@@ -63,6 +68,7 @@ model VerificationToken {
   expires    DateTime
 
   @@unique([identifier, token])
+  @@schema("public")
 }
 
 // ---- M1 foundation models ----
@@ -85,14 +91,15 @@ model SavedSearch {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  @@schema("public")
 }
 
-/// Server-side cache for external provider responses (Nominatim/ORS/Overpass/
+/// Server-side cache for external provider responses (Nominatim/ORS/
 /// Open-Meteo) so the app stays inside free-tier quotas (brief §10). `value`
 /// holds the raw JSON response; a read is a hit only while `expiresAt > now`.
 /// Expired rows are reaped by a sweep (indexed on expiresAt), not on read.
-/// `cacheKey` is capped at 191 chars (utf8mb4 unique-index limit): callers must
-/// build bounded keys — hash long canonical request strings, don't store raw URLs.
+/// `cacheKey` remains capped at 191 chars so callers must build bounded keys —
+/// hash long canonical request strings, don't store raw URLs.
 model ApiCache {
   id        String   @id @default(cuid())
   cacheKey  String   @unique @db.VarChar(191)
@@ -101,4 +108,87 @@ model ApiCache {
   createdAt DateTime @default(now())
 
   @@index([expiresAt])
+  @@schema("public")
+}
+
+// ---- OSM-derived amenity catalogue ----
+//
+// This schema is deliberately isolated from application/authentication data.
+// Geometry is managed by hand-authored PostGIS migrations and parameterized
+// raw SQL because Prisma does not expose PostGIS geometry operations.
+
+model AmenityImportRun {
+  id                   String    @id
+  status               String    @db.VarChar(20)
+  source               String    @db.VarChar(32)
+  sourceTimestamp      DateTime?
+  sourceVersion        String    @db.VarChar(100)
+  sourceChecksum       String    @db.VarChar(64)
+  startedAt            DateTime  @default(now())
+  finishedAt           DateTime?
+  publishedAt          DateTime?
+  failedAt             DateTime?
+  failureMessage       String?   @db.Text
+  rawElementCount      Int?
+  acceptedPlaceCount   Int?
+  rejectedElementCount Int?
+  validation           Json?
+
+  dataset AmenityDataset?
+
+  @@index([status, startedAt])
+  @@index([sourceChecksum])
+  @@schema("osm_catalogue")
+}
+
+/// An immutable, validated catalogue version. Exactly one row may have
+/// `activeKey = 1`; PostgreSQL UNIQUE permits every inactive row to use NULL.
+model AmenityDataset {
+  id               String    @id
+  importRunId      String    @unique
+  sourceTimestamp  DateTime?
+  sourceVersion    String    @db.VarChar(100)
+  sourceChecksum   String    @db.VarChar(64)
+  placeCount       Int
+  validationPassed Boolean
+  validation       Json
+  activeKey        Int?      @unique
+  createdAt        DateTime  @default(now())
+  publishedAt      DateTime?
+
+  importRun AmenityImportRun @relation(fields: [importRunId], references: [id], onDelete: Restrict)
+  places    AmenityPlace[]
+
+  @@index([publishedAt])
+  @@schema("osm_catalogue")
+}
+
+/// A normalized place in one immutable dataset. Full geometry is retained so
+/// polygon/ring intersection, rather than polygon centre, controls inclusion.
+model AmenityPlace {
+  id                  String                                 @id
+  datasetId           String
+  sourceType          String                                 @db.VarChar(16)
+  sourceId            BigInt
+  canonicalId         String                                 @db.VarChar(100)
+  category            String                                 @db.VarChar(32)
+  name                String?
+  normalizedName      String?
+  accessState         String                                 @db.VarChar(20)
+  qualityState        String                                 @db.VarChar(20)
+  sourceTags          Json
+  representativePoint Unsupported("geometry(Point,4326)")
+  geom                Unsupported("geometry(Geometry,4326)")
+  sourceUpdatedAt     DateTime?
+  createdAt           DateTime                               @default(now())
+
+  dataset AmenityDataset @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+
+  @@unique([datasetId, sourceType, sourceId])
+  @@unique([datasetId, canonicalId])
+  @@index([datasetId, category])
+  @@index([datasetId, normalizedName])
+  @@index([representativePoint], type: Gist, map: "AmenityPlace_representativePoint_gist")
+  @@index([geom], type: Gist, map: "AmenityPlace_geom_gist")
+  @@schema("osm_catalogue")
 }

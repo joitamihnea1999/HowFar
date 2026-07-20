@@ -7,7 +7,7 @@
  */
 
 export interface ServerEnv {
-  /** MySQL connection string, e.g. mysql://user:pass@host:3306/db */
+  /** PostgreSQL connection string, e.g. postgresql://user:pass@host:5432/db */
   databaseUrl: string;
   /** Auth.js JWT/session encryption secret — required at runtime, even without OAuth. */
   authSecret: string;
@@ -56,10 +56,13 @@ export function parseServerEnv(source: EnvSource = process.env): ServerEnv {
   const databaseUrl = required(
     source,
     "DATABASE_URL",
-    'expected a MySQL connection string like "mysql://user:pass@host:3306/db"',
+    'expected a PostgreSQL connection string like "postgresql://user:pass@host:5432/db"',
   );
-  if (!/^mysql:\/\//.test(databaseUrl)) {
-    throw new EnvError("DATABASE_URL", `must start with mysql:// (got "${databaseUrl.slice(0, 12)}…")`);
+  if (!/^postgres(?:ql)?:\/\//.test(databaseUrl)) {
+    throw new EnvError(
+      "DATABASE_URL",
+      `must start with postgresql:// or postgres:// (got "${databaseUrl.slice(0, 12)}…")`,
+    );
   }
   return {
     databaseUrl,

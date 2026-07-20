@@ -1,11 +1,11 @@
 # Architecture
 
 HowFar is a single Next.js (App Router) app: the map UI, the API routes and the
-data-provider clients live in one repo and deploy as one Railway service backed
-by MySQL. Two rules shape everything:
+data-provider clients live in one repo and deploy as one Railway app service backed
+by PostgreSQL/PostGIS, plus one short-lived weekly importer using the same code. Two rules shape everything:
 
 1. **No external data call from the browser, ever.** Every provider request
-   runs server-side, is rate-limited per host, and is cached in MySQL — the
+   runs server-side, is rate-limited per host, and is cached in PostgreSQL where appropriate — the
    browser talks to `/api/*` for all data. The only secret is the
    OpenRouteService key. (Sole exception today: the basemap's font glyphs and
    sprite are keyless static files fetched from `protomaps.github.io`;
@@ -26,7 +26,7 @@ map click   ──► /api/reverse ──► Nominatim    (label only — the cl
      ▼
 /api/isochrone ──► OpenRouteService           (walking rings, 15/30/45 min)
 /api/transit  ──► Transitous one-to-all ──► transit-grid (rings built in-process)
-/api/amenities ──► Overpass ∥ ORS walk ring ──► clip server-side (POIs within the 15-min walk)
+/api/amenities ──► ORS walk ring ∥ active PostGIS snapshot ──► spatial intersection
      │
      ▼
 AppMap renders {origin, rings[]} + amenity markers — staged rings, color + category glyphs,
@@ -67,22 +67,25 @@ server code only.
 | `src/features/isochrones/isochrone-view.ts` | Pure ring view-model: per-mode ramps, GeoJSON features, legend |
 | `src/features/isochrones/server/{ors,transit}.ts` | Walking + transit reachability provider clients |
 | `src/features/isochrones/server/transit-grid.ts` | Pure geometry: reachability grid + marching-squares contours |
-| `src/features/amenities/amenities.ts` | Category config + Overpass query/classifier (isomorphic — keeps turf off the client) |
-| `src/features/amenities/amenities-flow.ts` | Client fetch-decision logic (origin keying, toggle persistence) |
-| `src/features/amenities/server/overpass.ts` | Overpass client + server-side clip to the 15-min walk ring |
+| `src/features/amenities/amenities.ts` | Shared category config/classifier for importer, API DTOs and UI |
+| `src/features/amenities/amenity-selection.ts` | Versioned selectable-category state and category+text filtering |
+| `src/features/amenities/amenities-flow.ts` | Client fetch-decision logic (origin keying and retry behavior) |
+| `src/features/amenities/server/catalogue-{import,normalize,store,query,status,export}.ts` | Weekly ingestion/quality, immutable publication, spatial runtime reads and operational/ODbL surfaces |
+| `src/features/amenities/server/bulk-overpass.ts` | Weekly-only bounded sequential Overpass snapshot transport |
+| `src/features/amenities/server/overpass-client.ts` | Interactive stop-line/route-path Overpass transport; not amenity discovery |
 | `src/features/auth/auth-view.ts` | Pure auth decision: what the sign-in/out control renders |
 | `src/features/auth/server/auth-config.ts` | Which OAuth providers are configured (reads env — server-only) |
 | `src/features/auth/server/AuthControl.tsx` | Server component: session-aware sign-in/out |
 | `src/lib/provider-http.ts` | Shared provider plumbing: per-host rate limiter, abortable timeout, `ProviderError`, cache-key helpers |
-| `src/lib/api-cache.ts` | MySQL-backed cache; strict accessors + best-effort `*Safe` variants |
+| `src/lib/api-cache.ts` | PostgreSQL-backed external-provider cache; strict accessors + best-effort `*Safe` variants |
 | `src/lib/api-util.ts` | Route helpers: param parsing, geofence guard, error→status mapping |
 | `src/lib/{env,db,health,timeout,bounds,byte-range}.ts` | Env validation, Prisma pool, DB probe, deadline helper, launch bbox, Range parsing |
 | `src/auth.ts` | Auth.js wiring only — decisions live in `features/auth` |
 | `e2e/` | Playwright specs against the production build, including desktop Chromium and a real-touch Pixel project (see Testing) |
 
 **Deliberate cross-feature edges** (documented so nobody "fixes" them):
-amenities → isochrones (`server/overpass.ts` calls `server/ors.ts` — the §5
-"within the walking isochrone" clip); isochrones → map (`isochrone-view.ts`
+amenities → isochrones (`server/catalogue.ts` calls `server/ors.ts` for the §5
+"within the walking isochrone" geometry); isochrones → map (`isochrone-view.ts`
 imports the `Mode`/`Ring` types from `selection-flow.ts`, type-only — they stay
 with the selection machine until the isochrone contract grows its own types
 module); every feature → `lib/`. `features/map` is the **composition root**: it
@@ -93,7 +96,7 @@ cycle is type-only and dissolves when the planned
 
 ## The provider-client template
 
-All six clients (nominatim, photon, ors, transit, overpass — plus the tiles
+The interactive clients (nominatim, photon, ors, transit and stop/route Overpass — plus the tiles
 route's Range serving as a degenerate case) share one shape — read
 `src/features/isochrones/server/ors.ts` once and the rest follow:
 
@@ -157,7 +160,7 @@ no stacks, no upstream payloads. The response body stays generic.
   `transit-grid`). Property-based tests (fast-check) cover algebraic contracts
   (`byte-range`, `bounds`).
 - **e2e (Playwright, `e2e/`)**: runs against the production build with a real
-  MySQL and the real tile archive; provider routes are stubbed per-endpoint.
+  PostGIS and the real tile archive; provider routes are stubbed per-endpoint.
   This suite owns the rendering/wiring glue that unit tests exclude.
 - **Coverage**: `npm run test:coverage` includes *all* of `src/` — a file with
   no tests reports 0% instead of disappearing; deliberate exclusions are

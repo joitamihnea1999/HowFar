@@ -75,7 +75,7 @@ Requirement: all data comes from free, public sources; the app stores no listing
 | --- | --- | --- |
 | Nominatim (OpenStreetMap) | Geocoding (address ↔ coordinates) | No key; strict usage policy |
 | OpenRouteService | Isochrones (reachable-area polygons) | Free API key |
-| Overpass (OpenStreetMap) | Amenities / POIs in an area | No key; fair-use |
+| Weekly Overpass snapshot (OpenStreetMap) | Amenities / POIs imported into local PostGIS | No key; ODbL + fair-use |
 | Open-Meteo | Weather / climate (and an air-quality option) | No key |
 | OpenAQ | Air-quality measurements | API key (alternative/fallback for air) |
 | Map tiles — MapTiler or Protomaps | Base map for MapLibre | MapTiler: key (free tier) · Protomaps: self-host |
@@ -94,11 +94,11 @@ A composite 0–100 score derived from: reachability (isochrone coverage), ameni
 | Framework | Next.js (App Router) — full-stack (UI + server) in one repo |
 | Styling | Tailwind CSS |
 | Map / visualisation | MapLibre GL; deck.gl for the high-impact visual layers (polish stage) |
-| Database | MySQL — mandatory and central to the app |
+| Database | PostgreSQL 17 + PostGIS 3.5 — supersedes the provisional early MySQL choice for spatial catalogue work |
 | ORM | Prisma |
-| Auth | Auth.js (NextAuth) with social login; users stored in the app's MySQL |
-| Caching | MySQL-based (primary), per owner's "single store" preference; localStorage only for UI micro-state; Redis only if later justified by profiling |
-| Hosting | Railway — app and MySQL, over private networking (app runs as a persistent server, not serverless) |
+| Auth | Auth.js (NextAuth) with social login; users stored in PostgreSQL |
+| Caching | PostgreSQL-based for external-provider responses; localStorage only for versioned UI micro-state; Redis only if profiling later justifies it |
+| Hosting | Railway — app, PostGIS, and a short-lived weekly importer over private networking |
 | Testing | Vitest (unit) + Playwright (at least one e2e), run in CI |
 | AI (optional, late) | Anthropic API — bounded, advisory feature only |
 
@@ -107,7 +107,7 @@ Not Symfony/PHP for this project (the owner's backend strength is already proven
 ## 10. Hard constraints & non-negotiables
 
 - Public/free data only; no listings hosted or scraped; user enters only an address (+ optional preferences).
-- MySQL is mandatory and central; no parallel data store (localStorage is for UI micro-state only).
+- PostgreSQL/PostGIS is the single durable store; no parallel cache/database (localStorage is for UI micro-state only).
 - Desktop and mobile both first-class (touch-first map).
 - Deployed live on Railway with a custom domain; publicly clickable.
 - Automated tests + CI are required (this deliberately closes a gap in the owner's past projects).
@@ -119,7 +119,7 @@ Not Symfony/PHP for this project (the owner's backend strength is already proven
 
 ## 11. Priorities & delivery order (objectives, not instructions)
 
-- **M0 — Setup:** project scaffolded on the required stack; deployed empty on Railway with MySQL connected; CI green; provider quotas verified and geocoder/tile choices finalised.
+- **M0 — Setup:** project scaffolded on the required stack; deployed on Railway with PostgreSQL/PostGIS connected; CI green; provider quotas verified and geocoder/tile choices finalised.
 - **M1 — Foundation:** persistence for users, saved searches, and cached API responses (with expiry); social auth working.
 - **M2 — Core visual experience** (highest priority; this is the demo): address → isochrones (walking + transit) + nearby amenities + environment + transparent score, on a polished, responsive map, live and clickable.
 - **M3 — Saved searches** synced across devices + shareable result URL.

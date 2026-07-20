@@ -82,7 +82,9 @@ test("selecting a band or All updates the layers' filter and the legend", async 
   await expect(legend(page).getByText("45 min")).toBeVisible();
   await expect(legend(page).getByText("15 min")).toHaveCount(0);
 
-  await page.getByRole("button", { name: "All" }).click();
+  // Exact: the new category controls add "Show all"/"Hide all", which a
+  // substring "All" match would also select.
+  await page.getByRole("button", { name: "All", exact: true }).click();
   await expect(map).toHaveAttribute("data-ring-filter", "all");
   await expect(map).toHaveAttribute("data-visible-rings", "15,30,45");
   for (const label of ["15 min", "30 min", "45 min"]) {
@@ -101,7 +103,7 @@ test("the filter persists across a mode toggle AND a new selection (view prefere
   await expect(map).toHaveAttribute("data-visible-rings", "30");
 
   // Mode toggle recomputes the same origin — the filter must survive.
-  await page.getByRole("button", { name: "Transit" }).click();
+  await page.getByRole("button", { name: "Transit", exact: true }).click();
   await expect(map).toHaveAttribute("data-mode", "transit");
   await expect(map).toHaveAttribute("data-ring-filter", "30");
   await expect(map).toHaveAttribute("data-visible-rings", "30");

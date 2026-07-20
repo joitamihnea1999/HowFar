@@ -32,26 +32,25 @@ jobs:
       - run: npm run build
 
   e2e:
-    name: e2e (Playwright + MySQL)
+    name: e2e (Playwright + PostGIS)
     runs-on: ubuntu-latest
     services:
-      mysql:
-        image: mysql:8.4
+      postgres:
+        image: postgis/postgis:17-3.5
         env:
-          MYSQL_ROOT_PASSWORD: howfar-root
-          MYSQL_DATABASE: howfar
-          MYSQL_USER: howfar
-          MYSQL_PASSWORD: howfar
+          POSTGRES_DB: howfar
+          POSTGRES_USER: howfar
+          POSTGRES_PASSWORD: howfar
         ports:
-          - "3307:3306"
+          - "5432:5432"
         # Job steps only start once the service reports healthy.
         options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -phowfar-root"
+          --health-cmd="pg_isready -U howfar -d howfar"
           --health-interval=5s
           --health-timeout=3s
           --health-retries=20
     env:
-      DATABASE_URL: mysql://howfar:howfar@127.0.0.1:3307/howfar
+      DATABASE_URL: postgresql://howfar:howfar@127.0.0.1:5432/howfar
       AUTH_SECRET: ci-only-secret-not-a-real-deployment
       CI: "true"
     steps:
@@ -73,6 +72,8 @@ jobs:
           fi
       - name: Apply migrations to the CI database
         run: npx prisma migrate deploy
+      - name: Verify PostGIS and application-model round trips
+        run: npm run test:db
       - run: npm run build
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium

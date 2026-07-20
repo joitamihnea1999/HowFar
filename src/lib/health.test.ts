@@ -22,9 +22,14 @@ beforeEach(() => {
 });
 
 describe("probeDb", () => {
-  it("returns true when SELECT 1 resolves in time", async () => {
-    queryRaw.mockResolvedValue([{ "1": 1 }]);
+  it("returns true when PostgreSQL has PostGIS and migration history", async () => {
+    queryRaw.mockResolvedValue([{ postgis: true, migrations: true }]);
     await expect(probeDb()).resolves.toBe(true);
+  });
+
+  it("returns false when the database is reachable but incomplete", async () => {
+    queryRaw.mockResolvedValue([{ postgis: false, migrations: true }]);
+    await expect(probeDb()).resolves.toBe(false);
   });
 
   it("returns false when the query rejects (connection refused)", async () => {

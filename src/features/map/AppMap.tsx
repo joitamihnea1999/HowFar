@@ -12,8 +12,17 @@ import {
   buildAmenityFeatures,
   countByCategory,
   type Amenity,
+  type AmenityCategoryKey,
   type AmenityCounts,
 } from "@/features/amenities/amenities";
+import {
+  ALL_AMENITY_CATEGORY_KEYS,
+  AMENITY_PREFERENCE_KEY,
+  filterAmenityItems,
+  normalizeAmenitySelection,
+  parseAmenitySelection,
+  serializeAmenitySelection,
+} from "@/features/amenities/amenity-selection";
 import {
   AMENITY_MAX_AUTO_RETRIES,
   AMENITY_RETRY_DELAY_MS,
@@ -140,7 +149,12 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
   const clearAmenitiesRef = useRef<(() => void) | null>(null);
   const fetchAmenitiesRef = useRef<((origin: Origin, attempt: number) => void) | null>(null);
   const inspectAmenityRef = useRef<((item: Amenity) => void) | null>(null);
+  const applyAmenitySelectionRef = useRef<((categories: AmenityCategoryKey[]) => void) | null>(null);
   const [amenity, setAmenity] = useState<AmenityUi>({ status: "idle", counts: null, items: [] });
+  const [selectedAmenityCategories, setSelectedAmenityCategories] = useState<AmenityCategoryKey[]>(
+    ALL_AMENITY_CATEGORY_KEYS,
+  );
+  const selectedAmenityCategoriesRef = useRef<AmenityCategoryKey[]>(ALL_AMENITY_CATEGORY_KEYS);
   // Mirrored so the map effect's resize handler (empty deps) can read the latest
   // amenity status without re-binding listeners. Updated in an effect — not during
   // render — to satisfy the react-hooks/refs lint rule.
@@ -149,11 +163,43 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
     amenityRef.current = amenity;
   }, [amenity]);
 
+  useEffect(() => {
+    let frame: number | null = null;
+    try {
+      const stored = parseAmenitySelection(window.localStorage.getItem(AMENITY_PREFERENCE_KEY));
+      if (stored !== null) {
+        frame = window.requestAnimationFrame(() => {
+          selectedAmenityCategoriesRef.current = stored;
+          setSelectedAmenityCategories(stored);
+          applyAmenitySelectionRef.current?.(stored);
+        });
+      }
+    } catch {
+      // Storage may be unavailable in privacy-restricted browsing contexts.
+    }
+    return () => {
+      if (frame !== null) window.cancelAnimationFrame(frame);
+    };
+  }, []);
+
+  function selectAmenityCategories(categories: AmenityCategoryKey[]) {
+    const next = normalizeAmenitySelection(categories);
+    selectedAmenityCategoriesRef.current = next;
+    setSelectedAmenityCategories(next);
+    try {
+      window.localStorage.setItem(AMENITY_PREFERENCE_KEY, serializeAmenitySelection(next));
+    } catch {
+      // Selection still works for this session when persistence is unavailable.
+    }
+    applyAmenitySelectionRef.current?.(next);
+  }
+
   // Transit-stop line popup (task 021): a click on a transit marker opens a
   // MapLibre popup with the lines serving it. Independent of the selection
   // machine (it never starts an isochrone); a generation + abort guard drops a
   // stale response when the user clicks another stop or starts a new selection.
   const popupRef = useRef<maplibregl.Popup | null>(null);
+  const popupAmenityCategoryRef = useRef<AmenityCategoryKey | null>(null);
   const stopLinesAbortRef = useRef<AbortController | null>(null);
   const stopLinesGenRef = useRef(0);
   const closeStopPopupRef = useRef<(() => void) | null>(null);
@@ -425,14 +471,31 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
         setAmenity({ status: "ready", counts, items });
         return;
       }
+      const visibleItems = filterAmenityItems(items, selectedAmenityCategoriesRef.current);
       resetAmenityHover(); // generated ids are about to be reassigned
       (map.getSource("amenities") as maplibregl.GeoJSONSource | undefined)?.setData({
         type: "FeatureCollection",
-        features: buildAmenityFeatures(items) as GeoJSON.Feature[],
+        features: buildAmenityFeatures(visibleItems) as GeoJSON.Feature[],
       });
-      el.dataset.amenityCount = String(items.length);
+      el.dataset.amenityCount = String(visibleItems.length);
       setAmenity({ status: "ready", counts, items });
     }
+
+    function applyAmenitySelection(categories: AmenityCategoryKey[]) {
+      if (amenityRef.current.status !== "ready") return;
+      const visibleItems = filterAmenityItems(amenityRef.current.items, categories);
+      if (styleLoaded) {
+        resetAmenityHover();
+        (map.getSource("amenities") as maplibregl.GeoJSONSource | undefined)?.setData({
+          type: "FeatureCollection",
+          features: buildAmenityFeatures(visibleItems) as GeoJSON.Feature[],
+        });
+      }
+      el.dataset.amenityCount = String(visibleItems.length);
+      const popupCategory = popupAmenityCategoryRef.current;
+      if (popupCategory && !categories.includes(popupCategory)) closeStopPopup();
+    }
+    applyAmenitySelectionRef.current = applyAmenitySelection;
 
     // Drop amenity markers/counts and supersede any in-flight fetch or pending
     // retry. Called only on a genuinely-new selection — NOT on a mode toggle
@@ -794,6 +857,11 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
         .setDOMContent(renderPoiPopup(name, category))
         .addTo(map);
       popupRef.current = popup;
+      popupAmenityCategoryRef.current = normalizeAmenitySelection([category])[0] ?? null;
+      popup.on("close", () => {
+        if (popupRef.current === popup) popupRef.current = null;
+        popupAmenityCategoryRef.current = null;
+      });
     }
 
     // Route a picked amenity to its popup: an identifiable transit stop gets
@@ -889,6 +957,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       stopLinesGenRef.current += 1;
       popupRef.current?.remove();
       popupRef.current = null;
+      popupAmenityCategoryRef.current = null;
     }
     closeStopPopupRef.current = closeStopPopup;
 
@@ -912,10 +981,15 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
         .setDOMContent(renderStopPopup(buildStopPopupModel(name, "loading"), coords))
         .addTo(map);
       popupRef.current = popup;
+      popupAmenityCategoryRef.current = "transit";
       // ANY way this popup goes away (its ×, replacement by another popup, a new
       // selection, a mode toggle, unmount — all end in Popup.remove, which fires
       // `close`) also clears the line path drawn from it.
       popup.on("close", clearRoutePath);
+      popup.on("close", () => {
+        if (popupRef.current === popup) popupRef.current = null;
+        popupAmenityCategoryRef.current = null;
+      });
 
       // Client deadline: transition to the error state (and abort) if the server
       // is slow, so the popup never sits on "Finding lines…" indefinitely.
@@ -1201,6 +1275,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       amenityAbortRef.current?.abort();
       stopLinesAbortRef.current?.abort();
       routePathAbortRef.current?.abort();
+      applyAmenitySelectionRef.current = null;
       popupRef.current?.remove();
       if (suggestTimerRef.current) clearTimeout(suggestTimerRef.current);
       if (amenityRetryTimerRef.current) clearTimeout(amenityRetryTimerRef.current);
@@ -1391,6 +1466,8 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
               status={amenity.status}
               counts={amenityCounts}
               items={amenity.items}
+              selectedCategories={selectedAmenityCategories}
+              onSelectedCategoriesChange={selectAmenityCategories}
               onRetry={retryAmenities}
               onInspect={(item) => inspectAmenityRef.current?.(item)}
             />

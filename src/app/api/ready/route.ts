@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { probeDb } from "@/lib/health";
 
-// Readiness: non-200 unless MySQL is reachable — Railway's healthcheck target,
+// Readiness: non-200 unless PostgreSQL is reachable — Railway's healthcheck target,
 // so a deploy with a broken DATABASE_URL is reported unhealthy, not silently up.
 export const dynamic = "force-dynamic";
 

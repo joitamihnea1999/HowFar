@@ -23,11 +23,9 @@ export function isNewAmenityOrigin(currentKey: string | null, nextKey: string): 
   return currentKey !== nextKey;
 }
 
-/** Automatic retries per user-visible attempt. One is enough: the dominant
- * failure is a public Overpass instance transiently refusing the whole race
- * ("too busy" 504s / timeouts) — observed to succeed seconds later, which is
- * why a manual re-click always "fixed" it. More would stack ~18s worst-case
- * server budgets behind one spinner. */
+/** Automatic retries per user-visible attempt. One is enough for a transient
+ * ORS, database connection, or catalogue cutover failure; more would keep the
+ * panel behind a spinner without improving deterministic empty/error states. */
 export const AMENITY_MAX_AUTO_RETRIES = 1;
 
 /** Delay before the automatic retry. Long enough for a briefly-saturated

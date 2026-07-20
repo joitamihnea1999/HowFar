@@ -198,7 +198,7 @@ test("staged ring reveal changes the live MapLibre paint before settling", async
   await page.goto("/");
   const map = page.getByTestId("app-map");
   await expect(map).toHaveAttribute("data-map-loaded", "true", { timeout: 30_000 });
-  await page.getByRole("button", { name: "All" }).click();
+  await page.getByRole("button", { name: "All", exact: true }).click();
   await page.getByRole("combobox").fill("Piața Unirii");
   await page.getByRole("button", { name: "Go" }).click();
   // Assert the cumulative paint TRACE after settle — each stage stamps live
@@ -360,18 +360,18 @@ test("core controls meet touch-size, search-first focus, and live-state contract
     search,
     page.getByRole("button", { name: "Go" }),
     page.getByRole("button", { name: "Walk" }),
-    page.getByRole("button", { name: "Transit" }),
+    page.getByRole("button", { name: "Transit", exact: true }),
     page.getByRole("button", { name: "15 min" }),
     page.getByRole("button", { name: "30 min" }),
     page.getByRole("button", { name: "45 min" }),
-    page.getByRole("button", { name: "All" }),
+    page.getByRole("button", { name: "All", exact: true }),
   ]) {
     const box = await control.boundingBox();
     if (!box) throw new Error("core control has no box");
     expect(box.height).toBeGreaterThanOrEqual(44);
   }
   for (const name of ["15 min", "30 min", "45 min", "All"]) {
-    const box = await page.getByRole("button", { name }).boundingBox();
+    const box = await page.getByRole("button", { name, exact: true }).boundingBox();
     if (!box) throw new Error(`${name} has no box`);
     expect(box.width).toBeGreaterThanOrEqual(44);
   }

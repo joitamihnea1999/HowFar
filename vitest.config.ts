@@ -33,6 +33,14 @@ export default defineConfig({
         "src/features/map/SelectionCard.tsx",
         "src/features/map/AmenityPanel.tsx",
         "src/features/map/AttributionBadge.tsx",
+        // Transaction/advisory-lock and PostGIS SQL orchestration is exercised
+        // against the real extension by the required `npm run test:db` suite.
+        // Unit-mocking these files would inflate coverage without executing the
+        // database behavior that gives the code meaning; their pure parsing and
+        // normalization collaborators remain in unit coverage.
+        "src/features/amenities/server/catalogue-import.ts",
+        "src/features/amenities/server/catalogue-query.ts",
+        "src/features/amenities/server/catalogue-store.ts",
         "src/app/page.tsx",
         "src/app/layout.tsx",
         "src/app/api/auth/**", // 3-line Auth.js handler re-export

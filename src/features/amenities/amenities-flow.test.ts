@@ -31,10 +31,11 @@ describe("isNewAmenityOrigin", () => {
 });
 
 describe("isRetryableAmenityFailure", () => {
-  it("retries transient failures: network errors (null) and provider 5xx", () => {
+  it("retries transient failures: network errors (null), provider, DB and catalogue 5xx", () => {
     expect(isRetryableAmenityFailure(null)).toBe(true);
     expect(isRetryableAmenityFailure(500)).toBe(true);
     expect(isRetryableAmenityFailure(502)).toBe(true);
+    expect(isRetryableAmenityFailure(503)).toBe(true);
     expect(isRetryableAmenityFailure(504)).toBe(true);
   });
 

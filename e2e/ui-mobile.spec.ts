@@ -144,6 +144,17 @@ test("touch journey stays usable through selection, results, inspection, map ges
   );
   await expect.poll(() => sheet.evaluate((element) => element.scrollTop)).toBeGreaterThan(beforeScroll);
 
+  const parksToggle = page.getByRole("button", { name: /Parks & green: .* places/ });
+  await parksToggle.scrollIntoViewIfNeeded();
+  const parksToggleBox = await parksToggle.boundingBox();
+  if (!parksToggleBox) throw new Error("mobile park toggle has no box");
+  expect(parksToggleBox.height).toBeGreaterThanOrEqual(44);
+  await parksToggle.tap();
+  await expect(parksToggle).toHaveAttribute("aria-pressed", "false");
+  await expect(map).toHaveAttribute("data-amenity-count", "4");
+  await parksToggle.tap();
+  await expect(map).toHaveAttribute("data-amenity-count", "5");
+
   const browse = page.getByTestId("amenity-browser-trigger");
   await browse.scrollIntoViewIfNeeded();
   await browse.tap();

@@ -1,0 +1,149 @@
+{
+  "version": 0.6,
+  "generator": "HowFar synthetic amenity fixture",
+  "osm3s": {
+    "timestamp_osm_base": "2026-07-20T06:45:42Z",
+    "copyright": "Synthetic test data"
+  },
+  "elements": [
+    {
+      "type": "node",
+      "id": 1,
+      "lat": 44.4268,
+      "lon": 26.1025,
+      "timestamp": "2026-07-19T12:00:00Z",
+      "tags": { "shop": "supermarket", "name": "  Fixture   Market  " }
+    },
+    {
+      "type": "node",
+      "id": 2,
+      "lat": 44.4272,
+      "lon": 26.103,
+      "tags": { "amenity": "pharmacy", "name": "Fixture Pharmacy" }
+    },
+    {
+      "type": "node",
+      "id": 3,
+      "lat": 44.4276,
+      "lon": 26.1035,
+      "tags": { "highway": "bus_stop", "name": "Fixture Stop" }
+    },
+    {
+      "type": "node",
+      "id": 4,
+      "lat": 44.428,
+      "lon": 26.1165,
+      "tags": { "leisure": "park", "name": "Old Park", "disused": "yes" }
+    },
+    {
+      "type": "node",
+      "id": 5,
+      "lat": 44.425,
+      "lon": 26.1085,
+      "tags": { "leisure": "garden" }
+    },
+    {
+      "type": "node",
+      "id": 6,
+      "lat": 44.4255,
+      "lon": 26.109,
+      "tags": { "leisure": "garden", "name": "Private Garden", "access": "private" }
+    },
+    {
+      "type": "node",
+      "id": 7,
+      "lat": 45.5,
+      "lon": 26.1,
+      "tags": { "shop": "convenience", "name": "Outside Shop" }
+    },
+    {
+      "type": "node",
+      "id": 8,
+      "lat": 44.429,
+      "lon": 26.101,
+      "tags": { "amenity": "school", "name": "Suppressed School" }
+    },
+    {
+      "type": "node",
+      "id": 9,
+      "lat": 44.424,
+      "lon": 26.114,
+      "tags": { "leisure": "park", "name": "Bóundary PARK" }
+    },
+    {
+      "type": "way",
+      "id": 101,
+      "timestamp": "2026-07-18T08:30:00Z",
+      "geometry": [
+        { "lat": 44.424, "lon": 26.1 },
+        { "lat": 44.424, "lon": 26.104 },
+        { "lat": 44.426, "lon": 26.104 },
+        { "lat": 44.426, "lon": 26.1 },
+        { "lat": 44.424, "lon": 26.1 }
+      ],
+      "tags": { "amenity": "school", "name": "Fixture School" }
+    },
+    {
+      "type": "way",
+      "id": 102,
+      "geometry": [
+        { "lat": 44.423, "lon": 26.113 },
+        { "lat": 44.423, "lon": 26.13 },
+        { "lat": 44.431, "lon": 26.13 },
+        { "lat": 44.431, "lon": 26.113 },
+        { "lat": 44.423, "lon": 26.113 }
+      ],
+      "tags": { "leisure": "park", "name": "Boundary Park" }
+    },
+    {
+      "type": "way",
+      "id": 103,
+      "geometry": [
+        { "lat": 44.46, "lon": 26.2 },
+        { "lat": 44.46, "lon": 26.205 },
+        { "lat": 44.465, "lon": 26.205 },
+        { "lat": 44.465, "lon": 26.2 },
+        { "lat": 44.46, "lon": 26.2 }
+      ],
+      "tags": { "leisure": "park", "name": "Boundary Park" }
+    },
+    {
+      "type": "relation",
+      "id": 301,
+      "members": [
+        {
+          "type": "way",
+          "ref": 201,
+          "role": "outer",
+          "geometry": [
+            { "lat": 44.418, "lon": 26.098 },
+            { "lat": 44.418, "lon": 26.103 },
+            { "lat": 44.421, "lon": 26.103 },
+            { "lat": 44.421, "lon": 26.098 },
+            { "lat": 44.418, "lon": 26.098 }
+          ]
+        }
+      ],
+      "tags": { "type": "multipolygon", "leisure": "park", "name": "Relation Park" }
+    },
+    {
+      "type": "relation",
+      "id": 302,
+      "members": [
+        {
+          "type": "way",
+          "ref": 102,
+          "role": "outer",
+          "geometry": [
+            { "lat": 44.423, "lon": 26.113 },
+            { "lat": 44.423, "lon": 26.13 },
+            { "lat": 44.431, "lon": 26.13 },
+            { "lat": 44.431, "lon": 26.113 },
+            { "lat": 44.423, "lon": 26.113 }
+          ]
+        }
+      ],
+      "tags": { "type": "multipolygon", "leisure": "park", "name": "Boundary Park" }
+    }
+  ]
+}

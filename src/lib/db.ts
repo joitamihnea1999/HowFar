@@ -1,4 +1,5 @@
-import { PrismaMariaDb } from "@prisma/adapter-mariadb";
+import { PrismaPg } from "@prisma/adapter-pg";
+import type { PoolConfig } from "pg";
 
 import { PrismaClient } from "@/generated/prisma/client";
 import { serverEnv } from "@/lib/env";
@@ -7,30 +8,26 @@ import { serverEnv } from "@/lib/env";
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
 /**
- * mysql:// URL → mariadb pool config. Explicit config (instead of passing the
- * string through) lets us bound connect/acquire so an unreachable database
- * fails fast instead of hanging pool slots. A stalled in-flight query is still
- * unbounded (MySQL lacks a safe driver-side query timeout) — the pool cap and
- * the health probe's withTimeout keep that contained.
+ * Explicit pg pool config keeps connection acquisition and SQL execution
+ * bounded. node-postgres otherwise has no connection timeout, and a stalled
+ * spatial query must not occupy a pool slot indefinitely.
  *
  * Exported for tests: a parsing regression here (credentials, port, database
  * name) is a production outage, so the mapping is pinned by db.test.ts.
  */
-export function poolConfig(databaseUrl: string) {
-  const url = new URL(databaseUrl);
+export function poolConfig(databaseUrl: string): PoolConfig {
   return {
-    host: url.hostname,
-    port: url.port ? Number(url.port) : 3306,
-    user: decodeURIComponent(url.username),
-    password: decodeURIComponent(url.password),
-    database: url.pathname.replace(/^\//, ""),
-    connectTimeout: 5_000,
-    acquireTimeout: 5_000,
+    connectionString: databaseUrl,
+    application_name: "howfar",
+    max: 10,
+    connectionTimeoutMillis: 5_000,
+    idleTimeoutMillis: 10_000,
+    statement_timeout: 10_000,
   };
 }
 
 function createClient(): PrismaClient {
-  const adapter = new PrismaMariaDb(poolConfig(serverEnv().databaseUrl));
+  const adapter = new PrismaPg(poolConfig(serverEnv().databaseUrl));
   return new PrismaClient({ adapter });
 }
 

@@ -10,8 +10,10 @@
     "postinstall": "prisma generate",
     "typecheck": "tsc --noEmit",
     "tiles:fetch": "bash scripts/fetch-tiles.sh",
+    "amenities:refresh": "tsx scripts/import-amenities.ts",
     "security:google-keys": "bash scripts/check-google-secrets.sh",
     "test": "vitest run",
+    "test:db": "POSTGIS_INTEGRATION=1 node --env-file-if-exists=.env ./node_modules/vitest/vitest.mjs run src/lib/postgres.integration.test.ts && POSTGIS_INTEGRATION=1 node --env-file-if-exists=.env ./node_modules/vitest/vitest.mjs run --no-file-parallelism src/features/amenities/server/catalogue-store.integration.test.ts src/features/amenities/server/catalogue-import.integration.test.ts",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
     "check": "npm run security:google-keys && npm run lint && npm run typecheck && npm test",
@@ -19,7 +21,7 @@
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.2",
-    "@prisma/adapter-mariadb": "^7.8.0",
+    "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
     "@protomaps/basemaps": "^5.7.2",
     "@turf/area": "^7.3.5",
@@ -30,10 +32,12 @@
     "maplibre-gl": "^5.24.0",
     "next": "16.2.10",
     "next-auth": "^5.0.0-beta.31",
+    "pg": "^8.22.0",
     "pmtiles": "^4.4.1",
     "prisma": "^7.8.0",
     "react": "19.2.7",
-    "react-dom": "19.2.7"
+    "react-dom": "19.2.7",
+    "tsx": "^4.23.1"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",
@@ -41,6 +45,7 @@
     "@turf/difference": "^7.3.5",
     "@types/d3-contour": "^3.0.6",
     "@types/node": "^24",
+    "@types/pg": "^8.20.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitest/coverage-v8": "^4.1.10",

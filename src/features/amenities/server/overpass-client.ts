@@ -35,6 +35,8 @@ export interface OverpassElement {
   lat?: number;
   lon?: number;
   center?: { lat?: number; lon?: number };
+  geometry?: { lat?: number; lon?: number }[];
+  timestamp?: string;
   tags?: Record<string, string>;
   /** Under `out geom` (task 024), node members carry lat/lon inline and way
    * members carry their full point list in `geometry`. */
