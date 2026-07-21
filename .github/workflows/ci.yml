@@ -8,7 +8,7 @@ on:
 env:
   # Pinned Protomaps daily build → deterministic tiles + effective caching.
   # Bump deliberately when a fresher basemap is wanted.
-  TILES_BUILD: "20260719"
+  TILES_BUILD: "20260720"
 
 jobs:
   checks:
