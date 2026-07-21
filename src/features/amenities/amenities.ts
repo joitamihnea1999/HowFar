@@ -1,11 +1,13 @@
 /**
- * Amenities domain model — the single source of truth for the five fixed POI
- * categories the brief mandates (§5: groceries, pharmacies, parks/green space,
- * schools, transit stops). The OSM tag predicates drive BOTH the Overpass query
- * (`buildOverpassQuery`) and the result classifier (`categoryForTags`), so the
- * query and the parser can never drift apart. Isomorphic (no server-only deps):
- * the provider builds/classifies server-side; the client reads label + color for
- * the legend and `buildAmenityFeatures` for the map layer.
+ * Amenities domain model — single source of truth for the five fixed POI
+ * categories (brief §5: groceries, pharmacies, parks/green space, schools,
+ * transit stops).
+ *
+ * Runtime discovery is local PostGIS (`queryCatalogueSummaryInRing`): the walk
+ * 15‑min ring comes from ORS, then one catalogue CTE returns pre-cap counts +
+ * nearest markers. Predicates here still drive the **weekly bulk import**
+ * (`buildBulkOverpassQuery` + `categoryForTags` during normalize). Client code
+ * uses labels/colors + `buildAmenityFeatures` for the map layer only.
  *
  * Colors are the Okabe-Ito colorblind-safe categorical palette: it clears the
  * normal-vision separation floor on every pair, and its residual CVD proximity
@@ -71,19 +73,11 @@ export const AMENITY_CATEGORIES: AmenityCategory[] = [
   },
 ];
 
-/** Overpass search radius. A generous envelope: correctness comes from the
- * server-side clip to the real walk isochrone, NOT from this radius (crow-flies
- * ≥ street-routed reach, and the ORS walk speed isn't ours to assume). */
-export const AMENITY_ENVELOPE_M = 1500;
-
 /** Amenity counts/markers are clipped to this walking-isochrone ring (brief §5). */
 export const WALK_CLIP_MINUTES = 15;
 
-/** Defensive per-category cap on the RENDERED markers so one dense category
- * (e.g. gardens tagged as parks in central Bucharest) can't flood the map.
- * Applied to the nearest-first, clipped set so the kept markers are the closest.
- * Counts shown to the user are the true clipped totals (derived pre-cap), so a
- * category exceeding the cap still reports its real count. */
+/** Per-category cap on rendered markers (SQL ROW_NUMBER in catalogue-query).
+ * Counts shown to the user are true in-ring totals (pre-cap). */
 export const MAX_PER_CATEGORY = 150;
 
 /** A single resolved POI — the canonical flat shape the route returns and the
@@ -116,20 +110,9 @@ export function amenityCategoryLabel(key: string): string {
   return (LABEL_BY_KEY as Record<string, string>)[key] ?? "Place";
 }
 
-/** Build the merged Overpass QL for all five categories around a point.
- * `out center;` (body verbosity) returns tags + node coords + way/relation
- * centers — `out tags;` would omit coordinates and drop every node. */
-export function buildOverpassQuery(lat: number, lng: number): string {
-  const clauses = AMENITY_CATEGORIES.flatMap((c) =>
-    c.predicates.map(
-      (p) => `nwr(around:${AMENITY_ENVELOPE_M},${lat},${lng})[${p.tag}~"^(${p.values.join("|")})$"];`,
-    ),
-  ).join("");
-  return `[out:json][timeout:25];(${clauses});out center;`;
-}
-
 /** Classify an element's tags into the FIRST matching category, or null. The
- * first-match rule keeps each element in exactly one category (no double count). */
+ * first-match rule keeps each element in exactly one category (no double count).
+ * Used by the weekly import normalizer (not the interactive runtime path). */
 export function categoryForTags(tags: Record<string, string> | undefined): AmenityCategoryKey | null {
   if (!tags) return null;
   for (const c of AMENITY_CATEGORIES) {
@@ -139,37 +122,6 @@ export function categoryForTags(tags: Record<string, string> | undefined): Ameni
     }
   }
   return null;
-}
-
-/** Squared planar distance (deg², longitude scaled by latitude) — accurate
- * enough for ORDERING POIs by nearness at city scale, and cheaper than haversine. */
-function distanceSq(a: { lat: number; lng: number }, origin: { lat: number; lng: number }): number {
-  const k = Math.cos((origin.lat * Math.PI) / 180);
-  const dLat = a.lat - origin.lat;
-  const dLng = (a.lng - origin.lng) * k;
-  return dLat * dLat + dLng * dLng;
-}
-
-/** Amenities sorted nearest-first to the origin (stable copy). So that when a
- * category is later capped, the kept items are the NEAREST — not an arbitrary
- * OSM-id-ordered subset. */
-export function sortByDistance(items: Amenity[], origin: { lat: number; lng: number }): Amenity[] {
-  return [...items].sort((a, b) => distanceSq(a, origin) - distanceSq(b, origin));
-}
-
-/** Keep at most `max` amenities per category, preserving input order. Defensive
- * bound on the RENDERED markers (see MAX_PER_CATEGORY) — pure so it's testable.
- * Counts are derived BEFORE this cap, so the displayed totals stay truthful. */
-export function capPerCategory(items: Amenity[], max: number): Amenity[] {
-  const perCategory: Partial<Record<AmenityCategoryKey, number>> = {};
-  const out: Amenity[] = [];
-  for (const a of items) {
-    const count = perCategory[a.category] ?? 0;
-    if (count >= max) continue;
-    perCategory[a.category] = count + 1;
-    out.push(a);
-  }
-  return out;
 }
 
 /** Per-category counts over a flat amenity list (all keys present, zero-filled). */

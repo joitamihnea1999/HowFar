@@ -15,6 +15,10 @@ import {
   toggleAmenityCategory,
 } from "@/features/amenities/amenity-selection";
 
+const CATEGORY_COLOR = Object.fromEntries(
+  AMENITY_CATEGORIES.map((category) => [category.key, category.color]),
+) as Record<AmenityCategoryKey, string>;
+
 interface AmenityPanelProps {
   status: "idle" | "loading" | "ready" | "error";
   counts: AmenityCounts | null;
@@ -243,7 +247,7 @@ export default function AmenityPanel({
                 >
                   <span
                     className="grid size-7 shrink-0 place-items-center rounded-lg text-[#08100d]"
-                    style={{ background: AMENITY_CATEGORIES.find((category) => category.key === item.category)?.color }}
+                    style={{ background: CATEGORY_COLOR[item.category] }}
                   >
                     <CategoryIcon category={item.category} className="size-3.5" />
                   </span>

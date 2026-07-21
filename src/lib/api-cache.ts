@@ -3,10 +3,14 @@ import { db } from "@/lib/db";
 
 /**
  * Server-side cache for external provider responses (Nominatim/ORS/
- * Open-Meteo) so the app stays inside free-tier quotas (brief §10). Backed by
- * the `ApiCache` table; `cacheKey` is the caller-chosen identity of a request.
+ * Open-Meteo) and hot local results (amenities catalogue summaries) so the
+ * app stays inside free-tier quotas and avoids repeat PostGIS/provider work
+ * (brief §10). Backed by the `ApiCache` table; `cacheKey` is the caller-chosen
+ * identity of a request.
  *
- * Consumers arrive in M2 — M1 ships the accessor + its tests only.
+ * A small process-local L1 sits in front of Postgres so warm keys in the same
+ * Node process avoid a DB round-trip (Railway single-instance friendly). L1 is
+ * best-effort and bounded; multi-instance deployments still share via Postgres.
  */
 
 /**
@@ -24,10 +28,48 @@ import { db } from "@/lib/db";
  * call in `withTimeout` if a stalled DB must not hang the request (this repo
  * has no driver-side query timeout by design).
  */
+
+/** Bound memory so a long-lived process cannot retain unbounded keys. */
+const L1_MAX_ENTRIES = 256;
+const l1 = new Map<string, { value: unknown; expiresAtMs: number }>();
+
+/** Test/reset hook — not for product call sites. */
+export function __resetApiCacheL1ForTests(): void {
+  l1.clear();
+}
+
+function l1Get(key: string, nowMs: number): unknown | null {
+  const row = l1.get(key);
+  if (!row) return null;
+  if (row.expiresAtMs <= nowMs) {
+    l1.delete(key);
+    return null;
+  }
+  // Refresh insertion order for a crude LRU: re-set moves to map tail.
+  l1.delete(key);
+  l1.set(key, row);
+  return row.value;
+}
+
+function l1Set(key: string, value: unknown, expiresAtMs: number): void {
+  if (l1.has(key)) l1.delete(key);
+  l1.set(key, { value, expiresAtMs });
+  while (l1.size > L1_MAX_ENTRIES) {
+    const oldest = l1.keys().next().value;
+    if (oldest === undefined) break;
+    l1.delete(oldest);
+  }
+}
+
 export async function getCached<T>(key: string, now: Date = new Date()): Promise<T | null> {
+  const nowMs = now.getTime();
+  const mem = l1Get(key, nowMs);
+  if (mem !== null) return mem as T;
+
   const row = await db().apiCache.findUnique({ where: { cacheKey: key } });
   if (!row) return null;
   if (row.expiresAt <= now) return null;
+  l1Set(key, row.value, row.expiresAt.getTime());
   return row.value as unknown as T;
 }
 
@@ -39,6 +81,7 @@ export async function getCached<T>(key: string, now: Date = new Date()): Promise
  * without fighting Prisma's strict InputJsonValue at every seam.
  */
 export async function setCached(key: string, value: unknown, expiresAt: Date): Promise<void> {
+  l1Set(key, value, expiresAt.getTime());
   await db().apiCache.upsert({
     where: { cacheKey: key },
     create: { cacheKey: key, value: value as Prisma.InputJsonValue, expiresAt },

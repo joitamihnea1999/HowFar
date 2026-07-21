@@ -66,6 +66,9 @@ function normalize(features: PhotonFeature[]): Suggestion[] {
   return out;
 }
 
+// Coalesce concurrent cold suggests for the same key (typing storms).
+const inFlight = new Map<string, Promise<Suggestion[]>>();
+
 /** Type-ahead address suggestions for a partial query, Bucharest-constrained. */
 export async function suggest(query: string): Promise<Suggestion[]> {
   const q = query.trim();
@@ -73,6 +76,19 @@ export async function suggest(query: string): Promise<Suggestion[]> {
   const hit = await getCachedSafe<Suggestion[]>(key);
   if (hit) return hit;
 
+  const existing = inFlight.get(key);
+  if (existing) return existing;
+
+  const promise = fetchAndCacheSuggestions(key, q);
+  inFlight.set(key, promise);
+  try {
+    return await promise;
+  } finally {
+    inFlight.delete(key);
+  }
+}
+
+async function fetchAndCacheSuggestions(key: string, q: string): Promise<Suggestion[]> {
   let body: { features?: PhotonFeature[] };
   try {
     const url = `${BASE}?q=${encodeURIComponent(q)}&bbox=${BBOX}&lat=44.43&lon=26.10&limit=8&lang=en`;

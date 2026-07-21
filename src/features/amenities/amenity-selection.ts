@@ -58,3 +58,29 @@ export function filterAmenityItems(
       .includes(needle);
   });
 }
+
+/**
+ * MapLibre layer filter for amenity circle/glyph layers.
+ * - all categories selected → `null` (no filter, every feature paints)
+ * - none selected → always-false expression
+ * - partial → match on `category` property
+ * List/popup code still uses `filterAmenityItems` on the same selection array.
+ */
+export type AmenityMapCategoryFilter =
+  | null
+  | readonly ["boolean", false]
+  | readonly ["match", readonly ["get", "category"], ...(string | boolean)[]];
+
+export function amenityMapCategoryFilter(
+  selected: readonly AmenityCategoryKey[],
+): AmenityMapCategoryFilter {
+  const normalized = normalizeAmenitySelection([...selected]);
+  if (normalized.length === 0) return ["boolean", false] as const;
+  if (normalized.length === ALL_AMENITY_CATEGORY_KEYS.length) return null;
+  const match: (string | boolean)[] = [];
+  for (const key of normalized) {
+    match.push(key, true);
+  }
+  match.push(false);
+  return ["match", ["get", "category"], ...match] as AmenityMapCategoryFilter;
+}

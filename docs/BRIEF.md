@@ -1,5 +1,7 @@
 # HowFar — Neighborhood Livability Explorer
 
+> **As-built vs this brief:** shipped walk+transit isochrones, PostGIS amenity catalogue, map UX. Environment (Open-Meteo), 0–100 score, place-reviews, and several early stack notes (e.g. provisional MySQL) are goals or history — see `README.md` status and repo `ARCHITECTURE.md` for current code.
+
 **Build Brief**
 
 > Note: §"Working title" says *Habita (provisional)* — the product name was subsequently

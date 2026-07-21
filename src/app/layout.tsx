@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "HowFar — Neighborhood Livability Explorer",
   description:
-    "Turn any Bucharest address into an instant, visual 'how good is it to live here?' report: isochrones, amenities, air quality, and a transparent livability score.",
+    "Turn any Bucharest address into a visual 'how good is it to live here?' map: walk and transit isochrones plus nearby essentials. Air quality and a livability score are planned.",
 };
 
 export default function RootLayout({

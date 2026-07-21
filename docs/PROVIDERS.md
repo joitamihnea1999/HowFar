@@ -201,9 +201,9 @@ methodology below is re-runnable whenever providers or the city data change.
 
 ## Action items arising
 
-1. Say hello to Transitous (courtesy contact before isochrone use) — non-commercial, cached,
-   Bucharest-only, ~tens of one-to-all calls/day worst case.
-2. Create a free OpenRouteService account → `ORS_API_KEY` (server-side env var); confirm the
-   Standard-plan isochrone quota shown at signup.
-3. Railway Hobby plan ($5/mo) when deploying.
-4. Keep the GitHub repo public (Transitous open-source-client condition + portfolio anyway).
+| # | Item | Status (2026-07-21) |
+| --- | --- | --- |
+| 1 | Transitous courtesy hello before heavy isochrone use | **Owner skipped** (accepted risk; still non-commercial, cached, Bucharest-only) |
+| 2 | ORS free account → `ORS_API_KEY` (server-side) | **Done** — live in prod |
+| 3 | Railway Hobby plan ($5/mo) when trial ends | **Open** (trial pause ~2026-08-14 informational) |
+| 4 | Keep the GitHub repo public (Transitous open-source-client + portfolio) | **Done** — public at github.com/joitamihnea1999/HowFar |

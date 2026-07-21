@@ -1,9 +1,9 @@
 # HowFar — Neighborhood Livability Explorer
 
-Turn any Bucharest address into an instant, visual **"how good is it to live here?"** report:
-isochrones (how far 15/30/45 minutes really take you on foot and by public transport), nearby
-amenities, air quality, and a transparent 0–100 livability score — built entirely on free,
-public data.
+Turn any Bucharest address into an instant, visual **"how good is it to live here?"** map:
+isochrones (how far 15/30/45 minutes really take you on foot and by public transport) and
+nearby essentials — built on free, public data. Air quality and a transparent 0–100 livability
+score are planned next (not shipped yet).
 
 ![HowFar — public-transport reachability (15/30/45 min) for a central Bucharest address on the dark basemap](docs/screenshot.png)
 
@@ -30,12 +30,12 @@ TypeScript (strict) · Next.js 16 (App Router, one full-stack repo) · Tailwind 
 MapLibre GL + self-hosted [Protomaps](https://protomaps.com) tiles · PostgreSQL 17/PostGIS 3.5 + Prisma 7 ·
 Auth.js v5 (Google/GitHub) · Vitest + Playwright · Railway
 
-Data: Nominatim (geocoding) · OpenRouteService (walking isochrones) ·
+Data (live): Nominatim (geocoding) · OpenRouteService (walking isochrones) ·
 [Transitous](https://transitous.org) / MOTIS (transit reachability) · a weekly OSM/Overpass
-amenity snapshot stored in PostGIS · Open-Meteo (climate + air quality). External calls are
-server-side and cached where appropriate; amenity discovery itself is a local spatial query, so
-nearby user clicks never repeat an Overpass request. Tiles are served from a 25 MB Bucharest
-extract by the app itself — **no client-side API keys anywhere**.
+amenity snapshot stored in PostGIS. **Planned:** Open-Meteo (climate + air quality) and the
+0–100 score. External calls are server-side and cached where appropriate; amenity discovery
+itself is a local spatial query, so nearby user clicks never hit Overpass. Tiles are served
+from a 25 MB Bucharest extract by the app itself — **no client-side API keys anywhere**.
 
 ## Local development
 
@@ -108,18 +108,17 @@ an immediate deploy, and the start command's migration needs the database and en
    `/railway.importer.json`, share the private `DATABASE_URL` and `AUTH_SECRET`, and keep its
    committed Sunday 03:00 UTC schedule. Its process exits after every run; failures retry twice.
 
-For an existing MySQL deployment, use a blue/green cutover: build a second app service against
-PostGIS, migrate and import it, smoke `/api/ready`, auth and a known amenity, then move the domain.
-Keep the old service/database untouched until rollback is no longer needed. This repository does
-not perform that billable external cutover automatically.
+Production already runs PostgreSQL 17 + PostGIS only (the former MySQL service was removed).
+New environments should provision PostGIS from day one as above — there is no MySQL path in
+this repository.
 
 ## Attribution
 
 Map data © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors ·
 Basemap tiles: [Protomaps](https://protomaps.com) ·
 Transit routing: [Transitous](https://transitous.org/sources/) ·
-Weather & air quality: [Open-Meteo](https://open-meteo.com) (CC BY 4.0) ·
-Geocoding: [Nominatim](https://nominatim.org)
+Geocoding: [Nominatim](https://nominatim.org) ·
+Weather & air quality (planned): [Open-Meteo](https://open-meteo.com) (CC BY 4.0)
 
 The amenity catalogue is a Derived Database made from OpenStreetMap data and is available as
 machine-readable GeoJSON through `/api/catalogue-export`. It is distributed under the

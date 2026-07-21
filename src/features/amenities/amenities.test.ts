@@ -1,41 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  AMENITY_ENVELOPE_M,
   buildAmenityFeatures,
-  buildOverpassQuery,
-  capPerCategory,
   categoryForTags,
   countByCategory,
   type Amenity,
 } from "./amenities";
-
-describe("buildOverpassQuery", () => {
-  const q = buildOverpassQuery(44.4268, 26.1025);
-
-  it("wraps the union in a json/timeout envelope and emits `out center;` (not `out tags;`)", () => {
-    expect(q.startsWith("[out:json][timeout:25];(")).toBe(true);
-    expect(q.endsWith(");out center;")).toBe(true);
-    // `out tags;` would drop node coordinates — the bug this guards against.
-    expect(q).not.toMatch(/out\s+tags;/);
-  });
-
-  it("interpolates the around:radius,lat,lng triple into every clause", () => {
-    const clauses = q.match(new RegExp(`nwr\\(around:${AMENITY_ENVELOPE_M},44.4268,26.1025\\)`, "g"));
-    // groceries(1) + pharmacies(1) + parks(1) + schools(1) + transit(3) = 7 predicates.
-    expect(clauses).toHaveLength(7);
-  });
-
-  it("carries each category's tag predicate and excludes subway_entrance", () => {
-    expect(q).toContain(`[shop~"^(supermarket|convenience|greengrocer)$"]`);
-    expect(q).toContain(`[amenity~"^(pharmacy)$"]`);
-    expect(q).toContain(`[leisure~"^(park|garden)$"]`);
-    expect(q).toContain(`[amenity~"^(school|kindergarten|university)$"]`);
-    expect(q).toContain(`[highway~"^(bus_stop)$"]`);
-    expect(q).toContain(`[railway~"^(station|tram_stop)$"]`);
-    expect(q).not.toContain("subway_entrance");
-  });
-});
 
 describe("categoryForTags", () => {
   it("maps each category's representative tag to its key", () => {
@@ -89,35 +59,6 @@ describe("countByCategory", () => {
     const counts = countByCategory(items);
     const total = Object.values(counts).reduce((a, b) => a + b, 0);
     expect(total).toBe(items.length);
-  });
-});
-
-describe("capPerCategory", () => {
-  it("keeps at most `max` per category and never starves a sparse category", () => {
-    const transit: Amenity[] = Array.from({ length: 400 }, (_, i) => ({
-      lat: 1,
-      lng: 1,
-      name: `t${i}`,
-      category: "transit",
-    }));
-    const parks: Amenity[] = Array.from({ length: 3 }, (_, i) => ({
-      lat: 1,
-      lng: 1,
-      name: `p${i}`,
-      category: "parks",
-    }));
-    const capped = capPerCategory([...transit, ...parks], 150);
-    const counts = countByCategory(capped);
-    expect(counts.transit).toBe(150);
-    expect(counts.parks).toBe(3);
-  });
-
-  it("preserves input order within a category", () => {
-    const items: Amenity[] = [
-      { lat: 1, lng: 1, name: "first", category: "parks" },
-      { lat: 2, lng: 2, name: "second", category: "parks" },
-    ];
-    expect(capPerCategory(items, 1)).toEqual([items[0]]);
   });
 });
 

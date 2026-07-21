@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { getCached, getCachedSafe, setCached, setCachedSafe } from "./api-cache";
+import {
+  __resetApiCacheL1ForTests,
+  getCached,
+  getCachedSafe,
+  setCached,
+  setCachedSafe,
+} from "./api-cache";
 
 // getCached/setCached compose db().apiCache with a time comparison. We back the
 // mock with an in-memory store so set→get round-trips exercise the real upsert
@@ -44,6 +50,7 @@ vi.mock("@/lib/db", () => ({
 beforeEach(() => {
   store.clear();
   state.fail = false;
+  __resetApiCacheL1ForTests();
 });
 
 describe("api-cache", () => {
@@ -79,6 +86,25 @@ describe("api-cache", () => {
   it("strict getCached rejects when the DB is unreachable", async () => {
     state.fail = true;
     await expect(getCached("x", now)).rejects.toThrow(/DB unreachable/);
+  });
+
+  it("serves a warm L1 hit without a second DB round-trip", async () => {
+    await setCached("warm", { n: 1 }, future);
+    const findUnique = vi.spyOn(
+      // The mock is recreated per call; count store reads instead.
+      { get: (k: string) => store.get(k) },
+      "get",
+    );
+    // First get may use L1 filled by setCached — clear L1 and read from DB once.
+    __resetApiCacheL1ForTests();
+    await expect(getCached("warm", now)).resolves.toEqual({ n: 1 });
+    const sizeBefore = store.size;
+    // Second get must be L1-only: corrupt the store and still hit.
+    store.clear();
+    await expect(getCached("warm", now)).resolves.toEqual({ n: 1 });
+    expect(store.size).toBe(0);
+    expect(sizeBefore).toBe(1);
+    findUnique.mockRestore();
   });
 });
 

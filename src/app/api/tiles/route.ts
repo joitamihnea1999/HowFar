@@ -17,10 +17,21 @@ const MAX_RANGE_BYTES = 8 * 1024 * 1024;
 
 export const dynamic = "force-dynamic";
 
-async function statArchive() {
+/** Avoid fs.stat on every tile hop within a short window (map pan storms). */
+const STAT_TTL_MS = 5_000;
+let cachedStat: { size: number; mtimeMs: number; at: number } | null = null;
+
+async function statArchive(): Promise<{ size: number; mtimeMs: number } | null> {
+  const now = Date.now();
+  if (cachedStat && now - cachedStat.at < STAT_TTL_MS) {
+    return { size: cachedStat.size, mtimeMs: cachedStat.mtimeMs };
+  }
   try {
-    return await fs.stat(TILES_PATH);
+    const stat = await fs.stat(TILES_PATH);
+    cachedStat = { size: stat.size, mtimeMs: stat.mtimeMs, at: now };
+    return { size: stat.size, mtimeMs: stat.mtimeMs };
   } catch {
+    cachedStat = null;
     return null;
   }
 }
@@ -66,25 +77,18 @@ export async function GET(request: Request) {
   }
 
   const length = range.end - range.start + 1;
-  const handle = await fs.open(TILES_PATH, "r");
-  try {
-    const buffer = Buffer.alloc(length);
-    // fs promises reads may return short on some platforms — fill the slice.
-    let filled = 0;
-    while (filled < length) {
-      const { bytesRead } = await handle.read(buffer, filled, length - filled, range.start + filled);
-      if (bytesRead === 0) return new Response(null, { status: 500 }); // file shrank mid-read
-      filled += bytesRead;
-    }
-    return new Response(new Uint8Array(buffer), {
-      status: 206,
-      headers: {
-        ...baseHeaders(stat),
-        "Content-Range": `bytes ${range.start}-${range.end}/${stat.size}`,
-        "Content-Length": String(length),
-      },
-    });
-  } finally {
-    await handle.close();
-  }
+  // Stream the slice — do not allocate an 8MB buffer per range request.
+  const nodeStream = createReadStream(TILES_PATH, {
+    start: range.start,
+    end: range.end,
+  });
+  const stream = Readable.toWeb(nodeStream) as ReadableStream;
+  return new Response(stream, {
+    status: 206,
+    headers: {
+      ...baseHeaders(stat),
+      "Content-Range": `bytes ${range.start}-${range.end}/${stat.size}`,
+      "Content-Length": String(length),
+    },
+  });
 }

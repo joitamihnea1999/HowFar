@@ -17,6 +17,7 @@ import {
 } from "@/features/amenities/amenities";
 import {
   ALL_AMENITY_CATEGORY_KEYS,
+  amenityMapCategoryFilter,
   AMENITY_PREFERENCE_KEY,
   filterAmenityItems,
   normalizeAmenitySelection,
@@ -462,7 +463,16 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
 
     // `counts` are the server's TRUE clipped totals (may exceed the rendered
     // marker count when a category was capped) — the chips show these, not a
-    // recount of the capped markers.
+    // recount of the capped markers. Features are written once for the full
+    // payload; category tiles drive MapLibre `setFilter` (markers + glyphs)
+    // AND the browser list via the same selection array.
+    function applyAmenityLayerFilter(categories: AmenityCategoryKey[]) {
+      if (!styleLoaded || !map.getLayer("amenity-markers")) return;
+      const filter = amenityMapCategoryFilter(categories) as maplibregl.FilterSpecification | null;
+      map.setFilter("amenity-markers", filter);
+      if (map.getLayer("amenity-glyphs")) map.setFilter("amenity-glyphs", filter);
+    }
+
     function renderAmenities(items: Amenity[], counts: AmenityCounts) {
       // Buffer until the style (and the amenities source) exist — an amenity
       // response can land before `load`, exactly like the isochrone.
@@ -471,12 +481,15 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
         setAmenity({ status: "ready", counts, items });
         return;
       }
-      const visibleItems = filterAmenityItems(items, selectedAmenityCategoriesRef.current);
+      const categories = selectedAmenityCategoriesRef.current;
+      const visibleItems = filterAmenityItems(items, categories);
       resetAmenityHover(); // generated ids are about to be reassigned
       (map.getSource("amenities") as maplibregl.GeoJSONSource | undefined)?.setData({
         type: "FeatureCollection",
-        features: buildAmenityFeatures(visibleItems) as GeoJSON.Feature[],
+        // Full set — visibility is layer filter, not data rebuild.
+        features: buildAmenityFeatures(items) as GeoJSON.Feature[],
       });
+      applyAmenityLayerFilter(categories);
       el.dataset.amenityCount = String(visibleItems.length);
       setAmenity({ status: "ready", counts, items });
     }
@@ -485,11 +498,10 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       if (amenityRef.current.status !== "ready") return;
       const visibleItems = filterAmenityItems(amenityRef.current.items, categories);
       if (styleLoaded) {
+        // Filters do not reassign generateId the way setData does, but a
+        // hidden category must still drop hover + popup affordances.
+        applyAmenityLayerFilter(categories);
         resetAmenityHover();
-        (map.getSource("amenities") as maplibregl.GeoJSONSource | undefined)?.setData({
-          type: "FeatureCollection",
-          features: buildAmenityFeatures(visibleItems) as GeoJSON.Feature[],
-        });
       }
       el.dataset.amenityCount = String(visibleItems.length);
       const popupCategory = popupAmenityCategoryRef.current;
@@ -1062,10 +1074,34 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
     }
     // Feature-state outlives setData for a given generated id, so a repaint or
     // clear must drop the hover before the ids get reassigned to new markers.
+    // Also drop any queued rAF so a late frame cannot re-apply hover after clear.
     function resetAmenityHover() {
+      cancelPendingAmenityHover();
       if (!styleLoaded || !map.getSource("amenities")) return;
       setHoveredAmenity(null);
       map.removeFeatureState({ source: "amenities" });
+    }
+
+    // Coalesce hover hit-tests to one queryRenderedFeatures per animation frame
+    // so dense amenity layers do not run pick work on every mousemove event.
+    let hoverRaf = 0;
+    let pendingHoverPoint: maplibregl.Point | null = null;
+    function cancelPendingAmenityHover() {
+      if (hoverRaf) cancelAnimationFrame(hoverRaf);
+      hoverRaf = 0;
+      pendingHoverPoint = null;
+    }
+    function scheduleAmenityHover(point: maplibregl.Point) {
+      pendingHoverPoint = point;
+      if (hoverRaf) return;
+      hoverRaf = requestAnimationFrame(() => {
+        hoverRaf = 0;
+        const p = pendingHoverPoint;
+        pendingHoverPoint = null;
+        if (!p) return;
+        const hit = pickAmenity(p);
+        setHoveredAmenity(hit && hit.feature.id !== undefined ? hit.feature.id : null);
+      });
     }
 
     async function select(input: SelectInput, opts?: { recompute?: boolean }) {
@@ -1107,30 +1143,44 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
         } else {
           // A map click: the origin IS the clicked point (not a reverse-geocoded
           // centroid); reverse geocoding only supplies the human-readable label.
+          // Reverse and isochrone run in parallel so label RTT no longer blocks
+          // ring start. Out-of-area (422) is still fatal: no amenities/rings.
           origin = { lat: input.lat, lng: input.lng };
           label = "Selected point";
-          const res = await fetch(`/api/reverse?lat=${input.lat}&lng=${input.lng}`, { signal });
+          const reverseUrl = `/api/reverse?lat=${input.lat}&lng=${input.lng}`;
+          const isoUrl = `${isochronePath(mode)}?lat=${origin.lat}&lng=${origin.lng}`;
+          const [revRes, isoRes] = await Promise.all([
+            fetch(reverseUrl, { signal }),
+            fetch(isoUrl, { signal }),
+          ]);
           if (stale()) return;
-          // Only out-of-area is fatal; a missing/errored address keeps the
-          // generic label and still shows the reach.
-          if (reverseIsFatal(res.status))
-            return void dispatchSel({ type: "failed", token, stage: "reverse", httpStatus: res.status });
-          if (res.ok) {
-            // A malformed body is non-fatal: keep the generic label and still
-            // show the reach, matching the reverse-non-fatal contract. Guard
-            // both a parse error AND a valid-but-wrong-shape body (missing or
-            // non-string label).
+          if (reverseIsFatal(revRes.status)) {
+            // Do not paint rings or fetch amenities for out-of-area clicks.
+            clearAmenities();
+            return void dispatchSel({ type: "failed", token, stage: "reverse", httpStatus: revRes.status });
+          }
+          if (revRes.ok) {
             try {
-              const body = (await res.json()) as { label?: unknown };
+              const body = (await revRes.json()) as { label?: unknown };
               if (typeof body.label === "string" && body.label.trim()) label = body.label;
             } catch {
               /* keep "Selected point" */
             }
           }
+          // Amenities only after reverse is known non-fatal (422 must not start ORS/PostGIS).
+          maybeFetchAmenities(origin);
+          if (!isoRes.ok) {
+            clearAmenities();
+            return void dispatchSel({ type: "failed", token, stage: "isochrone", httpStatus: isoRes.status });
+          }
+          const iso = (await isoRes.json()) as { origin: Origin; rings: Ring[] };
+          if (stale()) return;
+          dispatchSel({ type: "resolved", token, origin: iso.origin, label });
+          renderSelection(iso.origin, label, iso.rings, mode);
+          return;
         }
 
-        // Fire amenities in parallel with the isochrone (both use `origin`); its
-        // own generation/abort make it independent of this selection's token.
+        // Search / suggestion paths: origin is known; amenities ∥ isochrone.
         maybeFetchAmenities(origin);
 
         const isoRes = await fetch(`${isochronePath(mode)}?lat=${origin.lat}&lng=${origin.lng}`, { signal });
@@ -1261,15 +1311,18 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
     });
 
     map.on("mousemove", (e) => {
-      const hit = pickAmenity(e.point);
-      setHoveredAmenity(hit && hit.feature.id !== undefined ? hit.feature.id : null);
+      scheduleAmenityHover(e.point);
     });
-    map.on("mouseout", () => setHoveredAmenity(null));
+    map.on("mouseout", () => {
+      cancelPendingAmenityHover();
+      setHoveredAmenity(null);
+    });
     map.on("dragend", () => {
       el.dataset.mapDrag = String(Number(el.dataset.mapDrag ?? "0") + 1);
     });
 
     return () => {
+      cancelPendingAmenityHover();
       abortRef.current?.abort();
       suggestAbortRef.current?.abort();
       amenityAbortRef.current?.abort();
