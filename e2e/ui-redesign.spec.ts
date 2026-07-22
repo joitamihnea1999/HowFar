@@ -1,5 +1,20 @@
 import { expect, test, type Page } from "@playwright/test";
 
+// After a responsive relayout, retry the REAL geometric predicate until it holds
+// (rather than a stability proxy). A viewport change reprojects the origin marker
+// and reflows the docks a few frames after `setPadding` — not a monotonic ease —
+// and under CPU stall a "boxes stable across N samples" proxy can latch the
+// pre-motion layout and let a non-retrying hard expect fail. Polling the actual
+// assertion is the only thing that distinguishes "arrived at final" from "motion
+// not started"; the wrapped hard expects (±3/±2) remain the final proof and are
+// monotonic-to-final here (single reflow + reproject, no overshoot).
+async function expectResultFramedAfterResize(page: Page) {
+  await expect(async () => {
+    await expectOriginMarkerAtCameraSubject(page);
+    await expectSubjectClearOfUi(page);
+  }).toPass({ timeout: 10_000 });
+}
+
 // Deterministic visual-state fixture for the responsive UI. Provider requests
 // are stubbed by exact path so the real self-hosted basemap still renders.
 
@@ -84,13 +99,22 @@ async function clickEastAmenity(page: Page) {
   const bottom = Number((await map.getAttribute("data-camera-pad-bottom")) ?? "0");
   const worldSize = 512 * 2 ** 13;
   const dx = ((26.1085 - 26.1025) / 360) * worldSize;
-  await page.waitForTimeout(1600);
-  await map.click({
-    position: {
-      x: (box.width + left - right) / 2 + dx,
-      y: (box.height + top - bottom) / 2,
-    },
-  });
+  const x = (box.width + left - right) / 2 + dx;
+  const y = (box.height + top - bottom) / 2;
+  // The click hits a raw pixel that must land on the PAINTED East amenity marker.
+  // The hover stamp (data-amenity-hover) recomputes only on a real mousemove and
+  // the marker paints asynchronously after setData, so a single move fired before
+  // paint would leave the stamp unarmed forever under CPU stall. Retry the
+  // STIMULUS: nudge the pointer across the pixel until the stamp arms (proving a
+  // pickable feature is rendered there via the same pick path the click uses),
+  // then click. The popup assertion downstream proves it is the right amenity.
+  let nudge = 0;
+  await expect(async () => {
+    nudge = nudge === 0 ? 1 : 0;
+    await page.mouse.move(box.x + x + nudge, box.y + y);
+    await expect(map).toHaveAttribute("data-amenity-hover", /.+/, { timeout: 500 });
+  }).toPass({ timeout: 10_000 });
+  await map.click({ position: { x, y } });
 }
 
 async function amenityPixel(page: Page, lng: number, lat: number) {
@@ -241,15 +265,11 @@ test("camera reframes an existing result across desktop and mobile breakpoints",
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(map).toHaveAttribute("data-camera-pad-left", "12");
   await expect(map).toHaveAttribute("data-camera-pad-top", "188");
-  await page.waitForTimeout(250);
-  await expectOriginMarkerAtCameraSubject(page);
-  await expectSubjectClearOfUi(page);
+  await expectResultFramedAfterResize(page);
 
   await page.setViewportSize({ width: 1280, height: 720 });
   await expect(map).toHaveAttribute("data-camera-pad-left", "420");
-  await page.waitForTimeout(250);
-  await expectOriginMarkerAtCameraSubject(page);
-  await expectSubjectClearOfUi(page);
+  await expectResultFramedAfterResize(page);
 });
 
 test("provider attributions remain visible and clear of results at every shell size", async ({ page }) => {
@@ -261,8 +281,10 @@ test("provider attributions remain visible and clear of results at every shell s
     { width: 1024, height: 600 },
   ]) {
     await page.setViewportSize(viewport);
-    await page.waitForTimeout(200);
-    await expectAttributionClearOfResults(page);
+    // Retry the real non-overlap predicate until the reflow settles (not a proxy).
+    await expect(async () => {
+      await expectAttributionClearOfResults(page);
+    }).toPass({ timeout: 10_000 });
   }
 });
 
@@ -284,12 +306,15 @@ test("short-mobile autocomplete stays anchored, unclipped, and dismisses with Es
   await input.fill("Unirii");
   const list = page.getByRole("listbox");
   await expect(list).toBeVisible();
-  await page.waitForTimeout(350); // measure after the 280ms surface-entry transition settles
-  const [inputBox, listBox] = await Promise.all([input.boundingBox(), list.boundingBox()]);
-  if (!inputBox || !listBox) throw new Error("autocomplete boxes unavailable");
-  expect(Math.abs(listBox.x - inputBox.x)).toBeLessThanOrEqual(3);
-  expect(Math.abs(listBox.y - (inputBox.y + inputBox.height + 8))).toBeLessThanOrEqual(2);
-  expect(listBox.y + listBox.height).toBeLessThanOrEqual(600);
+  // Measure only after the 280ms surface-entry transition finishes — retry the
+  // real anchor predicate (poll the actual geometry) instead of a fixed sleep.
+  await expect(async () => {
+    const [inputBox, listBox] = await Promise.all([input.boundingBox(), list.boundingBox()]);
+    if (!inputBox || !listBox) throw new Error("autocomplete boxes unavailable");
+    expect(Math.abs(listBox.x - inputBox.x)).toBeLessThanOrEqual(3);
+    expect(Math.abs(listBox.y - (inputBox.y + inputBox.height + 8))).toBeLessThanOrEqual(2);
+    expect(listBox.y + listBox.height).toBeLessThanOrEqual(600);
+  }).toPass({ timeout: 10_000 });
   await expect(page.getByRole("option")).toHaveCount(3);
   await captureRequested(page, "autocomplete-short-mobile");
   await input.press("Escape");
@@ -388,7 +413,12 @@ test("core controls meet touch-size, search-first focus, and live-state contract
   expect(browseBox.height).toBeGreaterThanOrEqual(44);
 
   await expect(map).toHaveAttribute("data-ring-reveal", "settled");
-  await page.waitForTimeout(250);
+  // Ensure the focusable controls that make up the tab order are all mounted
+  // before counting Tab stops — a shifting tab order mid-loop is the thing the
+  // old fixed sleep hid. Wait on the concrete stops the loop walks, not a timer.
+  await expect(page.getByRole("combobox")).toBeVisible();
+  await expect(page.getByTestId("amenity-browser-trigger")).toBeVisible();
+  await expect(page.getByRole("button", { name: "All", exact: true })).toBeVisible();
   const canvas = page.locator(".maplibregl-canvas");
   const authAction = page.getByRole("button", { name: /Sign in|Sign out/ }).first();
   const hasAuthAction = (await authAction.count()) > 0;

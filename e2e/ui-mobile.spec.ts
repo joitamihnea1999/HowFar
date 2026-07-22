@@ -153,6 +153,9 @@ test("touch journey stays usable through selection, results, inspection, map ges
   await expect(parksToggle).toHaveAttribute("aria-pressed", "false");
   await expect(map).toHaveAttribute("data-amenity-count", "4");
   await parksToggle.tap();
+  // Anchor the re-enable on the toggle's own state before the count: a tap lost
+  // under touch-emulation load fails here loudly rather than as a stuck count.
+  await expect(parksToggle).toHaveAttribute("aria-pressed", "true");
   await expect(map).toHaveAttribute("data-amenity-count", "5");
 
   const browse = page.getByTestId("amenity-browser-trigger");

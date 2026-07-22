@@ -100,6 +100,9 @@ test("a query under 3 characters issues no suggest request and shows no dropdown
   const counts = await setup(page);
   await waitForMap(page);
   await page.getByRole("combobox").fill("Pi");
+  // INTENTIONAL fixed wait: proving a NEGATIVE. Wait well past the 250ms suggest
+  // debounce so a request WOULD have fired if the <3-char guard were broken;
+  // there is no read-back for "nothing happened", so a bounded sleep is correct.
   await page.waitForTimeout(500);
   expect(counts.suggest).toBe(0);
   await expect(page.getByRole("listbox")).toHaveCount(0);
@@ -110,6 +113,9 @@ test("rapid typing collapses to a single debounced suggest request", async ({ pa
   await waitForMap(page);
   await page.getByRole("combobox").pressSequentially("Piata", { delay: 40 });
   await expect(page.getByRole("listbox")).toBeVisible();
+  // INTENTIONAL fixed wait: bound the debounce window so any late/extra suggest
+  // request would have landed before we assert the collapsed count. Not a settle
+  // guess — the wait IS the thing under test (debounce coalescing).
   await page.waitForTimeout(400);
   expect(counts.suggest).toBeLessThanOrEqual(2);
 });

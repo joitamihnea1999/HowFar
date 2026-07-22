@@ -135,18 +135,35 @@ test("category tiles filter map and browser locally, close hidden popups, and pe
   await page.getByRole("button", { name: "Close nearby places" }).click();
 
   // Native button keyboard behavior, global zero/all controls, and no refetch.
-  await parks.focus();
-  await parks.press("Space");
+  // Closing the browser calls closeBrowser(), which queues a one-shot rAF that
+  // steals focus back to the Browse trigger (AmenityPanel.tsx:87-90); a
+  // focus()+Space fired around that steal drops the key, leaving a stuck count
+  // (the race the contention probe reproduced). First wait for the close to
+  // actually commit (trigger aria-expanded=false), then drive the toggle
+  // STATE-AWARE: re-focus+press only while it is still off, and retry — so a
+  // stolen focus or lost key simply presses again and it can never double-toggle.
+  await expect(page.getByTestId("amenity-browser-trigger")).toHaveAttribute("aria-expanded", "false");
+  await expect(async () => {
+    if ((await parks.getAttribute("aria-pressed")) === "false") {
+      await parks.focus();
+      await parks.press("Space");
+    }
+    await expect(parks).toHaveAttribute("aria-pressed", "true");
+  }).toPass({ timeout: 10_000 });
   await expect(map).toHaveAttribute("data-amenity-count", "5");
   await page.getByRole("button", { name: "Hide all" }).click();
+  await expect(parks).toHaveAttribute("aria-pressed", "false");
   await expect(map).toHaveAttribute("data-amenity-count", "0");
   await page.getByRole("button", { name: "Show all" }).click();
+  await expect(parks).toHaveAttribute("aria-pressed", "true");
   await expect(map).toHaveAttribute("data-amenity-count", "5");
   expect(amenityCalls).toBe(1);
 
   // A versioned local preference survives a fresh page and applies to the next
   // result before any extra category interaction.
-  await page.getByRole("button", { name: "Pharmacies: 35 places" }).click();
+  const pharmacies = page.getByRole("button", { name: "Pharmacies: 35 places" });
+  await pharmacies.click();
+  await expect(pharmacies).toHaveAttribute("aria-pressed", "false");
   await expect(map).toHaveAttribute("data-amenity-count", "4");
   await page.reload();
   await expect(map).toHaveAttribute("data-map-loaded", "true", { timeout: 30_000 });
