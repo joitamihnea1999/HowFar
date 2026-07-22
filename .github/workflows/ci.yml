@@ -78,11 +78,18 @@ jobs:
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
-      - name: Upload Playwright report on failure
-        if: failure()
+      # Upload even on green: with e2e retries, a flaky-but-passed run must still
+      # persist its HTML report + first-retry trace so retried specs stay
+      # enumerable and source-fixable (not silently masked).
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report
+          # Per-attempt name: v4 artifacts are immutable + run-scoped, so a
+          # `gh run rerun` re-upload under a fixed name 409s and fails the step
+          # (a bogus red on a green rerun). The suffix also preserves each
+          # attempt's flaky report as distinct evidence.
+          name: playwright-report-${{ github.run_attempt }}
           path: |
             playwright-report/
             e2e/artifacts/
