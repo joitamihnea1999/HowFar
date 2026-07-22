@@ -56,10 +56,13 @@ server code only.
 | --- | --- |
 | `src/app/api/*/route.ts` | Thin HTTP glue: status codes only, no business logic |
 | `src/app/api/tiles/route.ts` | Serves the self-hosted PMTiles basemap with HTTP Range semantics |
-| `src/features/map/AppMap.tsx` | MapLibre client component: selection/fetch orchestration wiring the pieces below |
+| `src/features/map/AppMap.tsx` | Thin client shell: holds render state, creates the controllers below in dependency order, wires the map event handlers, renders the shell + JSX. No business logic of its own |
+| `src/features/map/{camera,hover,ring-reveal,route-path,popup,amenities,select-flow}-controller.ts`, `selection-render.ts` | Single-responsibility controllers, each `create*(...) → { …methods, dispose }`. One shared `load-state.ts` cell carries style-load readiness + the pre-`load` replay buffers; teardown disposes them in reverse create order, then removes the map last. Imperative MapLibre/network glue — verified by the e2e suite |
+| `src/features/map/{route-framing,load-state}.ts` | Pure/near-pure helpers pulled out of the controllers: route-fit corridor math, framing read-backs, the stamp-retry decision (unit-tested); the shared load-state cell |
+| `src/features/search/search-suggest-controller.ts` | Autocomplete debounce timer + fetch/abort glue driving the combobox reducer |
 | `src/features/map/selection-flow.ts` | Selection state machine (token staleness, mode snapshot, failure mapping); owns the `Mode`/`Ring`/`Origin` types |
 | `src/features/map/map-setup.ts` | Pure basemap style + source/layer specs, including route and non-color amenity encoding (unit-tested) |
-| `src/features/map/camera.ts` | Shared four-edge camera padding for desktop, portrait mobile, short-height, and touch-landscape shells |
+| `src/features/map/camera.ts` | Shared four-edge camera padding (pure size→inset math; the camera-controller commits it to MapLibre) |
 | `src/features/map/{SearchForm,SuggestList,ModeToggle,RingSelector,SelectionCard,EmptyState,AttributionBadge}.tsx` | Focused presentation leaves for the responsive command/result shell |
 | `src/features/map/AmenityPanel.tsx` | Count summary plus bounded, filterable keyboard/touch place browser; delegates map inspection back to `AppMap` |
 | `src/features/search/combobox.ts` | Autocomplete state machine (generation staleness, keyboard nav) |
@@ -161,7 +164,12 @@ no stacks, no upstream payloads. The response body stays generic.
   (`byte-range`, `bounds`).
 - **e2e (Playwright, `e2e/`)**: runs against the production build with a real
   PostGIS and the real tile archive; provider routes are stubbed per-endpoint.
-  This suite owns the rendering/wiring glue that unit tests exclude.
+  This suite owns the rendering/wiring glue that unit tests exclude. Specs
+  synchronise on `data-*` read-back stamps the map writes rather than fixed
+  sleeps: `data-map-loaded`, `data-amenity-count`, `data-ring-reveal`(→`settled`),
+  `data-route-path`/`data-route-framed`, `data-amenity-hover`, and
+  `data-camera-settled` (stamped on the selection flyTo's settle `moveend`;
+  cleared while a new selection is in flight) — wait for the stamp, then project.
 - **Coverage**: `npm run test:coverage` includes *all* of `src/` — a file with
   no tests reports 0% instead of disappearing; deliberate exclusions are
   listed with reasons in `vitest.config.ts`. Thresholds gate CI.

@@ -43,3 +43,19 @@ export const AMENITY_RETRY_DELAY_MS = 1500;
 export function isRetryableAmenityFailure(httpStatus: number | null): boolean {
   return httpStatus === null || httpStatus >= 500;
 }
+
+/**
+ * What a failed amenity fetch attempt should do: schedule one more automatic
+ * `retry` (transient failure, attempts left) or `surface` the error to the user
+ * (deterministic failure, or the auto-retry budget is spent). Extracted from
+ * `AppMap`'s `failWith` so the retry-vs-surface decision is unit-tested; the
+ * component keeps only the timer/abort plumbing around this verdict. Surfacing
+ * also clears the origin key so Retry / a toggle recompute can refetch.
+ */
+export function classifyAmenityFailure(
+  httpStatus: number | null,
+  attempt: number,
+  maxRetries: number = AMENITY_MAX_AUTO_RETRIES,
+): "retry" | "surface" {
+  return isRetryableAmenityFailure(httpStatus) && attempt < maxRetries ? "retry" : "surface";
+}

@@ -24,6 +24,23 @@ export default defineConfig({
         // list tight — anything with branching logic belongs in a measured
         // feature module, not here.
         "src/features/map/AppMap.tsx", // MapLibre glue (e2e: smoke/isochrone/autocomplete/transit)
+        // AppMap split into single-responsibility controllers (task 045). Each is
+        // imperative MapLibre/network glue verified by the Playwright e2e suite;
+        // their pure decision cores were extracted to MEASURED modules
+        // (route-framing, ring-reveal stages, amenity-fetch classification,
+        // selection-flow, amenity-selection, marker-pick) — do not add those here.
+        "src/features/map/camera-controller.ts",
+        "src/features/map/hover-controller.ts",
+        "src/features/map/ring-reveal-controller.ts",
+        "src/features/map/route-path-controller.ts",
+        "src/features/map/popup-controller.ts",
+        "src/features/map/amenities-controller.ts",
+        "src/features/map/selection-render.ts",
+        // NOTE: select-flow-controller.ts is intentionally NOT excluded — it is
+        // pure orchestration over injected callbacks + fetch (no MapLibre), so its
+        // moved invariants (mode frozen at entry, reverse-422-fatal, stale-token
+        // drops, amenities-never-without-rings) are directly unit-tested.
+        "src/features/search/search-suggest-controller.ts",
         // Pure-props presentation leaves extracted from AppMap — no state, no
         // fetch, render-only branching over already-decided values (show/hide
         // decisions live in tested feature modules, e.g. shouldShowSuggestList).

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   AMENITY_MAX_AUTO_RETRIES,
+  classifyAmenityFailure,
   isNewAmenityOrigin,
   isRetryableAmenityFailure,
   originKey,
@@ -50,5 +51,29 @@ describe("isRetryableAmenityFailure", () => {
 
   it("caps automatic retries at one (stacked ~18s provider budgets otherwise)", () => {
     expect(AMENITY_MAX_AUTO_RETRIES).toBe(1);
+  });
+});
+
+describe("classifyAmenityFailure", () => {
+  it("retries a transient failure while an attempt budget remains", () => {
+    expect(classifyAmenityFailure(null, 0)).toBe("retry");
+    expect(classifyAmenityFailure(502, 0)).toBe("retry");
+  });
+
+  it("surfaces once the auto-retry budget is spent, even if transient", () => {
+    // attempt 1 with max 1 → no budget left → surface (clears origin key upstream).
+    expect(classifyAmenityFailure(502, AMENITY_MAX_AUTO_RETRIES)).toBe("surface");
+    expect(classifyAmenityFailure(null, 1)).toBe("surface");
+  });
+
+  it("surfaces a deterministic failure immediately (never retries a 422/4xx/malformed 200)", () => {
+    expect(classifyAmenityFailure(422, 0)).toBe("surface");
+    expect(classifyAmenityFailure(404, 0)).toBe("surface");
+    expect(classifyAmenityFailure(200, 0)).toBe("surface");
+  });
+
+  it("honours an explicit maxRetries override", () => {
+    expect(classifyAmenityFailure(500, 1, 2)).toBe("retry");
+    expect(classifyAmenityFailure(500, 2, 2)).toBe("surface");
   });
 });

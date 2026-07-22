@@ -90,7 +90,9 @@ async function loadAndSearch(page: Page): Promise<Locator> {
   await page.getByRole("combobox").fill("Piata Unirii");
   await page.getByRole("button", { name: "Go" }).click();
   await expect(map).toHaveAttribute("data-amenity-count", /\d/); // markers painted
-  await page.waitForTimeout(1600); // let the flyTo settle at zoom 13 before projecting
+  // Deterministic: wait for the selection flyTo to settle at zoom 13 over the
+  // origin before projecting pixels (replaces a fixed sleep).
+  await expect(map).toHaveAttribute("data-camera-settled", "true", { timeout: 10_000 });
   return map;
 }
 
@@ -412,7 +414,9 @@ test("clicking the drawn route is a no-op; clicking bare map away from it clears
   await clickStop(page, map);
   await popup(page).getByRole("button", { name: /Bus 331/ }).click();
   await expect(map).toHaveAttribute("data-route-path", "1776396");
-  await page.waitForTimeout(1600); // let fitBounds settle before projecting
+  // Deterministic: data-route-fit-settled is stamped only from the fit's settle
+  // moveend (never mid-animation), so this releases exactly when the camera stops.
+  await expect(map).toHaveAttribute("data-route-fit-settled", "true", { timeout: 10_000 });
 
   const box = await map.boundingBox();
   if (!box) throw new Error("map has no box");

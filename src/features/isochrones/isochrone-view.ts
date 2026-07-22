@@ -68,6 +68,16 @@ export function visibleLegendMinutes(filter: RingFilter): readonly number[] {
 }
 
 /**
+ * Ordered bands for the staged All-mode reveal (largest→smallest, so the city
+ * "opens up" then resolves around the origin). A single-band filter resolves
+ * just that band. Extracted from `AppMap.revealRings` so the sequence is
+ * unit-tested independently of the MapLibre paint timers that consume it.
+ */
+export function ringRevealStages(filter: RingFilter): (typeof RING_MINUTES)[number][] {
+  return filter === "all" ? [...RING_MINUTES] : [filter];
+}
+
+/**
  * Rings → GeoJSON features carrying per-mode `fillColor`/`lineColor` so the two
  * modes can share one set of MapLibre layers painting via `["get","fillColor"]`.
  */

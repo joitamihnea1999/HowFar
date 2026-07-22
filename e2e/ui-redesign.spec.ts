@@ -70,6 +70,7 @@ async function loadPopulatedState(page: Page) {
   await page.getByRole("button", { name: "Go" }).click();
   await expect(map).toHaveAttribute("data-isochrone-rings", "3");
   await expect(map).toHaveAttribute("data-amenity-count", "5");
+  await expect(map).toHaveAttribute("data-camera-settled", "true", { timeout: 10_000 });
   return map;
 }
 
@@ -234,7 +235,7 @@ test("mobile shell keeps the selected subject between command surface and result
 test("camera reframes an existing result across desktop and mobile breakpoints", async ({ page }) => {
   await loadPopulatedState(page);
   const map = page.getByTestId("app-map");
-  await page.waitForTimeout(1000);
+  // loadPopulatedState already waited for the selection camera to settle.
   await expectOriginMarkerAtCameraSubject(page);
 
   await page.setViewportSize({ width: 390, height: 844 });
@@ -568,7 +569,7 @@ test("desktop rail gaps preserve map drag and west-side amenity inspection", asy
   await page.getByRole("combobox").fill("Piața Unirii");
   await page.getByRole("button", { name: "Go" }).click();
   await expect(map).toHaveAttribute("data-amenity-count", "1");
-  await page.waitForTimeout(1600);
+  await expect(map).toHaveAttribute("data-camera-settled", "true", { timeout: 10_000 });
 
   const point = await amenityPixel(page, west.lng, west.lat);
   const command = await page.getByTestId("command-surface").boundingBox();
@@ -595,7 +596,7 @@ test("desktop rail gaps preserve map drag and west-side amenity inspection", asy
   await page.getByRole("combobox").fill("Piața Unirii");
   await page.getByRole("button", { name: "Go" }).click();
   await expect(map).toHaveAttribute("data-amenity-count", "1");
-  await page.waitForTimeout(1600);
+  await expect(map).toHaveAttribute("data-camera-settled", "true", { timeout: 10_000 });
   const restored = await amenityPixel(page, west.lng, west.lat);
   await map.click({ position: restored });
   await expect(page.locator('[data-testid="poi-popup"]').getByText("West-side park")).toBeVisible();

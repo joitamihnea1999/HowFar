@@ -9,6 +9,7 @@ import {
   RING_FILTER_OPTIONS,
   RING_MINUTES,
   ringLayerVisibility,
+  ringRevealStages,
   visibleLegendMinutes,
 } from "./isochrone-view";
 import type { Ring } from "@/features/map/selection-flow";
@@ -80,5 +81,18 @@ describe("ring filter (task 024)", () => {
   it("the legend mirrors the filter: one row for a band, all rows for All", () => {
     expect(visibleLegendMinutes(30)).toEqual([30]);
     expect(visibleLegendMinutes("all")).toEqual([15, 30, 45]);
+  });
+
+  it("reveal stages run largest→smallest for All, single band otherwise", () => {
+    expect(ringRevealStages("all")).toEqual([45, 30, 15]);
+    expect(ringRevealStages("all")).toEqual([...RING_MINUTES]);
+    expect(ringRevealStages(15)).toEqual([15]);
+    expect(ringRevealStages(45)).toEqual([45]);
+  });
+
+  it("reveal stages returns a fresh array (mutating it must not corrupt RING_MINUTES)", () => {
+    const stages = ringRevealStages("all");
+    (stages as number[]).push(999);
+    expect([...RING_MINUTES]).toEqual([45, 30, 15]);
   });
 });
