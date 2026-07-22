@@ -1,5 +1,6 @@
 import {
   AMENITY_CATEGORIES,
+  deriveTransitModes,
   MAX_PER_CATEGORY,
   type Amenity,
   type AmenityCounts,
@@ -20,6 +21,7 @@ type CatalogueRow = {
   lat: number;
   lng: number;
   distanceMeters: number;
+  transitTags: Record<string, string> | null;
 };
 
 type SummaryRow = CatalogueRow & { categoryTotal: number };
@@ -30,7 +32,7 @@ export type CatalogueRingSummary = {
 };
 
 function mapRow(row: CatalogueRow): CatalogueAmenity {
-  return {
+  const amenity: CatalogueAmenity = {
     id: row.id,
     lat: row.lat,
     lng: row.lng,
@@ -40,6 +42,10 @@ function mapRow(row: CatalogueRow): CatalogueAmenity {
     osmId: Number(row.sourceId),
     distanceMeters: row.distanceMeters,
   };
+  // Transit stops carry their OSM mode set so the coincident-stop merge (task
+  // 047) can distinguish an interchange from two same-mode platforms.
+  if (row.category === "transit") amenity.modes = deriveTransitModes(row.transitTags);
+  return amenity;
 }
 
 /**
@@ -72,6 +78,7 @@ export async function queryCatalogueSummaryInRing(
         place.category,
         place."sourceType",
         place."sourceId",
+        place."sourceTags",
         params.ring,
         params.origin,
         ST_Intersection(place.geom, params.ring) AS clipped
@@ -90,6 +97,9 @@ export async function queryCatalogueSummaryInRing(
         category,
         "sourceType",
         "sourceId",
+        -- Only transit rows need their tags downstream (mode derivation); other
+        -- categories carry NULL so the payload isn't bloated with raw OSM tags.
+        CASE WHEN category = 'transit' THEN "sourceTags" ELSE NULL END AS "transitTags",
         ST_Y(display_point)::double precision AS lat,
         ST_X(display_point)::double precision AS lng,
         ST_Distance(display_point::geography, origin::geography)::double precision AS distance
@@ -108,6 +118,7 @@ export async function queryCatalogueSummaryInRing(
       category,
       "sourceType",
       "sourceId",
+      "transitTags",
       lat,
       lng,
       distance AS "distanceMeters",

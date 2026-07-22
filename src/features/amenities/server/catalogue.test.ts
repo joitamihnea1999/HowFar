@@ -243,3 +243,38 @@ describe("nearbyAmenities local catalogue flow", () => {
     expect(withActiveDataset).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("nearbyAmenities merges coincident transit stops (task 047)", () => {
+  // Two transit stops ~1m apart, different modes → one merged marker.
+  const coincident = [
+    { id: "a", lat: 44.4268, lng: 26.1025, name: "Stadion", category: "transit", osmType: "node", osmId: 1, distanceMeters: 10, modes: ["bus"] },
+    { id: "b", lat: 44.42681, lng: 26.1025, name: "Savinesti", category: "transit", osmType: "node", osmId: 2, distanceMeters: 12, modes: ["tram"] },
+  ];
+
+  it("fuses them into one marker with members, and reduces counts.transit when under the 150 cap", async () => {
+    querySummary.mockResolvedValue({ counts: { ...emptyCounts, transit: 2 }, amenities: coincident });
+    const result = await nearbyAmenities(44.426801, 26.102499);
+
+    expect(result.amenities).toHaveLength(1);
+    expect(result.amenities[0].mergedCount).toBe(2);
+    expect(result.amenities[0].members).toHaveLength(2);
+    // count reflects the merge (2 stops → 1 distinct place)
+    expect(result.counts.transit).toBe(1);
+    // server-only `modes` never reaches the client payload (F5)
+    expect(result.amenities[0]).not.toHaveProperty("modes");
+    // and the merged payload is what gets cached
+    expect(amenityCacheWrite).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ counts: expect.objectContaining({ transit: 1 }) }),
+      expect.any(Date),
+    );
+  });
+
+  it("leaves counts.transit as the raw pre-cap total when the category is capped (>150)", async () => {
+    querySummary.mockResolvedValue({ counts: { ...emptyCounts, transit: 200 }, amenities: coincident });
+    const result = await nearbyAmenities(44.426801, 26.102499);
+
+    expect(result.amenities).toHaveLength(1); // still visually merged
+    expect(result.counts.transit).toBe(200); // but the count is left raw (documented best-effort)
+  });
+});

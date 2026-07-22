@@ -1,8 +1,13 @@
-import { WALK_CLIP_MINUTES, type AmenityCounts } from "@/features/amenities/amenities";
+import {
+  MAX_PER_CATEGORY,
+  WALK_CLIP_MINUTES,
+  type AmenityCounts,
+} from "@/features/amenities/amenities";
 import {
   queryCatalogueSummaryInRing,
   type CatalogueAmenity,
 } from "@/features/amenities/server/catalogue-query";
+import { mergeCoincidentTransitStops } from "@/features/amenities/server/merge-transit-stops";
 import { withActiveDataset } from "@/features/amenities/server/catalogue-store";
 import { walkingIsochrone } from "@/features/isochrones/server/ors";
 import { getCachedSafe, setCachedSafe } from "@/lib/api-cache";
@@ -39,8 +44,9 @@ export const CATALOGUE_STALE_AFTER_MS = 10 * 24 * 60 * 60 * 1_000;
  */
 export const AMENITY_RESULT_TTL_MS = 24 * 60 * 60 * 1_000;
 
-/** Bump when the cached JSON shape changes. Includes datasetId so a publish invalidates. */
-const AMENITY_RESULT_CACHE_PREFIX = "amenity:local:v1:";
+/** Bump when the cached JSON shape changes. Includes datasetId so a publish
+ * invalidates. v2 (task 047): amenities may now carry merged-transit `members`. */
+const AMENITY_RESULT_CACHE_PREFIX = "amenity:local:v2:";
 
 export function amenityResultCacheKey(
   datasetId: string,
@@ -168,12 +174,32 @@ async function computeNearbyAmenities(
   }
   if (!summary) throw new CatalogueUnavailableError("No active amenity catalogue");
 
+  // Fuse coincident transit stops into single markers (task 047). Read-time only.
+  const merged = mergeCoincidentTransitStops(summary.amenities);
+  const absorbedTransit = merged.absorbedTransit;
+  // `modes` is a server-only merge input; drop it so it never enters the client
+  // payload/cache contract (a merged marker carries everything the popup needs in
+  // `members`). (impl-panel finding F5.)
+  const amenities: CatalogueAmenity[] = merged.amenities.map((a) => {
+    const copy = { ...a };
+    delete copy.modes;
+    return copy;
+  });
+  const counts: AmenityCounts = { ...summary.counts };
+  // The count is the pre-cap in-ring total; only adjust it for merges when the
+  // whole transit category fit under the cap (so the visible set is complete and
+  // `absorbedTransit` accounts for every duplicate). When capped (>150 in ring)
+  // leave the raw node total — a documented best-effort (task 047 Parked).
+  if (counts.transit <= MAX_PER_CATEGORY) {
+    counts.transit = Math.max(0, counts.transit - absorbedTransit);
+  }
+
   const sourceIso = summary.sourceTimestamp?.toISOString() ?? null;
   const payload: NearbyAmenitiesResult = {
     origin: { lat, lng },
     walkMinutes: WALK_CLIP_MINUTES,
-    counts: summary.counts,
-    amenities: summary.amenities,
+    counts,
+    amenities,
     catalogue: {
       sourceTimestamp: sourceIso,
       stale: isCatalogueStale(summary.sourceTimestamp),
@@ -184,8 +210,8 @@ async function computeNearbyAmenities(
   const body: CachedNearbyAmenities = {
     origin: payload.origin,
     walkMinutes: payload.walkMinutes,
-    counts: payload.counts,
-    amenities: payload.amenities,
+    counts,
+    amenities,
     sourceTimestamp: sourceIso,
     datasetId: summary.datasetId,
   };

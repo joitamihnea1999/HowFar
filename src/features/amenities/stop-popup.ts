@@ -24,13 +24,16 @@ export type StopPopupModel =
   | { kind: "loading"; title: string }
   | { kind: "error"; title: string }
   | { kind: "empty"; title: string }
-  | { kind: "ready"; title: string; rows: StopPopupRow[] };
+  | { kind: "ready"; title: string; rows: StopPopupRow[]; partial?: boolean };
 
 /** Copy shared by the DOM renderer and the e2e assertions. */
 export const STOP_POPUP_TEXT = {
   loading: "Finding lines…",
   error: "Line info unavailable right now",
   empty: "No line data mapped for this stop",
+  /** Shown under the list when a merged stop's popup (task 047) rendered the
+   * union of only SOME members — at least one member's lines failed to load. */
+  partial: "Some lines may be missing",
 } as const;
 
 const FALLBACK_TITLE = "Transit stop";
@@ -44,6 +47,7 @@ export function buildStopPopupModel(
   title: string,
   phase: "loading" | "error" | "ready",
   lines?: readonly StopLine[],
+  partial = false,
 ): StopPopupModel {
   const t = title.trim() || FALLBACK_TITLE;
   if (phase === "loading") return { kind: "loading", title: t };
@@ -54,5 +58,11 @@ export function buildStopPopupModel(
     if (typeof l.relationId === "number") row.relationId = l.relationId;
     return row;
   });
-  return rows.length ? { kind: "ready", title: t, rows } : { kind: "empty", title: t };
+  if (!rows.length) {
+    // A COMPLETE result with no lines is the honest "no data mapped" state. But
+    // a PARTIAL result with no surviving rows can't claim that — a failed member
+    // may well have lines — so it degrades to error, not a false negative.
+    return partial ? { kind: "error", title: t } : { kind: "empty", title: t };
+  }
+  return partial ? { kind: "ready", title: t, rows, partial: true } : { kind: "ready", title: t, rows };
 }

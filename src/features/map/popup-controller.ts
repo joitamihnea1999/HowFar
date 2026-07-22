@@ -2,11 +2,13 @@ import maplibregl from "maplibre-gl";
 
 import {
   amenityCategoryLabel,
+  parseAmenityMembers,
   type Amenity,
   type AmenityCategoryKey,
+  type TransitStopMember,
 } from "@/features/amenities/amenities";
 import { normalizeAmenitySelection } from "@/features/amenities/amenity-selection";
-import type { StopLine } from "@/features/amenities/stop-lines";
+import { mergeStopLines, type StopLine } from "@/features/amenities/stop-lines";
 import { buildStopPopupModel, STOP_POPUP_TEXT, type StopPopupModel } from "@/features/amenities/stop-popup";
 import type { EdgeInsets } from "@/features/map/route-framing";
 import type { RoutePathController } from "@/features/map/route-path-controller";
@@ -103,6 +105,7 @@ export function createPopupController({
         list.appendChild(li);
       }
       root.appendChild(list);
+      if (model.partial) message(STOP_POPUP_TEXT.partial);
     }
     return root;
   }
@@ -148,15 +151,49 @@ export function createPopupController({
     });
   }
 
-  // Route a picked amenity to its popup: an identifiable transit stop gets the
-  // line list; everything else — including a transit stop with no usable OSM
-  // identity — gets the generic info popup (never silence, task 024).
-  function openAmenityPopup(feature: maplibregl.MapGeoJSONFeature, coords: [number, number]) {
-    const props = feature.properties ?? {};
+  // The transit stops a picked feature resolves to: a merged marker carries its
+  // absorbed stops in `members` (task 047, string prop on a WebGL feature or a
+  // raw array on the keyboard synthetic feature); an ordinary marker resolves to
+  // its own single OSM identity. Empty ⇒ no usable identity to look up lines.
+  function transitStopsOf(
+    props: Record<string, unknown>,
+    coords: [number, number],
+  ): TransitStopMember[] {
+    const members = parseAmenityMembers(props.members);
+    if (members.length) return members;
     const osmType = typeof props.osmType === "string" ? props.osmType : "";
     const osmId = Number(props.osmId);
-    if (props.category === "transit" && osmType && Number.isInteger(osmId) && osmId > 0) {
-      return openStopPopup(feature, coords);
+    const name = typeof props.name === "string" ? props.name : "";
+    if (osmType && Number.isInteger(osmId) && osmId > 0) {
+      return [{ osmType, osmId, name, lat: coords[1], lng: coords[0] }];
+    }
+    return [];
+  }
+
+  // Popup title for a stop or merged cluster: a single stop keeps its name; a
+  // merge (task 047) shows its distinct member names so a fused marker never
+  // presents one member's name over another's lines (impl-panel finding F1).
+  function stopPopupTitle(stops: TransitStopMember[], fallback: string): string {
+    if (stops.length <= 1) return fallback;
+    const distinct: string[] = [];
+    for (const s of stops) {
+      const n = s.name.trim();
+      if (n && !distinct.includes(n)) distinct.push(n);
+    }
+    if (distinct.length === 0) return fallback;
+    if (distinct.length <= 2) return distinct.join(" / ");
+    return `${distinct.slice(0, 2).join(" / ")} +${distinct.length - 2}`;
+  }
+
+  // Route a picked amenity to its popup: an identifiable transit stop (or merged
+  // cluster) gets the line list; everything else — including a transit stop with
+  // no usable OSM identity — gets the generic info popup (never silence, task 024).
+  function openAmenityPopup(feature: maplibregl.MapGeoJSONFeature, coords: [number, number]) {
+    const props = (feature.properties ?? {}) as Record<string, unknown>;
+    const name = typeof props.name === "string" ? props.name : "";
+    if (props.category === "transit") {
+      const stops = transitStopsOf(props, coords);
+      if (stops.length) return openStopPopup(stops, stopPopupTitle(stops, name), coords);
     }
     openPoiPopup(feature, coords);
   }
@@ -175,6 +212,10 @@ export function createPopupController({
         category: item.category,
         osmType: item.osmType,
         osmId: item.osmId,
+        // Merged transit marker (task 047): pass members through so the keyboard
+        // path unions the same lines as a WebGL-marker click. Raw array here;
+        // parseAmenityMembers accepts array or the WebGL JSON string alike.
+        members: item.members,
       },
       geometry: { type: "Point", coordinates: coords },
     } as unknown as maplibregl.MapGeoJSONFeature;
@@ -243,16 +284,34 @@ export function createPopupController({
     popupCategory = null;
   }
 
-  function openStopPopup(feature: maplibregl.MapGeoJSONFeature, coords: [number, number]) {
-    const props = feature.properties ?? {};
-    const osmType = typeof props.osmType === "string" ? props.osmType : "";
-    const osmId = Number(props.osmId);
-    const name = typeof props.name === "string" ? props.name : "";
+  // Fetch one stop's serving lines. Resolves with its lines (possibly empty —
+  // a valid "no mapped routes"); rejects on abort/non-ok/network so the batch
+  // can tell a genuine failure from an empty result.
+  async function fetchStopLines(stop: TransitStopMember, signal: AbortSignal): Promise<StopLine[]> {
+    const q =
+      `?type=${encodeURIComponent(stop.osmType)}&id=${stop.osmId}` +
+      `&lat=${stop.lat}&lng=${stop.lng}&name=${encodeURIComponent(stop.name)}`;
+    const res = await fetch(`/api/stop-lines${q}`, { signal });
+    if (!res.ok) throw new Error(`stop-lines ${res.status}`);
+    const data = (await res.json()) as { lines?: unknown };
+    return (Array.isArray(data.lines) ? data.lines : []) as StopLine[];
+  }
+
+  // Open the transit line popup for one or more stops. A merged marker (task
+  // 047) fans out over its members under ONE batch deadline / abort / generation
+  // and renders the UNION of the members that responded — the popup errors only
+  // if EVERY member fails, and flags a partial union when some did. A single
+  // stop is just the one-member case (behaviour unchanged from task 021).
+  function openStopPopup(
+    stops: TransitStopMember[],
+    title: string,
+    coords: [number, number],
+  ) {
     closeStopPopup();
     // No usable identity ⇒ can't look up lines. Bail with no popup — but the
     // caller has ALREADY decided this is a transit hit, so we never fall through
     // to a reselection that would wipe the user's markers (task 021).
-    if (!osmType || !Number.isInteger(osmId) || osmId <= 0) return;
+    if (stops.length === 0) return;
 
     const gen = stopLinesGen;
     const controller = new AbortController();
@@ -260,7 +319,7 @@ export function createPopupController({
 
     const popup = new maplibregl.Popup({ closeButton: true, closeOnClick: false, maxWidth: "280px" })
       .setLngLat(coords)
-      .setDOMContent(renderStopPopup(buildStopPopupModel(name, "loading"), coords))
+      .setDOMContent(renderStopPopup(buildStopPopupModel(title, "loading"), coords))
       .addTo(map);
     currentPopup = popup;
     popupCategory = "transit";
@@ -273,28 +332,29 @@ export function createPopupController({
       popupCategory = null;
     });
 
-    // Client deadline: transition to the error state (and abort) if the server
-    // is slow, so the popup never sits on "Finding lines…" indefinitely.
+    // ONE client deadline for the whole batch: transition to error (and abort
+    // every member fetch) if the server is slow, so the popup never sits on
+    // "Finding lines…" indefinitely.
     const timer = setTimeout(() => {
       if (gen === stopLinesGen) {
-        updateStopPopup(popup, buildStopPopupModel(name, "error"), coords);
+        updateStopPopup(popup, buildStopPopupModel(title, "error"), coords);
       }
       controller.abort();
     }, STOP_LINES_TIMEOUT_MS);
 
-    const q = `?type=${encodeURIComponent(osmType)}&id=${osmId}&lat=${coords[1]}&lng=${coords[0]}&name=${encodeURIComponent(name)}`;
-    fetch(`/api/stop-lines${q}`, { signal: controller.signal })
-      .then(async (res) => {
+    Promise.allSettled(stops.map((stop) => fetchStopLines(stop, controller.signal)))
+      .then((results) => {
         if (gen !== stopLinesGen) return;
-        if (!res.ok) return void updateStopPopup(popup, buildStopPopupModel(name, "error"), coords);
-        const data = (await res.json()) as { lines?: unknown };
-        if (gen !== stopLinesGen) return;
-        const lines = (Array.isArray(data.lines) ? data.lines : []) as StopLine[];
-        updateStopPopup(popup, buildStopPopupModel(name, "ready", lines), coords);
-      })
-      .catch((err) => {
-        if ((err as Error)?.name === "AbortError" || gen !== stopLinesGen) return;
-        updateStopPopup(popup, buildStopPopupModel(name, "error"), coords);
+        const ok = results.filter(
+          (r): r is PromiseFulfilledResult<StopLine[]> => r.status === "fulfilled",
+        );
+        if (ok.length === 0) {
+          updateStopPopup(popup, buildStopPopupModel(title, "error"), coords);
+          return;
+        }
+        const lines = mergeStopLines(ok.map((r) => r.value));
+        const partial = ok.length < stops.length;
+        updateStopPopup(popup, buildStopPopupModel(title, "ready", lines, partial), coords);
       })
       .finally(() => clearTimeout(timer));
   }

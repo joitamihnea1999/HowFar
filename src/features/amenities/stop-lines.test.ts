@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 
-import { modeLabel, parseRouteRelations, TRANSIT_ROUTE_VALUES } from "./stop-lines";
+import { mergeStopLines, modeLabel, parseRouteRelations, type StopLine, TRANSIT_ROUTE_VALUES } from "./stop-lines";
 
 /** Build an Overpass route-relation element (defaults to a valid bus route). */
 const rel = (tags: Record<string, string>, type = "relation") => ({ type, tags });
@@ -209,5 +209,40 @@ describe("modeLabel", () => {
 
   it("echoes an unknown mode unchanged", () => {
     expect(modeLabel("funicular")).toBe("funicular");
+  });
+});
+
+describe("mergeStopLines (task 047 — union across merged members)", () => {
+  const line = (over: Partial<StopLine> = {}): StopLine => ({ mode: "bus", ref: "1", ...over });
+
+  it("dedups on (mode,ref,direction) across members, keeping direction variants distinct", () => {
+    const a: StopLine[] = [line({ ref: "104", direction: "Aviatiei" })];
+    const b: StopLine[] = [
+      line({ ref: "104", direction: "Aviatiei" }), // exact dup of a's line
+      line({ ref: "104", direction: "Pipera" }), // opposite direction — kept
+    ];
+    const merged = mergeStopLines([a, b]);
+    expect(merged).toHaveLength(2);
+    expect(merged.map((l) => l.direction)).toEqual(["Aviatiei", "Pipera"]);
+  });
+
+  it("prefers the drawable variant (with relationId) when the same line appears from two members", () => {
+    const withoutRel: StopLine[] = [line({ ref: "1" })];
+    const withRel: StopLine[] = [line({ ref: "1", relationId: 999 })];
+    expect(mergeStopLines([withoutRel, withRel])[0].relationId).toBe(999);
+    // order-independent
+    expect(mergeStopLines([withRel, withoutRel])[0].relationId).toBe(999);
+  });
+
+  it("unions bus + tram lines and sorts by mode order then numeric ref", () => {
+    const bus: StopLine[] = [line({ mode: "bus", ref: "32" })];
+    const tram: StopLine[] = [line({ mode: "tram", ref: "1" }), line({ mode: "tram", ref: "25" })];
+    const merged = mergeStopLines([bus, tram]);
+    expect(merged.map((l) => `${l.mode} ${l.ref}`)).toEqual(["bus 32", "tram 1", "tram 25"]);
+  });
+
+  it("handles empty inputs", () => {
+    expect(mergeStopLines([])).toEqual([]);
+    expect(mergeStopLines([[], []])).toEqual([]);
   });
 });

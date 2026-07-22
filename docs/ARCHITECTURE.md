@@ -73,6 +73,7 @@ server code only.
 | `src/features/amenities/amenities.ts` | Shared category config/classifier for importer, API DTOs and UI |
 | `src/features/amenities/amenity-selection.ts` | Versioned selectable-category state and category+text filtering |
 | `src/features/amenities/amenities-flow.ts` | Client fetch-decision logic (origin keying and retry behavior) |
+| `src/features/amenities/server/merge-transit-stops.ts` | Read-time fuse of coincident transit-stop markers (one physical place tagged as several OSM nodes) into one marker carrying its members; conservative, distance+mode+name calibrated |
 | `src/features/amenities/server/catalogue-{import,normalize,store,query,status,export}.ts` | Weekly ingestion/quality, immutable publication, spatial runtime reads and operational/ODbL surfaces |
 | `src/features/amenities/server/bulk-overpass.ts` | Weekly-only bounded sequential Overpass snapshot transport |
 | `src/features/amenities/server/overpass-client.ts` | Interactive stop-line/route-path Overpass transport; not amenity discovery |

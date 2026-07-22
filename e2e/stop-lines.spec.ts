@@ -33,7 +33,19 @@ const STOP_DLNG = 0.006; // ≈ 70px east at zoom 13
 const STOP = { lat: ORIGIN.lat, lng: ORIGIN.lng + STOP_DLNG };
 const GROCERY = { lat: ORIGIN.lat, lng: ORIGIN.lng + STOP_DLNG }; // same slot, non-transit
 
-function amenities(items: { lat: number; lng: number; name: string; category: string; osmType?: string; osmId?: number }[]) {
+type Member = { osmType: string; osmId: number; name: string; lat: number; lng: number };
+function amenities(
+  items: {
+    lat: number;
+    lng: number;
+    name: string;
+    category: string;
+    osmType?: string;
+    osmId?: number;
+    members?: Member[];
+    mergedCount?: number;
+  }[],
+) {
   return {
     origin: ORIGIN,
     walkMinutes: 15,
@@ -276,6 +288,101 @@ test("a transit stop with no OSM identity falls back to the info popup (never si
   await expect(poi).toBeVisible();
   await expect(poi.getByText("Ghost Stop")).toBeVisible();
   await expect(poi.getByText("Transit stops")).toBeVisible();
+});
+
+// --- Merged coincident transit stops (task 047) -----------------------------
+// The server fuses coincident stops before responding, so behind the stub we
+// assert the CLIENT contract: a members-bearing marker fans out to one
+// /api/stop-lines call per member under one deadline and renders the UNION.
+
+const MERGED_STOP = {
+  ...STOP,
+  name: "Stadion / Savinesti",
+  category: "transit",
+  osmType: "node",
+  osmId: 444384784,
+  mergedCount: 2,
+  members: [
+    { osmType: "node", osmId: 444384784, name: "Stadion", lat: STOP.lat, lng: STOP.lng },
+    { osmType: "node", osmId: 555000, name: "Savinesti", lat: STOP.lat + 0.0001, lng: STOP.lng },
+  ] as Member[],
+};
+
+test("a merged transit marker unions all its members' lines in ONE popup (one marker, one fetch per member)", async ({
+  page,
+}) => {
+  let stopLinesCalls = 0;
+  const requestedIds: string[] = [];
+  await stubBase(page);
+  await page.route("**/api/amenities**", (route) => route.fulfill({ json: amenities([MERGED_STOP]) }));
+  await page.route("**/api/stop-lines**", (route) => {
+    stopLinesCalls += 1;
+    const id = new URL(route.request().url()).searchParams.get("id") ?? "";
+    requestedIds.push(id);
+    const lines =
+      id === "555000"
+        ? [{ mode: "tram", ref: "1", direction: "Romprim" }]
+        : [{ mode: "bus", ref: "331", direction: "Cartier Dămăroaia" }];
+    route.fulfill({ json: { name: "", lines } });
+  });
+
+  const map = await loadAndSearch(page);
+  // Exactly one rendered marker despite two absorbed stops.
+  await expect(map).toHaveAttribute("data-amenity-count", "1");
+  await clickStop(page, map);
+
+  await expect(popup(page)).toHaveAttribute("data-state", "ready");
+  // Union of both members' lines, across modes.
+  await expect(popup(page).getByText("Bus 331")).toBeVisible();
+  await expect(popup(page).getByText("Tram 1")).toBeVisible();
+  // One fetch per member, no partial note.
+  expect(stopLinesCalls).toBe(2);
+  expect(new Set(requestedIds)).toEqual(new Set(["444384784", "555000"]));
+  await expect(popup(page).getByText(/some lines may be missing/i)).toHaveCount(0);
+});
+
+test("a merged marker with one failing member still shows the union of the survivors, flagged partial", async ({
+  page,
+}) => {
+  await stubBase(page);
+  await page.route("**/api/amenities**", (route) => route.fulfill({ json: amenities([MERGED_STOP]) }));
+  await page.route("**/api/stop-lines**", (route) => {
+    const id = new URL(route.request().url()).searchParams.get("id") ?? "";
+    if (id === "555000") return route.fulfill({ status: 502, json: { error: "Upstream provider error" } });
+    route.fulfill({ json: { name: "", lines: [{ mode: "bus", ref: "331", direction: "Cartier Dămăroaia" }] } });
+  });
+
+  const map = await loadAndSearch(page);
+  await clickStop(page, map);
+
+  // The surviving member's lines render (not a whole-popup error)…
+  await expect(popup(page)).toHaveAttribute("data-state", "ready");
+  await expect(popup(page).getByText("Bus 331")).toBeVisible();
+  // …with an honest partial note, and the failed member's lines absent.
+  await expect(popup(page).getByText(/some lines may be missing/i)).toBeVisible();
+  await expect(popup(page).getByText("Tram 1")).toHaveCount(0);
+});
+
+test("opening a merged marker from the keyboard browser unions the same lines", async ({ page }) => {
+  await stubBase(page);
+  await page.route("**/api/amenities**", (route) => route.fulfill({ json: amenities([MERGED_STOP]) }));
+  await page.route("**/api/stop-lines**", (route) => {
+    const id = new URL(route.request().url()).searchParams.get("id") ?? "";
+    const lines =
+      id === "555000"
+        ? [{ mode: "tram", ref: "1", direction: "Romprim" }]
+        : [{ mode: "bus", ref: "331", direction: "Cartier Dămăroaia" }];
+    route.fulfill({ json: { name: "", lines } });
+  });
+
+  const map = await loadAndSearch(page);
+  await expect(map).toHaveAttribute("data-amenity-count", "1");
+  await page.getByRole("button", { name: "Browse places" }).click();
+  await page.getByRole("button", { name: /Stadion \/ Savinesti/ }).click();
+
+  await expect(popup(page)).toHaveAttribute("data-state", "ready");
+  await expect(popup(page).getByText("Bus 331")).toBeVisible();
+  await expect(popup(page).getByText("Tram 1")).toBeVisible();
 });
 
 test("hovering near a marker arms the hover state; leaving clears it", async ({ page }) => {

@@ -91,6 +91,26 @@ export interface Amenity {
   category: AmenityCategoryKey;
   osmType?: string;
   osmId?: number;
+  /** Transit-mode set derived from OSM tags (task 047), e.g. `["bus","tram"]`.
+   * Server-only merge input; not part of the client contract. */
+  modes?: string[];
+  /** When this marker is the merge of several coincident transit stops (task
+   * 047), the absorbed stops' identities+coords so the popup can union their
+   * serving lines. Present only on a merged marker (length ≥ 2). */
+  members?: TransitStopMember[];
+  /** `members.length` — present only on a merged marker (≥ 2). */
+  mergedCount?: number;
+}
+
+/** One transit stop absorbed into a merged marker (task 047). Carries the OSM
+ * identity for the per-stop line lookup and in-area coords for its `/api/stop-lines`
+ * out-of-area guard. */
+export interface TransitStopMember {
+  osmType: string;
+  osmId: number;
+  name: string;
+  lat: number;
+  lng: number;
 }
 
 export type AmenityCounts = Record<AmenityCategoryKey, number>;
@@ -124,6 +144,51 @@ export function categoryForTags(tags: Record<string, string> | undefined): Ameni
   return null;
 }
 
+/** OSM tags → the set of transit modes a stop belongs to (task 047). Modelled as
+ * a SET (not a single mode) so a dual-tagged platform — e.g. a `highway=bus_stop`
+ * that also carries `tram=yes` — is correctly seen as serving both, which the
+ * coincident-stop merge uses to tell an interchange (different modes) from two
+ * same-mode platforms (opposite directions). Order-independent by construction. */
+export function deriveTransitModes(tags: Record<string, string> | null | undefined): string[] {
+  if (!tags) return [];
+  const modes: string[] = [];
+  if (tags.highway === "bus_stop" || tags.bus === "yes" || tags.trolleybus === "yes") modes.push("bus");
+  if (tags.railway === "tram_stop" || tags.tram === "yes") modes.push("tram");
+  if (tags.station === "subway" || tags.subway === "yes") modes.push("metro");
+  if ((tags.railway === "station" && tags.station !== "subway") || tags.train === "yes") modes.push("rail");
+  return modes;
+}
+
+/** Parse the popup `members` value (task 047): the keyboard `inspectAmenity` path
+ * passes the raw array, while MapLibre flattens feature properties to primitives
+ * so a WebGL-marker click delivers a JSON string. Returns only members with a
+ * usable OSM identity + finite coords; `[]` when absent or garbled. */
+export function parseAmenityMembers(raw: unknown): TransitStopMember[] {
+  let value: unknown = raw;
+  if (typeof raw === "string") {
+    try {
+      value = JSON.parse(raw);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(value)) return [];
+  const out: TransitStopMember[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") continue;
+    const rec = entry as Record<string, unknown>;
+    const osmType = typeof rec.osmType === "string" ? rec.osmType : "";
+    const osmId = Number(rec.osmId);
+    const lat = Number(rec.lat);
+    const lng = Number(rec.lng);
+    const name = typeof rec.name === "string" ? rec.name : "";
+    if (!osmType || !Number.isInteger(osmId) || osmId <= 0) continue;
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+    out.push({ osmType, osmId, name, lat, lng });
+  }
+  return out;
+}
+
 /** Per-category counts over a flat amenity list (all keys present, zero-filled). */
 export function countByCategory(items: Amenity[]): AmenityCounts {
   const counts = Object.fromEntries(AMENITY_CATEGORIES.map((c) => [c.key, 0])) as AmenityCounts;
@@ -145,6 +210,12 @@ export function buildAmenityFeatures(items: Amenity[]): GeoJSON.Feature[] {
     };
     if (a.osmType) properties.osmType = a.osmType;
     if (typeof a.osmId === "number") properties.osmId = a.osmId;
+    // Merged transit marker (task 047): stringify members so the flat-prop
+    // contract holds; the popup unions their lines. Omitted for single stops.
+    if (a.members && a.members.length > 1) {
+      properties.members = JSON.stringify(a.members);
+      properties.mergedCount = a.members.length;
+    }
     return {
       type: "Feature",
       properties,

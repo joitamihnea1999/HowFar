@@ -4,7 +4,10 @@ import {
   buildAmenityFeatures,
   categoryForTags,
   countByCategory,
+  deriveTransitModes,
+  parseAmenityMembers,
   type Amenity,
+  type TransitStopMember,
 } from "./amenities";
 
 describe("categoryForTags", () => {
@@ -91,5 +94,62 @@ describe("buildAmenityFeatures", () => {
     const [f] = buildAmenityFeatures([{ lat: 1, lng: 1, name: "x", category: "parks" }]);
     expect(f.properties).not.toHaveProperty("osmType");
     expect(f.properties).not.toHaveProperty("osmId");
+  });
+
+  it("stringifies members (task 047) so the flat-prop contract holds; round-trips via parseAmenityMembers", () => {
+    const members: TransitStopMember[] = [
+      { osmType: "node", osmId: 1, name: "A", lat: 44.4, lng: 26.1 },
+      { osmType: "node", osmId: 2, name: "B", lat: 44.4001, lng: 26.1001 },
+    ];
+    const [f] = buildAmenityFeatures([
+      { lat: 44.4, lng: 26.1, name: "A", category: "transit", osmType: "node", osmId: 1, members, mergedCount: 2 },
+    ]);
+    expect(typeof f.properties!.members).toBe("string");
+    expect(f.properties!.mergedCount).toBe(2);
+    expect(parseAmenityMembers(f.properties!.members)).toEqual(members);
+  });
+
+  it("omits members for an unmerged (single-stop) marker", () => {
+    const [f] = buildAmenityFeatures([
+      { lat: 44.4, lng: 26.1, name: "A", category: "transit", osmType: "node", osmId: 1 },
+    ]);
+    expect(f.properties).not.toHaveProperty("members");
+    expect(f.properties).not.toHaveProperty("mergedCount");
+  });
+});
+
+describe("deriveTransitModes", () => {
+  it("maps single-tag stops to their mode", () => {
+    expect(deriveTransitModes({ highway: "bus_stop" })).toEqual(["bus"]);
+    expect(deriveTransitModes({ railway: "tram_stop" })).toEqual(["tram"]);
+    expect(deriveTransitModes({ railway: "station", station: "subway" })).toEqual(["metro"]);
+    expect(deriveTransitModes({ railway: "station" })).toEqual(["rail"]);
+  });
+
+  it("returns a SET for a dual-tagged platform (bus_stop + tram=yes)", () => {
+    expect(deriveTransitModes({ highway: "bus_stop", tram: "yes" })).toEqual(["bus", "tram"]);
+  });
+
+  it("returns [] for null/empty or non-transit tags", () => {
+    expect(deriveTransitModes(null)).toEqual([]);
+    expect(deriveTransitModes(undefined)).toEqual([]);
+    expect(deriveTransitModes({ amenity: "cafe" })).toEqual([]);
+  });
+});
+
+describe("parseAmenityMembers", () => {
+  const valid: TransitStopMember = { osmType: "node", osmId: 5, name: "X", lat: 44.4, lng: 26.1 };
+
+  it("accepts both a JSON string (WebGL feature) and a raw array (keyboard feature)", () => {
+    expect(parseAmenityMembers(JSON.stringify([valid]))).toEqual([valid]);
+    expect(parseAmenityMembers([valid])).toEqual([valid]);
+  });
+
+  it("drops members without a usable identity or coords, and returns [] for garbage", () => {
+    expect(parseAmenityMembers([{ osmType: "node", osmId: 0, name: "", lat: 1, lng: 1 }])).toEqual([]);
+    expect(parseAmenityMembers([{ osmType: "node", osmId: 5, name: "", lat: NaN, lng: 1 }])).toEqual([]);
+    expect(parseAmenityMembers("not json")).toEqual([]);
+    expect(parseAmenityMembers(undefined)).toEqual([]);
+    expect(parseAmenityMembers(42)).toEqual([]);
   });
 });
