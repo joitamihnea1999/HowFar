@@ -78,22 +78,67 @@ export function computeRouteFraming(
   return { framed, corridorHeight, frame };
 }
 
-/** Retries the route-path stamp until the source is actually queryable. */
-export const MAX_ROUTE_STAMP_ATTEMPTS = 12;
+/** Wall-clock ceiling for the route-path stamp poll. Generous on purpose: the
+ * stamp is an e2e-only sync hook, and the ceiling must exceed Playwright's 5s
+ * expect-timeout so the poll never gives up before the assertion would. A
+ * frame-count budget was refresh-rate/CI-jank dependent and could expire
+ * mid-parse (the old flake). */
+export const ROUTE_STAMP_DEADLINE_MS = 10_000;
 
 /**
- * What the route-path stamp loop should do on the current `idle` tick:
- * `stamp` once the source holds features, else `retry` while attempts remain,
- * else `stop`. A single `once("idle")` is not enough after permanent
- * `setPadding` + `easeTo` — idle can fire before the source is queryable,
- * leaving `data-route-path` unset while `data-route-framed` is already true
- * (the stop-lines selection-clear CI flake).
+ * What the route-path stamp poll should do this tick: `stamp` once the source
+ * actually holds queryable features, else `retry` until the wall-clock
+ * deadline, else `stop`. The poll is driven by `requestAnimationFrame` (which
+ * always advances) — NOT `map.once("idle")`, which after the permanent
+ * `setPadding` + fit `easeTo` settles fires once and then never again,
+ * stranding a retry that re-registered it and leaving `data-route-path` unset
+ * (the recurring CI flake, tasks 029/047). Deadline (not a frame count) so the
+ * give-up is wall-clock, independent of display refresh rate and CPU jitter.
  */
 export function nextStampAction(
   hasFeatures: boolean,
-  attempts: number,
-  maxAttempts: number = MAX_ROUTE_STAMP_ATTEMPTS,
+  deadlineExceeded: boolean,
 ): "stamp" | "retry" | "stop" {
   if (hasFeatures) return "stamp";
-  return attempts < maxAttempts ? "retry" : "stop";
+  return deadlineExceeded ? "stop" : "retry";
+}
+
+/** Injectable deps for the route-path stamp poll — everything imperative the
+ * controller supplies from the live map/clock/scheduler, so the poll's driver
+ * semantics are unit-testable with fakes (the controller itself is e2e-only glue). */
+export interface StampPollDeps {
+  /** Are the drawn route features queryable in the source yet? */
+  hasFeatures: () => boolean;
+  /** Monotonic clock (`performance.now`). */
+  now: () => number;
+  /** Schedule the next poll tick (`requestAnimationFrame`) — MUST always advance,
+   * unlike `map.once("idle")`, which never re-fires after the map settles. */
+  schedule: (tick: () => void) => void;
+  /** True once this draw is superseded (clear/replace/dispose bumped the gen) —
+   * the poll then stops without stamping and without rescheduling. */
+  cancelled: () => boolean;
+  /** Write the `data-route-path` stamp. */
+  onStamp: () => void;
+  /** Wall-clock give-up ceiling (defaults to ROUTE_STAMP_DEADLINE_MS). */
+  deadlineMs?: number;
+}
+
+/**
+ * Poll until the route source holds queryable features, then stamp — retrying via
+ * the injected `schedule` (rAF), giving up only past a wall-clock deadline. This
+ * is the fix for the CI flake (tasks 029/047/048): the old retry re-registered
+ * `map.once("idle")`, which never re-fires once the fit ease settles, stranding
+ * the stamp. rAF always advances, so the poll can't strand.
+ */
+export function runRoutePathStampPoll(deps: StampPollDeps): void {
+  const deadlineMs = deps.deadlineMs ?? ROUTE_STAMP_DEADLINE_MS;
+  const start = deps.now();
+  const tick = () => {
+    if (deps.cancelled()) return;
+    const action = nextStampAction(deps.hasFeatures(), deps.now() - start >= deadlineMs);
+    if (action === "stamp") deps.onStamp();
+    else if (action === "retry") deps.schedule(tick);
+    // "stop" → give up silently (deadline hit with the source still empty)
+  };
+  deps.schedule(tick);
 }

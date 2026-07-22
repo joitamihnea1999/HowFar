@@ -2,9 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   computeRouteFraming,
-  MAX_ROUTE_STAMP_ATTEMPTS,
   nextStampAction,
+  ROUTE_STAMP_DEADLINE_MS,
   routeFitBreathingRoom,
+  runRoutePathStampPoll,
 } from "./route-framing";
 
 const NO_INSETS = { top: 0, right: 0, bottom: 0, left: 0 };
@@ -78,18 +79,81 @@ describe("computeRouteFraming", () => {
 });
 
 describe("nextStampAction", () => {
-  it("stamps as soon as the source holds features", () => {
-    expect(nextStampAction(true, 0)).toBe("stamp");
-    expect(nextStampAction(true, 99)).toBe("stamp");
+  it("stamps as soon as the source holds features (regardless of deadline)", () => {
+    expect(nextStampAction(true, false)).toBe("stamp");
+    expect(nextStampAction(true, true)).toBe("stamp");
   });
 
-  it("retries while attempts remain and the source is still empty", () => {
-    expect(nextStampAction(false, 0)).toBe("retry");
-    expect(nextStampAction(false, MAX_ROUTE_STAMP_ATTEMPTS - 1)).toBe("retry");
+  it("retries while the source is still empty and the wall-clock deadline hasn't passed", () => {
+    expect(nextStampAction(false, false)).toBe("retry");
   });
 
-  it("stops once the attempt budget is exhausted (no infinite idle loop)", () => {
-    expect(nextStampAction(false, MAX_ROUTE_STAMP_ATTEMPTS)).toBe("stop");
-    expect(nextStampAction(false, MAX_ROUTE_STAMP_ATTEMPTS + 5)).toBe("stop");
+  it("stops once the deadline passes with the source still empty (no infinite poll)", () => {
+    expect(nextStampAction(false, true)).toBe("stop");
+  });
+});
+
+describe("runRoutePathStampPoll", () => {
+  // A controllable harness: a synchronous scheduler (drains a queue) + a fake
+  // clock, so we can assert the DRIVER semantics the CI flake fix depends on
+  // (rAF self-poll, wall-clock deadline, gen-guard) without a real map.
+  function harness(opts: {
+    featuresAt: number; // tick index at which the source starts holding features
+    now?: () => number;
+    cancelledAt?: number; // tick index at which the draw is superseded
+  }) {
+    let tick = 0;
+    let stamped = 0;
+    let scheduleCalls = 0;
+    const queue: (() => void)[] = [];
+    runRoutePathStampPoll({
+      hasFeatures: () => tick >= opts.featuresAt,
+      now: opts.now ?? (() => 0),
+      schedule: (fn) => {
+        scheduleCalls += 1;
+        queue.push(fn);
+      },
+      cancelled: () => opts.cancelledAt !== undefined && tick >= opts.cancelledAt,
+      onStamp: () => {
+        stamped += 1;
+      },
+    });
+    // Drain up to a bound so a bug that never stops can't hang the test.
+    for (let i = 0; i < 500 && queue.length; i++) {
+      const fn = queue.shift()!;
+      fn();
+      tick += 1;
+    }
+    return { stamped, scheduleCalls };
+  }
+
+  it("stamps immediately when features are already present (single schedule, no busy-loop)", () => {
+    const { stamped, scheduleCalls } = harness({ featuresAt: 0 });
+    expect(stamped).toBe(1);
+    expect(scheduleCalls).toBe(1); // the initial tick only — no reschedule after stamp
+  });
+
+  it("reschedules (via the injected scheduler = rAF) until features appear, then stamps once", () => {
+    const { stamped, scheduleCalls } = harness({ featuresAt: 4 });
+    expect(stamped).toBe(1);
+    expect(scheduleCalls).toBe(5); // initial + 4 retries, then stamp — proves the self-advancing poll
+  });
+
+  it("stops without stamping once the draw is superseded (gen-guard), never rescheduling further", () => {
+    const { stamped, scheduleCalls } = harness({ featuresAt: 10, cancelledAt: 3 });
+    expect(stamped).toBe(0);
+    expect(scheduleCalls).toBe(4); // initial + 3 retries; the 4th tick sees cancelled → stops
+  });
+
+  it("gives up on the wall-clock deadline with the source still empty (never stamps)", () => {
+    let t = 0;
+    // clock jumps past the deadline on the 3rd read
+    const now = () => {
+      const v = t;
+      t += ROUTE_STAMP_DEADLINE_MS / 2;
+      return v;
+    };
+    const { stamped } = harness({ featuresAt: 999, now });
+    expect(stamped).toBe(0);
   });
 });

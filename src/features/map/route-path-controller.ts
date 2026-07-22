@@ -8,8 +8,8 @@ import {
 import type { EdgeInsets } from "@/features/map/route-framing";
 import {
   computeRouteFraming,
-  nextStampAction,
   routeFitBreathingRoom,
+  runRoutePathStampPoll,
 } from "@/features/map/route-framing";
 import type { LoadState } from "@/features/map/load-state";
 import { EMPTY_FC } from "@/features/map/map-setup";
@@ -145,24 +145,25 @@ export function createRoutePathController({
       type: "FeatureCollection",
       features: buildRoutePathFeatures(path),
     });
-    // Stamp the dataset from a RENDER read-back, not the input: the e2e contract
-    // is "the path is on the map", so the attribute must only appear once the
-    // source actually holds features (gen-guarded — a clear/replace before idle
-    // must not resurrect it). A single once("idle") is not enough after permanent
-    // setPadding + easeTo: idle can fire before the source is queryable, leaving
-    // data-route-path unset while route-framed is already true (CI flake on
-    // stop-lines selection-clear). The retry decision is the pure nextStampAction.
+    // Stamp data-route-path from a RENDER read-back, not the input: the e2e
+    // contract is "the path is on the map", so the attribute appears only once
+    // the source actually holds queryable features. Poll on requestAnimationFrame
+    // (which always advances) until a wall-clock deadline — NOT map.once("idle"):
+    // after the permanent setPadding + fit easeTo settles, idle fires ONCE and
+    // never again, so a retry that re-registered once("idle") would strand and the
+    // stamp never lands (the recurring CI flake, tasks 029/047). The drawGen guard
+    // makes a clear/replace/dispose kill the chain within one frame — the callback
+    // returns without rescheduling — so no cancelAnimationFrame is needed.
     const drawGen = gen;
-    let attempts = 0;
-    const stampWhenRendered = () => {
-      if (drawGen !== gen) return;
-      const hasFeatures = map.querySourceFeatures("route-path").length > 0;
-      const action = nextStampAction(hasFeatures, attempts++);
-      if (action === "stamp") el.dataset.routePath = String(relationId);
-      else if (action === "retry") map.once("idle", stampWhenRendered);
-    };
-    map.once("idle", stampWhenRendered);
-    requestAnimationFrame(() => requestAnimationFrame(stampWhenRendered));
+    runRoutePathStampPoll({
+      hasFeatures: () => map.querySourceFeatures("route-path").length > 0,
+      now: () => performance.now(),
+      schedule: (tick) => requestAnimationFrame(tick),
+      cancelled: () => drawGen !== gen,
+      onStamp: () => {
+        el.dataset.routePath = String(relationId);
+      },
+    });
     const bounds = routePathBounds(path);
     if (!bounds) return;
     activeRouteBounds = bounds;
