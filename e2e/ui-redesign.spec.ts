@@ -423,7 +423,10 @@ test("core controls meet touch-size, search-first focus, and live-state contract
   const authAction = page.getByRole("button", { name: /Sign in|Sign out/ }).first();
   const hasAuthAction = (await authAction.count()) > 0;
   let passedAuthAction = false;
-  for (let step = 0; step < 16 && !(await canvas.evaluate((element) => element === document.activeElement)); step += 1) {
+  // Budget covers the search + mode/ring chrome, the amenity browser/tiles, AND
+  // the task-051 reach refinements (pace + transit departure) now in the result
+  // sheet, before the map canvas becomes the focus target.
+  for (let step = 0; step < 28 && !(await canvas.evaluate((element) => element === document.activeElement)); step += 1) {
     await page.keyboard.press("Tab");
     if (hasAuthAction && (await authAction.evaluate((element) => element === document.activeElement))) {
       passedAuthAction = true;

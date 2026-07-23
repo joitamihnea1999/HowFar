@@ -86,7 +86,7 @@ describe("amenities-controller dispose", () => {
       getPopupCategory: () => null,
       closeStopPopup: vi.fn(),
     });
-    controller.fetchAmenities({ lat: 44.4, lng: 26.1 }, 0);
+    controller.fetchAmenities({ lat: 44.4, lng: 26.1 }, 0, "normal");
     expect(capturedSignal?.aborted).toBe(false);
     controller.dispose();
     expect(capturedSignal?.aborted).toBe(true);

@@ -12,6 +12,9 @@
  * shared convention: a no-op/stale action returns the SAME state object.
  */
 
+import { DEFAULT_PACE, type Pace } from "@/features/isochrones/pace";
+import { DEFAULT_TIME_CONTEXT, type TimeContext } from "@/features/isochrones/time-context";
+
 export type Mode = "walk" | "transit";
 export type SelectionStatus = "idle" | "loading" | "error";
 export type Stage = "geocode" | "reverse" | "isochrone";
@@ -33,32 +36,43 @@ export type SelectInput =
   | { kind: "point"; lat: number; lng: number; label: string };
 
 export interface SelectionState {
-  /** Monotonic; bumped by `start` and `toggle` so superseded responses are dropped. */
+  /** Monotonic; bumped by `start`, `toggle`, `setPace`, `setTimeContext` so superseded responses are dropped. */
   token: number;
   /** Snapshotted at request start; drives endpoint, colors, legend, and failure copy. */
   mode: Mode;
+  /** Active walking pace — snapshotted per request; drives ORS ranges + amenity radius (both modes). */
+  pace: Pace;
+  /** Active transit departure context — snapshotted per request; transit-only. */
+  timeContext: TimeContext;
   status: SelectionStatus;
   label: string | null;
   message: string | null;
-  /** The last successfully-resolved origin+label, so a mode toggle recomputes it with no geocode. */
+  /** The resolved transit departure (ISO) + a short summary, surfaced so the UI can qualify the claim. */
+  departure: { iso: string; summary: string } | null;
+  /** The last successfully-resolved origin+label, so a mode/pace/time change recomputes it with no geocode. */
   lastSelection: { lat: number; lng: number; label: string } | null;
 }
 
 export const initialSelectionState: SelectionState = {
   token: 0,
   mode: "walk",
+  pace: DEFAULT_PACE,
+  timeContext: DEFAULT_TIME_CONTEXT,
   status: "idle",
   label: null,
   message: null,
+  departure: null,
   lastSelection: null,
 };
 
 export type SelectionAction =
   | { type: "start"; mode: Mode; preserveLast?: boolean }
-  | { type: "resolved"; token: number; origin: Origin; label: string }
+  | { type: "resolved"; token: number; origin: Origin; label: string; departure?: { iso: string; summary: string } | null }
   | { type: "failed"; token: number; stage: Stage; httpStatus: number }
   | { type: "crash"; token: number }
-  | { type: "toggle"; next: Mode };
+  | { type: "toggle"; next: Mode }
+  | { type: "setPace"; pace: Pace }
+  | { type: "setTimeContext"; timeContext: TimeContext };
 
 export const GENERIC_ERROR = "Something went wrong. Try again.";
 const OUT_OF_AREA = "That spot is outside Bucharest.";
@@ -71,6 +85,18 @@ export function modeWord(mode: Mode): string {
 /** The API route that computes reach for the mode. */
 export function isochronePath(mode: Mode): string {
   return mode === "transit" ? "/api/transit" : "/api/isochrone";
+}
+
+/** Build the isochrone request URL for a mode + pace + (transit-only) departure
+ * context. Walk carries only `pace`; transit adds `preset` or `weekday`+`time`.
+ * Pure + exported so the exact query contract is unit-testable. */
+export function isochroneUrl(mode: Mode, origin: Origin, pace: Pace, timeContext: TimeContext): string {
+  const base = `${isochronePath(mode)}?lat=${origin.lat}&lng=${origin.lng}&pace=${pace}`;
+  if (mode !== "transit") return base;
+  if (timeContext.kind === "preset") return `${base}&preset=${timeContext.preset}`;
+  const hh = String(timeContext.hour).padStart(2, "0");
+  const mm = String(timeContext.minute).padStart(2, "0");
+  return `${base}&weekday=${timeContext.weekday}&time=${hh}%3A${mm}`;
 }
 
 /**
@@ -116,6 +142,8 @@ export function selectionReducer(state: SelectionState, action: SelectionAction)
         // Clear any error banner locally so success is self-contained, not
         // dependent on `start` having run first.
         message: null,
+        // The resolved transit departure (walk selections pass null → cleared).
+        departure: action.departure ?? null,
         // The isochrone's rounded origin, so a toggle recompute agrees with the marker/rings.
         lastSelection: { lat: action.origin.lat, lng: action.origin.lng, label: action.label },
       };
@@ -139,5 +167,35 @@ export function selectionReducer(state: SelectionState, action: SelectionAction)
       }
       return { ...state, mode: action.next, token };
     }
+    case "setPace": {
+      if (action.pace === state.pace) return state; // no-op
+      // Bump the token to invalidate any in-flight request and snapshot the new
+      // pace. The controller re-issues the pending/last selection; if none is in
+      // flight or resolved yet it re-runs the pending input (finding G — a pace
+      // change before the first resolution must not be lost).
+      const token = state.token + 1;
+      if (state.lastSelection === null && state.status !== "loading") {
+        return { ...state, pace: action.pace, token, status: "idle" };
+      }
+      return { ...state, pace: action.pace, token };
+    }
+    case "setTimeContext": {
+      // Deep-equal by kind (presets are cheap; custom compares fields).
+      if (sameTimeContext(action.timeContext, state.timeContext)) return state; // no-op
+      const token = state.token + 1;
+      if (state.lastSelection === null && state.status !== "loading") {
+        return { ...state, timeContext: action.timeContext, token, status: "idle" };
+      }
+      return { ...state, timeContext: action.timeContext, token };
+    }
   }
+}
+
+/** Structural equality for a TimeContext (avoids a no-op recompute + fetch). */
+export function sameTimeContext(a: TimeContext, b: TimeContext): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === "preset" && b.kind === "preset") return a.preset === b.preset;
+  if (a.kind === "custom" && b.kind === "custom")
+    return a.weekday === b.weekday && a.hour === b.hour && a.minute === b.minute;
+  return false;
 }

@@ -58,7 +58,7 @@ describe("walkingIsochrone", () => {
 
   it("rejects an UNSCALED (nominal 900/1800/2700) response — the calibration contract is load-bearing", async () => {
     providerFetch.mockResolvedValue(orsResponse([poly(900), poly(1800), poly(2700)]));
-    await expect(walkingIsochrone(44.4, 26.1)).rejects.toThrow(/calibrated ranges/i);
+    await expect(walkingIsochrone(44.4, 26.1)).rejects.toThrow(/requested ranges/i);
   });
 
   it("throws ProviderError on a non-ok status", async () => {
@@ -81,7 +81,7 @@ describe("walkingIsochrone", () => {
 
   it("throws when a range is duplicated instead of the full 15/30/45 set", async () => {
     providerFetch.mockResolvedValue(orsResponse([poly(827), poly(827), poly(1674)]));
-    await expect(walkingIsochrone(44.4, 26.1)).rejects.toThrow(/calibrated ranges/i);
+    await expect(walkingIsochrone(44.4, 26.1)).rejects.toThrow(/requested ranges/i);
   });
 
   it("wraps a network/fetch failure as ProviderError (→ 502)", async () => {
@@ -112,8 +112,8 @@ describe("walkingIsochrone", () => {
     const second = await walkingIsochrone(44.4, 26.1);
     expect(providerFetch).toHaveBeenCalledTimes(1);
     expect(second).toEqual(first);
-    // v2 key: pre-calibration cached rings must never be served again.
-    expect([...store.keys()]).toEqual(["iso:foot:v2:44.40000,26.10000"]);
+    // v3 key: pace-scoped; pre-051 cached rings must never be served again.
+    expect([...store.keys()]).toEqual(["iso:foot:v3:normal:44.40000,26.10000"]);
   });
 
   it("coalesces two concurrent cold requests for the same origin into ONE fetch", async () => {

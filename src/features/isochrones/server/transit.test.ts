@@ -30,6 +30,7 @@ vi.mock("@/features/isochrones/server/transit-grid", async (importOriginal) => (
   buildRings: (...args: unknown[]) => buildRingsMock(...args),
 }));
 
+import { departureFields, TIME_PRESETS } from "@/features/isochrones/time-context";
 import { representativeDeparture, transitIsochrone } from "./transit";
 
 type Stop = { place?: { lat?: number; lon?: number }; duration?: number };
@@ -168,8 +169,8 @@ describe("transitIsochrone", () => {
     });
     providerFetch.mockResolvedValue(oneToAll([stop(44.475, 26.16, 20)]));
     const result = await transitIsochrone(44.4268, 26.1025);
-    // buildRings was told NOT to stamp the origin...
-    expect(buildRingsMock.mock.calls[0][2]).toEqual({ stampOrigin: false });
+    // buildRings was told NOT to stamp the origin (egress speed also threaded)...
+    expect(buildRingsMock.mock.calls[0][2]).toMatchObject({ stampOrigin: false });
     // ...and the walk square landed in the output via the union: the ORIGIN
     // (inside the walk square, far from the only stop) is in its own 15-ring.
     expect(result.rings.map((r) => r.minutes)).toEqual([15, 30, 45]);
@@ -193,10 +194,12 @@ describe("transitIsochrone", () => {
     const result = await transitIsochrone(44.4268, 26.1025);
     // First build skipped the origin stamp (walk rings were expected); the
     // all-or-nothing union returned null → one full radial rebuild, never a mix.
-    expect(buildRingsMock.mock.calls.map((c) => c[2])).toEqual([
-      { stampOrigin: false },
-      { stampOrigin: true },
+    expect(buildRingsMock.mock.calls.map((c) => (c[2] as { stampOrigin: boolean }).stampOrigin)).toEqual([
+      false,
+      true,
     ]);
+    // Both builds carry the (normal-pace) egress speed.
+    expect(buildRingsMock.mock.calls.every((c) => typeof (c[2] as { egressMPerMin?: number }).egressMPerMin === "number")).toBe(true);
     expect(booleanPointInPolygon([26.1025, 44.4268], {
       type: "Feature", properties: {},
       geometry: result.rings[0].geometry as never,
@@ -212,7 +215,7 @@ describe("transitIsochrone", () => {
       await vi.advanceTimersByTimeAsync(8_100); // past WALK_RINGS_TIMEOUT_MS
       const result = await pending;
       expect(result.rings).toHaveLength(3);
-      expect(buildRingsMock.mock.calls[0][2]).toEqual({ stampOrigin: true });
+      expect(buildRingsMock.mock.calls[0][2]).toMatchObject({ stampOrigin: true });
     } finally {
       vi.useRealTimers();
     }
@@ -242,7 +245,7 @@ describe("transitIsochrone", () => {
   it("falls back to the radial origin stamp when ORS fails (response still ships)", async () => {
     providerFetch.mockResolvedValue(oneToAll([stop(44.44, 26.12, 5)]));
     const result = await transitIsochrone(44.4268, 26.1025); // default mock: ORS down
-    expect(buildRingsMock.mock.calls[0][2]).toEqual({ stampOrigin: true });
+    expect(buildRingsMock.mock.calls[0][2]).toMatchObject({ stampOrigin: true });
     expect(result.rings).toHaveLength(3);
     expect(booleanPointInPolygon([26.1025, 44.4268], {
       type: "Feature", properties: {},
@@ -256,8 +259,8 @@ describe("transitIsochrone", () => {
     const second = await transitIsochrone(44.4, 26.1);
     expect(providerFetch).toHaveBeenCalledTimes(1);
     expect(second).toEqual(first);
-    // v2 key: pre-calibration cached rings must never be served again.
-    expect([...store.keys()].every((k) => k.startsWith("transit:v2:"))).toBe(true);
+    // v3 key: pace+departure scoped; pre-051 rings must never serve.
+    expect([...store.keys()].every((k) => k.startsWith("transit:v3:"))).toBe(true);
   });
 
   it("pins the speed model and routed transfers in the one-to-all request", async () => {
@@ -308,5 +311,62 @@ describe("representativeDeparture", () => {
     const d = new Date(representativeDeparture(now));
     expect(d.getUTCDay()).toBe(3);
     expect(d.getTime() - now.getTime()).toBeGreaterThan(5 * 24 * 3600 * 1000); // ~7 days out
+  });
+
+  it("resolves every preset to its own weekday + local hour/minute (summer)", () => {
+    const now = new Date("2026-07-20T09:00:00Z"); // Monday, EEST +03
+    for (const p of Object.values(TIME_PRESETS)) {
+      const d = new Date(representativeDeparture(now, departureFields({ kind: "preset", preset: p.id })));
+      expect(d.getUTCDay()).toBe(p.weekday);
+      // local wall time = UTC + 3 in summer
+      expect((d.getUTCHours() + 3) % 24).toBe(p.hour);
+      expect(d.getUTCMinutes()).toBe(p.minute);
+      expect(d.getTime()).toBeGreaterThan(now.getTime());
+    }
+  });
+
+  it("custom same weekday, slot still AHEAD of now → TODAY (allowToday)", () => {
+    const now = new Date("2026-07-22T04:00:00Z"); // Wed 07:00 EEST
+    // custom Wednesday 18:00 → same day, later
+    const d = new Date(representativeDeparture(now, departureFields({ kind: "custom", weekday: 3, hour: 18, minute: 0 })));
+    expect(d.getUTCDay()).toBe(3);
+    expect((d.getUTCHours() + 3) % 24).toBe(18);
+    expect(d.getUTCDate()).toBe(22); // same calendar day
+  });
+
+  it("custom same weekday, slot already PAST today → next week", () => {
+    const now = new Date("2026-07-22T16:00:00Z"); // Wed 19:00 EEST
+    const d = new Date(representativeDeparture(now, departureFields({ kind: "custom", weekday: 3, hour: 8, minute: 30 })));
+    expect(d.getUTCDay()).toBe(3);
+    expect(d.getTime() - now.getTime()).toBeGreaterThan(6 * 24 * 3600 * 1000); // rolled a week
+  });
+
+  it("custom time on a DST fall-back weekend resolves to the requested wall time (offset fixpoint)", () => {
+    // now: Fri 2026-10-23 (EEST +03). Bucharest falls back Sun 2026-10-25 03:00.
+    // Custom Sunday 10:00 is post-transition ⇒ EET (+02) ⇒ 10:00 local = 08:00Z.
+    // (Naively applying now's +03 offset would give the wrong instant.)
+    const now = new Date("2026-10-23T09:00:00Z");
+    const d = new Date(representativeDeparture(now, departureFields({ kind: "custom", weekday: 0, hour: 10, minute: 0 })));
+    expect(d.getUTCDay()).toBe(0); // Sunday
+    expect(d.getUTCDate()).toBe(25);
+    expect([d.getUTCHours(), d.getUTCMinutes()]).toEqual([8, 0]); // 10:00 EET(+2) = 08:00Z
+  });
+
+  it("custom minute is quantised to :00/:30 slots", () => {
+    const now = new Date("2026-07-20T09:00:00Z");
+    const d = new Date(representativeDeparture(now, departureFields({ kind: "custom", weekday: 5, hour: 14, minute: 47 })));
+    expect(d.getUTCMinutes()).toBe(30); // 47 → 30
+    expect(d.getUTCDay()).toBe(5); // Friday
+  });
+
+  it("PROPERTY: always strictly future & the requested weekday, across a week of `now`s and every preset", () => {
+    for (let h = 0; h < 7 * 24; h += 5) {
+      const now = new Date(Date.parse("2026-07-13T00:00:00Z") + h * 3600 * 1000);
+      for (const p of Object.values(TIME_PRESETS)) {
+        const d = new Date(representativeDeparture(now, departureFields({ kind: "preset", preset: p.id })));
+        expect(d.getTime()).toBeGreaterThan(now.getTime());
+        expect(d.getUTCDay()).toBe(p.weekday);
+      }
+    }
   });
 });

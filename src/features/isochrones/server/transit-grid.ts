@@ -74,12 +74,19 @@ export interface Ring {
  * the calibrated egress speed. Pass false when the caller unions the
  * street-routed walking rings instead (transit.ts's normal path) — the radial
  * disc would only ADD over-claimed area the union cannot remove.
+ *
+ * `egressMPerMin` (default the normal-pace `EGRESS_M_PER_MIN`): the radial
+ * egress/origin-walk speed. Task 051 threads the active pace here so stop
+ * egress (and the radial-fallback origin stamp) scale with Relaxed/Brisk in
+ * lockstep with the MOTIS access speed and the unioned ORS ring — otherwise a
+ * paced request would show internally inconsistent rings.
  */
 export function buildRings(
   origin: { lat: number; lng: number },
   stops: TransitStop[],
-  opts?: { stampOrigin?: boolean },
+  opts?: { stampOrigin?: boolean; egressMPerMin?: number },
 ): Ring[] {
+  const egressMPerMin = opts?.egressMPerMin ?? EGRESS_M_PER_MIN;
   const mPerDegLng = 111320 * Math.cos((origin.lat * Math.PI) / 180);
   const spanLng = BUCHAREST_BBOX.maxLng - BUCHAREST_BBOX.minLng;
   const spanLat = BUCHAREST_BBOX.maxLat - BUCHAREST_BBOX.minLat;
@@ -95,7 +102,7 @@ export function buildRings(
   const stamp = (lat: number, lng: number, baseMin: number) => {
     const remaining = MAX_MIN - baseMin;
     if (remaining <= 0) return;
-    const maxR = remaining * EGRESS_M_PER_MIN; // crow-fly metres of egress budget left
+    const maxR = remaining * egressMPerMin; // crow-fly metres of egress budget left
     const di = Math.ceil(maxR / (dLng * mPerDegLng));
     const dj = Math.ceil(maxR / (dLat * M_PER_DEG_LAT));
     const ci = Math.round((lng - BUCHAREST_BBOX.minLng) / dLng - 0.5);
@@ -110,7 +117,7 @@ export function buildRings(
       for (let i = iLo; i <= iHi; i++) {
         const cellLng = BUCHAREST_BBOX.minLng + (i + 0.5) * dLng;
         const dx = (cellLng - lng) * mPerDegLng;
-        const val = baseMin + Math.hypot(dx, dy) / EGRESS_M_PER_MIN;
+        const val = baseMin + Math.hypot(dx, dy) / egressMPerMin;
         if (val > MAX_MIN) continue;
         const k = j * width + i;
         if (val < grid[k]) grid[k] = val;

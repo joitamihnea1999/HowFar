@@ -40,9 +40,11 @@ import { createSelectFlowController } from "@/features/map/select-flow-controlle
 import { createSelectionRender } from "@/features/map/selection-render";
 import { teardownInOrder } from "@/features/map/teardown";
 import ModeToggle from "@/features/map/ModeToggle";
+import PaceControl from "@/features/map/PaceControl";
 import RingSelector from "@/features/map/RingSelector";
 import SearchForm from "@/features/map/SearchForm";
 import SelectionCard from "@/features/map/SelectionCard";
+import TimeContextControl from "@/features/map/TimeContextControl";
 import SuggestList from "@/features/map/SuggestList";
 import {
   comboboxReducer,
@@ -57,6 +59,7 @@ import {
 } from "@/features/search/search-suggest-controller";
 import {
   initialSelectionState,
+  sameTimeContext,
   selectionReducer,
   type Mode,
   type Origin,
@@ -64,6 +67,8 @@ import {
   type SelectionAction,
   type SelectionState,
 } from "@/features/map/selection-flow";
+import { type Pace } from "@/features/isochrones/pace";
+import { type TimeContext } from "@/features/isochrones/time-context";
 
 // Piața Unirii — the classic Bucharest reference point.
 const BUCHAREST_CENTER: [number, number] = [26.1025, 44.4268];
@@ -85,6 +90,9 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const selectRef = useRef<((input: SelectInput, opts?: { recompute?: boolean }) => void) | null>(null);
+  // The most recent user SelectInput, so a pace/time change before the first
+  // selection resolves can re-issue it rather than lose the change (finding G).
+  const pendingInputRef = useRef<SelectInput | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   // Amenities: keyed by rounded origin (NOT the selection token, which a mode
@@ -96,7 +104,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
   // origin; the fetch's abort/gen/key/timer state is internal to the controller.
   const amenityOriginRef = useRef<Origin | null>(null);
   const clearAmenitiesRef = useRef<(() => void) | null>(null);
-  const fetchAmenitiesRef = useRef<((origin: Origin, attempt: number) => void) | null>(null);
+  const fetchAmenitiesRef = useRef<((origin: Origin, attempt: number, pace: Pace) => void) | null>(null);
   const inspectAmenityRef = useRef<((item: Amenity) => void) | null>(null);
   const applyAmenitySelectionRef = useRef<((categories: AmenityCategoryKey[]) => void) | null>(null);
   const [amenity, setAmenity] = useState<AmenityUi>({ status: "idle", counts: null, items: [] });
@@ -278,6 +286,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
     const selectFlow = createSelectFlowController({
       dispatchSel,
       selRef,
+      pendingInputRef,
       abortRef,
       clearSelection,
       clearAmenities,
@@ -428,12 +437,44 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
     }
   }
 
+  // Recompute the current point after a pace / departure-context change, exactly
+  // like switchMode: abort any in-flight request, snapshot the new setting via
+  // the reducer (which bumps the token), then re-issue. A pace change re-runs
+  // rings AND amenities (new radius); a time change re-runs transit rings only
+  // (amenities dedupe on same origin+pace). With no resolved selection yet, a
+  // still-loading first request is re-issued from its pending input so the
+  // change is not lost (finding G); otherwise there's nothing to recompute.
+  function recomputeCurrent() {
+    const last = selRef.current.lastSelection;
+    if (last) {
+      selectRef.current?.({ kind: "point", lat: last.lat, lng: last.lng, label: last.label }, { recompute: true });
+    } else if (pendingInputRef.current) {
+      selectRef.current?.(pendingInputRef.current, { recompute: true });
+    }
+  }
+
+  function setPace(next: Pace) {
+    if (next === selRef.current.pace) return;
+    abortRef.current?.abort();
+    dispatchSel({ type: "setPace", pace: next });
+    recomputeCurrent();
+  }
+
+  function setTimeContext(next: TimeContext) {
+    if (sameTimeContext(next, selRef.current.timeContext)) return;
+    abortRef.current?.abort();
+    dispatchSel({ type: "setTimeContext", timeContext: next });
+    // Departure only affects transit; in walk mode just record it for when the
+    // user switches to transit (no recompute needed).
+    if (selRef.current.mode === "transit") recomputeCurrent();
+  }
+
   // Manual retry from the AmenityPanel error state. Restarts the attempt
   // counter (a fresh user gesture earns a fresh auto-retry); the origin is the
   // one whose fetch failed — an error never clears it, only a new selection does.
   function retryAmenities() {
     const origin = amenityOriginRef.current;
-    if (origin) fetchAmenitiesRef.current?.(origin, 0);
+    if (origin) fetchAmenitiesRef.current?.(origin, 0, selRef.current.pace);
   }
 
   function onSubmit(e: React.FormEvent) {
@@ -526,9 +567,25 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
               mode={sel.mode}
               ringFilter={ringFilter}
               loading={sel.status === "loading"}
+              departure={sel.departure}
             />
+            {/* Reach refinements live WITH the result they adjust — pace (both
+                modes) and, in transit, the departure context. Keeps the top
+                command dock compact (no map-covering rail). */}
+            <div className="mt-2.5 grid gap-2.5 border-t border-white/[.07] pt-2.5">
+              <PaceControl pace={sel.pace} onSelect={setPace} />
+              {sel.mode === "transit" ? (
+                <TimeContextControl value={sel.timeContext} onSelect={setTimeContext} />
+              ) : null}
+            </div>
             <AmenityPanel
-              key={sel.token}
+              // Key on amenity IDENTITY (resolved origin + pace) — the only
+              // things that change the amenity set — NOT sel.token. A mode
+              // toggle or a transit time change keeps the same origin+pace, so
+              // the panel no longer remounts and lose its open Browse list /
+              // text filter (impl-panel finding); a new origin or pace change
+              // still remounts to reset that transient state.
+              key={`${sel.lastSelection?.lat ?? "x"},${sel.lastSelection?.lng ?? "x"}:${sel.pace}`}
               status={amenity.status}
               counts={amenityCounts}
               items={amenity.items}

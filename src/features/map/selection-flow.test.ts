@@ -6,8 +6,10 @@ import {
   GENERIC_ERROR,
   initialSelectionState,
   isochronePath,
+  isochroneUrl,
   modeWord,
   reverseIsFatal,
+  sameTimeContext,
   selectionReducer,
   type SelectionAction,
   type SelectionState,
@@ -227,5 +229,89 @@ describe("pure helpers", () => {
 
   it("exposes the generic catch-all copy", () => {
     expect(GENERIC_ERROR).toBe("Something went wrong. Try again.");
+  });
+});
+
+describe("selectionReducer — setPace / setTimeContext (task 051)", () => {
+  it("defaults are normal pace + weekday-morning preset (byte-identical baseline)", () => {
+    expect(initialSelectionState.pace).toBe("normal");
+    expect(initialSelectionState.timeContext).toEqual({ kind: "preset", preset: "weekday-morning" });
+  });
+
+  it("setPace bumps the token (drops in-flight) and snapshots the pace", () => {
+    const resolved = selectionReducer(start(), { type: "resolved", token: 1, origin: ORIGIN, label: "X" });
+    const next = selectionReducer(resolved, { type: "setPace", pace: "brisk" });
+    expect(next.pace).toBe("brisk");
+    expect(next.token).toBe(resolved.token + 1);
+    // a pre-change response is now stale
+    expect(selectionReducer(next, { type: "resolved", token: resolved.token, origin: ORIGIN, label: "stale" })).toBe(next);
+  });
+
+  it("setPace to the SAME pace is a no-op (no wasted recompute/fetch)", () => {
+    const s = start();
+    expect(selectionReducer(s, { type: "setPace", pace: "normal" })).toBe(s);
+  });
+
+  it("a pace change mid-first-load (loading, no lastSelection) stays loading and is NOT lost", () => {
+    const loading = start(); // status loading, lastSelection null
+    const next = selectionReducer(loading, { type: "setPace", pace: "relaxed" });
+    expect(next.pace).toBe("relaxed");
+    expect(next.token).toBe(loading.token + 1); // controller re-issues pending input
+    expect(next.status).toBe("loading");
+  });
+
+  it("a pace change while idle with no selection goes idle (nothing to recompute)", () => {
+    const next = selectionReducer(initialSelectionState, { type: "setPace", pace: "brisk" });
+    expect(next.status).toBe("idle");
+  });
+
+  it("setTimeContext bumps the token and stores the context; same context is a no-op", () => {
+    const resolved = selectionReducer(start("transit"), { type: "resolved", token: 1, origin: ORIGIN, label: "X" });
+    const custom = { kind: "custom" as const, weekday: 6, hour: 9, minute: 30 };
+    const next = selectionReducer(resolved, { type: "setTimeContext", timeContext: custom });
+    expect(next.timeContext).toEqual(custom);
+    expect(next.token).toBe(resolved.token + 1);
+    expect(selectionReducer(next, { type: "setTimeContext", timeContext: custom })).toBe(next); // no-op
+  });
+
+  it("resolved carries the transit departure; a walk resolve clears it", () => {
+    const s = selectionReducer(start("transit"), {
+      type: "resolved",
+      token: 1,
+      origin: ORIGIN,
+      label: "X",
+      departure: { iso: "2026-07-29T05:30:00.000Z", summary: "Weekday morning" },
+    });
+    expect(s.departure).toEqual({ iso: "2026-07-29T05:30:00.000Z", summary: "Weekday morning" });
+    const walk = selectionReducer(start("walk"), { type: "resolved", token: 1, origin: ORIGIN, label: "X" });
+    expect(walk.departure).toBeNull();
+  });
+});
+
+describe("sameTimeContext", () => {
+  it("compares presets and custom fields", () => {
+    expect(sameTimeContext({ kind: "preset", preset: "midday" }, { kind: "preset", preset: "midday" })).toBe(true);
+    expect(sameTimeContext({ kind: "preset", preset: "midday" }, { kind: "preset", preset: "evening" })).toBe(false);
+    expect(sameTimeContext({ kind: "custom", weekday: 6, hour: 9, minute: 30 }, { kind: "custom", weekday: 6, hour: 9, minute: 30 })).toBe(true);
+    expect(sameTimeContext({ kind: "custom", weekday: 6, hour: 9, minute: 30 }, { kind: "custom", weekday: 6, hour: 9, minute: 0 })).toBe(false);
+    expect(sameTimeContext({ kind: "preset", preset: "weekend" }, { kind: "custom", weekday: 6, hour: 12, minute: 0 })).toBe(false);
+  });
+});
+
+describe("isochroneUrl (task 051 query contract)", () => {
+  it("walk carries only pace", () => {
+    expect(isochroneUrl("walk", ORIGIN, "brisk", { kind: "preset", preset: "weekday-morning" })).toBe(
+      "/api/isochrone?lat=44.4268&lng=26.1025&pace=brisk",
+    );
+  });
+  it("transit preset adds &preset", () => {
+    expect(isochroneUrl("transit", ORIGIN, "normal", { kind: "preset", preset: "evening" })).toBe(
+      "/api/transit?lat=44.4268&lng=26.1025&pace=normal&preset=evening",
+    );
+  });
+  it("transit custom adds &weekday&time (URL-encoded colon, zero-padded)", () => {
+    expect(isochroneUrl("transit", ORIGIN, "relaxed", { kind: "custom", weekday: 6, hour: 9, minute: 0 })).toBe(
+      "/api/transit?lat=44.4268&lng=26.1025&pace=relaxed&weekday=6&time=09%3A00",
+    );
   });
 });

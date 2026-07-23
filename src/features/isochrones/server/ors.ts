@@ -1,3 +1,4 @@
+import { DEFAULT_PACE, PACE_MODEL, type Pace } from "@/features/isochrones/pace";
 import { getCachedSafe, setCachedSafe } from "@/lib/api-cache";
 import { serverEnv } from "@/lib/env";
 import { providerFetch, ProviderError, roundCoord } from "@/lib/provider-http";
@@ -13,17 +14,18 @@ const HOST = "api.openrouteservice.org";
 const MIN_INTERVAL_MS = 1500; // free tier ~40 isochrone req/min (PROVIDERS.md) ⇒ ≥1.5s spacing
 const TIMEOUT_MS = 12_000;
 const TTL_MS = 7 * 24 * 60 * 60 * 1000;
-// The requested ranges are CALIBRATED, not nominal. ORS foot-walking boundaries
-// are systematically generous versus real street walking: auditing ring
-// boundaries with street-routed distances (MOTIS one-to-many, withDistance) at
-// three diverse origins (Unirii / Grozăvești / Berceni, 2026-07-17) put the
-// nominal 900/1800/2700 s boundaries at 1.265/1.164/1.123 × their labels at
-// 80 m/min. Two-pass fit (initial scale, then one measured iteration because
-// the factor grows as ranges shrink) landed the values below; re-audited
-// boundaries sit at ≈ the nominal minutes (15-ring median 15.0, residuals
-// within ±10%). So the polygon LABELED "15/30/45 min" truly takes ≈ that many
-// street-walking minutes. Methodology + re-run: docs/PROVIDERS.md "Calibration".
-const CALIBRATED_RANGES_S = [827, 1674, 2528];
+// The requested ranges are CALIBRATED, not nominal, and now PACE-SCALED. ORS
+// foot-walking boundaries are systematically generous versus real street
+// walking: auditing ring boundaries with street-routed distances (MOTIS
+// one-to-many, withDistance) at three diverse origins (Unirii / Grozăvești /
+// Berceni, 2026-07-17) put the nominal 900/1800/2700 s boundaries at
+// 1.265/1.164/1.123 × their labels at 80 m/min. Two-pass fit landed the
+// normal-pace calibrated triple [827,1674,2528] (now in `pace.ts`
+// NORMAL_ORS_RANGES_S). For non-normal paces the triple is that calibrated
+// baseline scaled by speed/80 (task 051, distance is speed-independent);
+// `PACE_MODEL[pace].orsRangesS` is the requested triple. So the polygon LABELED
+// "15/30/45 min" takes ≈ that many street-walking minutes at the chosen pace.
+// Methodology + re-run: docs/PROVIDERS.md "Calibration".
 const NOMINAL_MINUTES = [15, 30, 45];
 const RANGE_TOLERANCE_S = 1; // ORS echoes the requested range in properties.value
 
@@ -51,10 +53,10 @@ interface OrsFeature {
  * only then relabeled to 15/30/45. A dropped, duplicated, reordered-but-wrong
  * or unscaled feature must 502 here — silently mislabeling would lie on the
  * map AND corrupt the amenities clip (it uses the "15-min" ring). */
-function normalize(features: OrsFeature[]): Ring[] {
-  if (features.length !== CALIBRATED_RANGES_S.length) {
+function normalize(features: OrsFeature[], expectedRangesS: readonly number[]): Ring[] {
+  if (features.length !== expectedRangesS.length) {
     throw new ProviderError(
-      `openrouteservice returned ${features.length} rings (expected ${CALIBRATED_RANGES_S.length})`,
+      `openrouteservice returned ${features.length} rings (expected ${expectedRangesS.length})`,
     );
   }
   const sorted = [...features].sort(
@@ -62,10 +64,10 @@ function normalize(features: OrsFeature[]): Ring[] {
   );
   return sorted.map((f, i) => {
     const value = f?.properties?.value;
-    if (typeof value !== "number" || Math.abs(value - CALIBRATED_RANGES_S[i]!) > RANGE_TOLERANCE_S) {
+    if (typeof value !== "number" || Math.abs(value - expectedRangesS[i]!) > RANGE_TOLERANCE_S) {
       throw new ProviderError(
         `openrouteservice ring values [${sorted.map((s) => s?.properties?.value).join(", ")}] ` +
-          `do not match the calibrated ranges [${CALIBRATED_RANGES_S.join(", ")}]`,
+          `do not match the requested ranges [${expectedRangesS.join(", ")}]`,
       );
     }
     const geometry = f?.geometry;
@@ -92,12 +94,18 @@ function normalize(features: OrsFeature[]): Ring[] {
 // rate-limited/quota-capped POST. Cleared on settle.
 const inFlight = new Map<string, Promise<IsochroneResult>>();
 
-/** Walking isochrone (15/30/45 min) from a point. Coord is rounded ONCE and
- *  reused for the cache key, the ORS request, and the returned origin. */
-export async function walkingIsochrone(latRaw: number, lngRaw: number): Promise<IsochroneResult> {
-  // v2: calibrated ranges (see CALIBRATED_RANGES_S) — the version bump makes
-  // sure no pre-calibration (over-generous) cached ring is ever served again.
-  const key = `iso:foot:v2:${roundCoord(latRaw)},${roundCoord(lngRaw)}`;
+/** Walking isochrone (15/30/45 min) from a point at a walking `pace`. Coord is
+ *  rounded ONCE and reused for the cache key, the ORS request, and the returned
+ *  origin. `pace` selects the requested (calibrated, speed-scaled) ranges. */
+export async function walkingIsochrone(
+  latRaw: number,
+  lngRaw: number,
+  pace: Pace = DEFAULT_PACE,
+): Promise<IsochroneResult> {
+  // v3: cache key includes pace so a Relaxed/Brisk request never serves the
+  // Normal ring (and concurrent different-pace callers don't share one flight).
+  // The version bump also retires all pre-051 (v2) cached rings.
+  const key = `iso:foot:v3:${pace}:${roundCoord(latRaw)},${roundCoord(lngRaw)}`;
 
   const hit = await getCachedSafe<IsochroneResult>(key);
   if (hit) return hit;
@@ -105,7 +113,7 @@ export async function walkingIsochrone(latRaw: number, lngRaw: number): Promise<
   const existing = inFlight.get(key);
   if (existing) return existing;
 
-  const promise = fetchAndCache(latRaw, lngRaw, key);
+  const promise = fetchAndCache(latRaw, lngRaw, pace, key);
   inFlight.set(key, promise);
   try {
     return await promise;
@@ -114,9 +122,15 @@ export async function walkingIsochrone(latRaw: number, lngRaw: number): Promise<
   }
 }
 
-async function fetchAndCache(latRaw: number, lngRaw: number, key: string): Promise<IsochroneResult> {
+async function fetchAndCache(
+  latRaw: number,
+  lngRaw: number,
+  pace: Pace,
+  key: string,
+): Promise<IsochroneResult> {
   const lat = Number(roundCoord(latRaw));
   const lng = Number(roundCoord(lngRaw));
+  const ranges = PACE_MODEL[pace].orsRangesS;
 
   const apiKey = serverEnv().orsApiKey;
   if (!apiKey) throw new ProviderError("ORS_API_KEY is not configured");
@@ -133,7 +147,7 @@ async function fetchAndCache(latRaw: number, lngRaw: number, key: string): Promi
         // ORS isochrones serves application/geo+json; do NOT send Accept: application/json (→ 406).
         headers: { Authorization: apiKey, "Content-Type": "application/json" },
         // ORS expects [lng, lat] order.
-        body: JSON.stringify({ locations: [[lng, lat]], range: CALIBRATED_RANGES_S }),
+        body: JSON.stringify({ locations: [[lng, lat]], range: ranges }),
       },
     });
     if (!res.ok) throw new ProviderError(`openrouteservice responded ${res.status}`);
@@ -151,9 +165,9 @@ async function fetchAndCache(latRaw: number, lngRaw: number, key: string): Promi
   if (body.features !== undefined && !Array.isArray(body.features)) {
     throw new ProviderError("openrouteservice returned a malformed response (features not an array)");
   }
-  // normalize enforces the full contract (count, calibrated values, geometry)
-  // and throws ProviderError itself — rings come back ascending 15/30/45.
-  const rings = normalize(body.features ?? []);
+  // normalize enforces the full contract (count, requested-range bijection,
+  // geometry) and throws ProviderError itself — rings ascending 15/30/45.
+  const rings = normalize(body.features ?? [], ranges);
 
   const result: IsochroneResult = { origin: { lat, lng }, rings };
   await setCachedSafe(key, result, new Date(Date.now() + TTL_MS));

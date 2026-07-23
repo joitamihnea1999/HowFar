@@ -96,16 +96,16 @@ describe("nearbyAmenities local catalogue flow", () => {
       amenities: [],
       catalogue: { sourceTimestamp: "2099-07-20T06:45:42.000Z", stale: false },
     });
-    expect(walkingIsochrone).toHaveBeenCalledWith(44.426801, 26.102499);
+    expect(walkingIsochrone).toHaveBeenCalledWith(44.426801, 26.102499, "normal");
     expect(querySummary).toHaveBeenCalledWith(
       expect.anything(),
       "dataset-1",
       ring,
       { lat: 44.4268, lng: 26.1025 },
     );
-    expect(amenityCacheRead).toHaveBeenCalledWith(amenityResultCacheKey("dataset-1", 44.4268, 26.1025));
+    expect(amenityCacheRead).toHaveBeenCalledWith(amenityResultCacheKey("dataset-1", 44.4268, 26.1025, "normal"));
     expect(amenityCacheWrite).toHaveBeenCalledWith(
-      amenityResultCacheKey("dataset-1", 44.4268, 26.1025),
+      amenityResultCacheKey("dataset-1", 44.4268, 26.1025, "normal"),
       expect.objectContaining({
         datasetId: "dataset-1",
         origin: { lat: 44.4268, lng: 26.1025 },
@@ -241,6 +241,30 @@ describe("nearbyAmenities local catalogue flow", () => {
     expect(findActiveDataset).toHaveBeenCalledTimes(1);
     expect(walkingIsochrone).toHaveBeenCalledTimes(1);
     expect(withActiveDataset).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT coalesce different paces for the same origin (task 051 — a Brisk request must not get Relaxed counts)", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    withActiveDataset.mockImplementation(async (read) => {
+      await gate;
+      return read(
+        { amenityDataset: { findUniqueOrThrow: () => Promise.resolve({ sourceTimestamp: freshSource }) } },
+        "dataset-1",
+      );
+    });
+    const relaxed = nearbyAmenities(44.4268, 26.1025, "relaxed");
+    const brisk = nearbyAmenities(44.4268, 26.1025, "brisk");
+    release();
+    await Promise.all([relaxed, brisk]);
+    // Distinct flight keys ⇒ two independent computations, each with its OWN pace
+    // threaded into the ORS walk-ring call (no coalescing onto a wrong-pace ring).
+    expect(walkingIsochrone).toHaveBeenCalledTimes(2);
+    const paces = (walkingIsochrone as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => c[2]);
+    expect(paces).toContain("relaxed");
+    expect(paces).toContain("brisk");
   });
 });
 

@@ -14,9 +14,17 @@ import {
   isNewAmenityOrigin,
   originKey,
 } from "@/features/amenities/amenities-flow";
+import { type Pace } from "@/features/isochrones/pace";
 import type { LoadState } from "@/features/map/load-state";
 import { EMPTY_FC } from "@/features/map/map-setup";
 import type { Origin } from "@/features/map/selection-flow";
+
+/** Amenity-fetch identity: address (rounded origin) + pace, since the counting
+ * radius (the ORS 15-min walk ring) is pace-dependent. A pace change ⇒ new key
+ * ⇒ refetch; a mode-toggle / time-only change keeps the key ⇒ markers persist. */
+function amenityKey(origin: Origin, pace: Pace): string {
+  return `${originKey(origin.lat, origin.lng)}:${pace}`;
+}
 
 /** Amenities are a property of the resolved address, independent of the travel
  * mode — so they live outside the selection state machine, in their own UI slice. */
@@ -134,8 +142,8 @@ export function createAmenitiesController({
   // would self-heal. Any failure that DOES surface clears the origin key — an
   // error must never pin the key, or the panel's Retry button and a mode-toggle
   // recompute would be swallowed by the isNewAmenityOrigin guard.
-  function fetchAmenities(origin: Origin, attempt: number) {
-    key = originKey(origin.lat, origin.lng);
+  function fetchAmenities(origin: Origin, attempt: number, pace: Pace) {
+    key = amenityKey(origin, pace);
     amenityOriginRef.current = origin;
     const reqGen = (gen += 1);
     abort?.abort();
@@ -147,7 +155,7 @@ export function createAmenitiesController({
       if (classifyAmenityFailure(httpStatus, attempt) === "retry") {
         retryTimer = setTimeout(() => {
           if (reqGen !== gen) return; // superseded meanwhile
-          fetchAmenities(origin, attempt + 1);
+          fetchAmenities(origin, attempt + 1, pace);
         }, AMENITY_RETRY_DELAY_MS);
         return;
       }
@@ -157,7 +165,7 @@ export function createAmenitiesController({
       setAmenity({ status: "error", counts: null, items: [] });
     };
 
-    fetch(`/api/amenities?lat=${origin.lat}&lng=${origin.lng}`, { signal: controller.signal })
+    fetch(`/api/amenities?lat=${origin.lat}&lng=${origin.lng}&pace=${pace}`, { signal: controller.signal })
       .then(async (res) => {
         if (reqGen !== gen) return;
         if (!res.ok) return void failWith(res.status);
@@ -176,14 +184,15 @@ export function createAmenitiesController({
       });
   }
 
-  // Fetch amenities for a resolved origin, in parallel with the isochrone. A
-  // toggle recompute resolves the same origin ⇒ no refetch — unless the last
-  // fetch FAILED (the error path cleared the key), in which case the same origin
-  // fetches again. A failure surfaces an amenity-only error, never the isochrone.
-  function maybeFetchAmenities(origin: Origin) {
-    const nextKey = originKey(origin.lat, origin.lng);
+  // Fetch amenities for a resolved origin at the active pace, in parallel with
+  // the isochrone. A mode-toggle or time-only change resolves the SAME
+  // origin+pace ⇒ no refetch (markers persist). A PACE change resolves the same
+  // origin but a NEW pace-scoped key ⇒ refetch (the walk-ring radius changed, so
+  // counts must). A failure cleared the key, so the same origin+pace refetches.
+  function maybeFetchAmenities(origin: Origin, pace: Pace) {
+    const nextKey = amenityKey(origin, pace);
     if (!isNewAmenityOrigin(key, nextKey)) return;
-    fetchAmenities(origin, 0);
+    fetchAmenities(origin, 0, pace);
   }
 
   return {

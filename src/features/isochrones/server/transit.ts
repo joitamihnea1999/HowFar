@@ -1,3 +1,4 @@
+import { DEFAULT_PACE, PACE_MODEL, type Pace } from "@/features/isochrones/pace";
 import { walkingIsochrone } from "@/features/isochrones/server/ors";
 import {
   buildRings,
@@ -6,6 +7,12 @@ import {
   type TransitStop,
   type WalkRing,
 } from "@/features/isochrones/server/transit-grid";
+import {
+  DEFAULT_TIME_CONTEXT,
+  departureFields,
+  type DepartureFields,
+  type TimeContext,
+} from "@/features/isochrones/time-context";
 import { getCachedSafe, setCachedSafe } from "@/lib/api-cache";
 import { BUCHAREST_BBOX } from "@/lib/bounds";
 import { providerFetch, ProviderError, roundCoord, USER_AGENT } from "@/lib/provider-http";
@@ -27,11 +34,10 @@ const MIN_INTERVAL_MS = 1500; // community-run; be a good citizen
 const TIMEOUT_MS = 20_000; // one-to-all is heavy (~1.5–3 s live)
 const TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_TRAVEL_MIN = THRESHOLDS[THRESHOLDS.length - 1]; // 45
-// Pin MOTIS's access-walk speed to the product's 80 m/min (= 1.333 m/s) so the
-// per-stop durations share one speed model with the egress stamps and the walk
-// rings; routed transfers cost nothing extra and reach ~4% more stops
-// (probed live 2026-07-17: 2508→2607 stops, same latency).
-const PEDESTRIAN_SPEED_M_S = "1.333";
+// MOTIS access-walk speed, egress stamping, and the unioned ORS ring all read
+// ONE speed model — `PACE_MODEL[pace]` (task 051). Normal pace == the pre-051
+// pinned "1.333" m/s so an unchanged request stays byte-identical; routed
+// transfers cost nothing extra and reach ~4% more stops (probed 2026-07-17).
 // Ceiling on how long the transit response waits for the walking rings: past
 // this, ship with the radial origin fallback instead of inheriting ORS's
 // rate-limit queue or a stalled body. The unfinished ORS call keeps running
@@ -39,9 +45,6 @@ const PEDESTRIAN_SPEED_M_S = "1.333";
 const WALK_RINGS_TIMEOUT_MS = 8_000;
 
 const BUCHAREST_TZ = "Europe/Bucharest";
-const REPRESENTATIVE_WEEKDAY = 3; // Wednesday
-const REPRESENTATIVE_HOUR = 8;
-const REPRESENTATIVE_MINUTE = 30;
 
 export interface TransitIsochroneResult {
   /** The rounded origin actually sent to Transitous (== marker origin == cache key). */
@@ -88,27 +91,52 @@ function bucharestOffsetMinutes(date: Date): number {
 
 /**
  * A stable, representative departure so transit reach doesn't swing with the
- * time of day the user happens to visit (a night-time "now" would show near-
- * empty rings). Pins the coming Wednesday 08:30 Europe/Bucharest — stable for
- * ~6 days (good cache reuse), rolls forward weekly. Exported for tests.
+ * moment the user happens to visit (a night-time "now" would show near-empty
+ * rings). Resolves `fields` (weekday/hour/minute + allowToday) to the nearest
+ * UPCOMING Europe/Bucharest instant, DST-correct. Default (no `fields`) ==
+ * upcoming Wednesday 08:30, never-today — the pre-051 behaviour, byte-identical.
+ *
+ * `allowToday=false` (presets): strictly-future, never today → ~6-day cache
+ * reuse, rolls forward weekly. `allowToday=true` (custom): same-day if the
+ * chosen slot is still ahead of now, else next week. Exported for tests.
+ *
+ * DST: the offset is recomputed AT the target instant (`offAtTarget`), so
+ * spring-forward/fall-back are handled; a wall time in a fold resolves to the
+ * offset Intl reports for that instant (deterministic, single occurrence).
  */
-export function representativeDeparture(now: Date = new Date()): string {
+export function representativeDeparture(
+  now: Date = new Date(),
+  fields: DepartureFields = departureFields(DEFAULT_TIME_CONTEXT),
+): string {
+  const { weekday, hour, minute, allowToday } = fields;
   const off = bucharestOffsetMinutes(now);
   // Shift into Bucharest wall time so getUTC* read local calendar fields.
   const wall = new Date(now.getTime() + off * 60000);
   const dow = wall.getUTCDay();
-  let add = (REPRESENTATIVE_WEEKDAY - dow + 7) % 7;
-  if (add === 0) add = 7; // strictly upcoming, never "today"
+  let add = (weekday - dow + 7) % 7;
+  if (add === 0 && !allowToday) add = 7; // presets: strictly upcoming, never "today"
   // Wall-clock target as if UTC, then convert back to the real UTC instant.
-  const wallTarget = Date.UTC(
-    wall.getUTCFullYear(),
-    wall.getUTCMonth(),
-    wall.getUTCDate() + add,
-    REPRESENTATIVE_HOUR,
-    REPRESENTATIVE_MINUTE,
-    0,
-  );
-  const offAtTarget = bucharestOffsetMinutes(new Date(wallTarget - off * 60000));
+  const buildWall = (daysAhead: number) =>
+    Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth(), wall.getUTCDate() + daysAhead, hour, minute, 0);
+  let wallTarget = buildWall(add);
+  // Same-day custom whose slot already passed today → roll a full week forward.
+  if (add === 0 && allowToday && wallTarget <= wall.getTime()) {
+    wallTarget = buildWall(7);
+  }
+  // Convert the wall target to a real UTC instant, iterating the offset to a
+  // FIXPOINT. A single `off`-based estimate is wrong when a DST transition falls
+  // between `now` and the target (the offset there differs): the estimated
+  // instant reads the wrong offset and lands ~1h off. Two–three iterations
+  // converge for normal + fall-back (fold) cases; a spring-forward GAP slot
+  // (a wall time that doesn't exist) settles just past the gap — a valid future
+  // instant. Presets (top of the hour / :30 well clear of transitions) are
+  // unaffected either way.
+  let offAtTarget = off;
+  for (let i = 0; i < 3; i++) {
+    const next = bucharestOffsetMinutes(new Date(wallTarget - offAtTarget * 60000));
+    if (next === offAtTarget) break;
+    offAtTarget = next;
+  }
   return new Date(wallTarget - offAtTarget * 60000).toISOString();
 }
 
@@ -146,12 +174,20 @@ function parseStops(all: OneToAllStop[]): TransitStop[] {
 // pattern — fair use under bursts). Cleared on settle.
 const inFlight = new Map<string, Promise<TransitIsochroneResult>>();
 
-/** Transit isochrone (15/30/45 min) from a point, via Transitous one-to-all. */
-export async function transitIsochrone(latRaw: number, lngRaw: number): Promise<TransitIsochroneResult> {
-  const departure = representativeDeparture();
-  // v2: calibrated egress + pinned pedestrian speed + routed transfers + union
-  // (the version bump keeps pre-calibration cached rings from ever serving).
-  const key = `transit:v2:${roundCoord(latRaw)},${roundCoord(lngRaw)}:${departure}`;
+/** Transit isochrone (15/30/45 min) from a point, via Transitous one-to-all, at
+ * a walking `pace` and departure `timeContext`. Defaults reproduce the pre-051
+ * request exactly (normal pace, weekday-morning preset). */
+export async function transitIsochrone(
+  latRaw: number,
+  lngRaw: number,
+  pace: Pace = DEFAULT_PACE,
+  timeContext: TimeContext = DEFAULT_TIME_CONTEXT,
+): Promise<TransitIsochroneResult> {
+  const departure = representativeDeparture(new Date(), departureFields(timeContext));
+  // v3: cache key includes pace + departure so paced/time-shifted rings never
+  // serve a Normal/other-time result (and different-pace/time concurrent callers
+  // don't share one flight). The bump also retires all pre-051 (v2) entries.
+  const key = `transit:v3:${pace}:${roundCoord(latRaw)},${roundCoord(lngRaw)}:${departure}`;
 
   const hit = await getCachedSafe<TransitIsochroneResult>(key);
   if (hit) return hit;
@@ -159,7 +195,7 @@ export async function transitIsochrone(latRaw: number, lngRaw: number): Promise<
   const existing = inFlight.get(key);
   if (existing) return existing;
 
-  const promise = fetchAndBuild(latRaw, lngRaw, departure, key);
+  const promise = fetchAndBuild(latRaw, lngRaw, pace, departure, key);
   inFlight.set(key, promise);
   try {
     return await promise;
@@ -171,17 +207,19 @@ export async function transitIsochrone(latRaw: number, lngRaw: number): Promise<
 async function fetchAndBuild(
   latRaw: number,
   lngRaw: number,
+  pace: Pace,
   departure: string,
   key: string,
 ): Promise<TransitIsochroneResult> {
   const lat = Number(roundCoord(latRaw));
   const lng = Number(roundCoord(lngRaw));
+  const paceModel = PACE_MODEL[pace];
 
-  // Street-routed origin walk, fetched IN PARALLEL with one-to-all (coalesced
-  // with /api/isochrone + amenities via ors.ts's single-flight + 7d cache, so
-  // a fresh transit selection costs ≤1 marginal ORS call). Failure is non-fatal
-  // — the radial origin stamp takes over and the response still ships.
-  const walkPromise: Promise<WalkRing[] | null> = walkingIsochrone(latRaw, lngRaw)
+  // Street-routed origin walk AT THE ACTIVE PACE, fetched IN PARALLEL with
+  // one-to-all (coalesced with /api/isochrone + amenities via ors.ts's
+  // single-flight + 7d cache, so a fresh transit selection costs ≤1 marginal ORS
+  // call). Failure is non-fatal — the radial origin stamp takes over.
+  const walkPromise: Promise<WalkRing[] | null> = walkingIsochrone(latRaw, lngRaw, pace)
     .then((r) => r.rings as WalkRing[])
     .catch((err: Error) => {
       console.error(`[transit] walking rings unavailable, radial origin fallback: ${err.message}`);
@@ -194,7 +232,7 @@ async function fetchAndBuild(
     const url =
       `${URL}?one=${lat},${lng}&maxTravelTime=${MAX_TRAVEL_MIN}` +
       `&transitModes=TRANSIT&time=${encodeURIComponent(departure)}` +
-      `&pedestrianSpeed=${PEDESTRIAN_SPEED_M_S}&useRoutedTransfers=true`;
+      `&pedestrianSpeed=${paceModel.pedestrianSpeedMs}&useRoutedTransfers=true`;
     const res = await providerFetch(url, {
       rateHost: HOST,
       minIntervalMs: MIN_INTERVAL_MS,
@@ -232,9 +270,11 @@ async function fetchAndBuild(
     // any per-ring failure returns null and the WHOLE family is rebuilt with
     // the radial origin stamp — a mixed family could exclude the origin from
     // one of its own rings and break nesting (then sit in cache for 7 days).
-    const built = buildRings({ lat, lng }, stops, { stampOrigin: !walkRings });
+    const egressMPerMin = paceModel.egressMPerMin;
+    const built = buildRings({ lat, lng }, stops, { stampOrigin: !walkRings, egressMPerMin });
     rings = walkRings
-      ? (unionRings(built, walkRings) ?? buildRings({ lat, lng }, stops, { stampOrigin: true }))
+      ? (unionRings(built, walkRings) ??
+        buildRings({ lat, lng }, stops, { stampOrigin: true, egressMPerMin }))
       : built;
   } catch (err) {
     throw new ProviderError(`transit isochrone construction failed: ${(err as Error).message}`);

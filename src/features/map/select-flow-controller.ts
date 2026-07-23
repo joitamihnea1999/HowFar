@@ -1,5 +1,7 @@
+import { type Pace } from "@/features/isochrones/pace";
+import { timeContextSummary } from "@/features/isochrones/time-context";
 import {
-  isochronePath,
+  isochroneUrl,
   reverseIsFatal,
   type Mode,
   type Origin,
@@ -13,6 +15,17 @@ interface GeoPoint {
   lat: number;
   lng: number;
   label: string;
+}
+
+/** Departure info for the UI honesty copy — only for transit, only when the
+ * server echoed a departure ISO. Walk selections carry null (cleared). */
+function departureInfo(
+  mode: Mode,
+  departureIso: string | undefined,
+  timeContext: Parameters<typeof timeContextSummary>[0],
+): { iso: string; summary: string } | null {
+  if (mode !== "transit" || !departureIso) return null;
+  return { iso: departureIso, summary: timeContextSummary(timeContext) };
 }
 
 /**
@@ -33,6 +46,7 @@ interface GeoPoint {
 export function createSelectFlowController({
   dispatchSel,
   selRef,
+  pendingInputRef,
   abortRef,
   clearSelection,
   clearAmenities,
@@ -41,19 +55,28 @@ export function createSelectFlowController({
 }: {
   dispatchSel: (action: SelectionAction) => SelectionState;
   selRef: { current: SelectionState };
+  pendingInputRef: { current: SelectInput | null };
   abortRef: { current: AbortController | null };
   clearSelection: () => void;
   clearAmenities: () => void;
-  maybeFetchAmenities: (origin: Origin) => void;
+  maybeFetchAmenities: (origin: Origin, pace: Pace) => void;
   renderSelection: (origin: Origin, label: string, rings: Ring[], mode: Mode) => void;
 }) {
   async function select(input: SelectInput, opts?: { recompute?: boolean }) {
+    // Record the input so a pace/time change before this resolves can re-issue
+    // it (finding G). A recompute re-issues an already-tracked input.
+    pendingInputRef.current = input;
     // Snapshot the mode ONCE (from the selection machine) so this response's
     // endpoint, colors, legend and data-mode all agree even if the user toggles
     // mid-flight; `start` bumps the token that guards staleness. A toggle-driven
     // recompute preserves lastSelection so a further toggle before it resolves
     // can still recover the origin.
     const mode = selRef.current.mode;
+    // Snapshot pace + departure context ONCE alongside mode (same staleness
+    // guarantee): this response's rings, amenity radius and departure copy all
+    // agree even if the user changes pace/time mid-flight.
+    const pace = selRef.current.pace;
+    const timeContext = selRef.current.timeContext;
     const { token } = dispatchSel({ type: "start", mode, preserveLast: opts?.recompute });
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -91,7 +114,7 @@ export function createSelectFlowController({
         origin = { lat: input.lat, lng: input.lng };
         label = "Selected point";
         const reverseUrl = `/api/reverse?lat=${input.lat}&lng=${input.lng}`;
-        const isoUrl = `${isochronePath(mode)}?lat=${origin.lat}&lng=${origin.lng}`;
+        const isoUrl = isochroneUrl(mode, origin, pace, timeContext);
         const [revRes, isoRes] = await Promise.all([
           fetch(reverseUrl, { signal }),
           fetch(isoUrl, { signal }),
@@ -112,23 +135,23 @@ export function createSelectFlowController({
         }
         // Amenities only after reverse is known non-fatal (422 must not start ORS/PostGIS).
         if (stale()) return; // a newer selection landed during revRes.json()
-        maybeFetchAmenities(origin);
+        maybeFetchAmenities(origin, pace);
         if (!isoRes.ok) {
           clearAmenities();
           return void dispatchSel({ type: "failed", token, stage: "isochrone", httpStatus: isoRes.status });
         }
-        const iso = (await isoRes.json()) as { origin: Origin; rings: Ring[] };
+        const iso = (await isoRes.json()) as { origin: Origin; rings: Ring[]; departure?: string };
         if (stale()) return;
-        dispatchSel({ type: "resolved", token, origin: iso.origin, label });
+        dispatchSel({ type: "resolved", token, origin: iso.origin, label, departure: departureInfo(mode, iso.departure, timeContext) });
         renderSelection(iso.origin, label, iso.rings, mode);
         return;
       }
 
       // Search / suggestion paths: origin is known; amenities ∥ isochrone.
       if (stale()) return; // a newer selection landed during geocode res.json()
-      maybeFetchAmenities(origin);
+      maybeFetchAmenities(origin, pace);
 
-      const isoRes = await fetch(`${isochronePath(mode)}?lat=${origin.lat}&lng=${origin.lng}`, { signal });
+      const isoRes = await fetch(isochroneUrl(mode, origin, pace, timeContext), { signal });
       if (stale()) return;
       if (!isoRes.ok) {
         // Invariant: amenity markers never render without rings. The rings were
@@ -138,12 +161,12 @@ export function createSelectFlowController({
         clearAmenities();
         return void dispatchSel({ type: "failed", token, stage: "isochrone", httpStatus: isoRes.status });
       }
-      const iso = (await isoRes.json()) as { origin: Origin; rings: Ring[] };
+      const iso = (await isoRes.json()) as { origin: Origin; rings: Ring[]; departure?: string };
       if (stale()) return;
 
       // Fresh (stale() just checked): accept and paint. Reducer records the
       // isochrone's rounded origin so a mode toggle recomputes the same point.
-      dispatchSel({ type: "resolved", token, origin: iso.origin, label });
+      dispatchSel({ type: "resolved", token, origin: iso.origin, label, departure: departureInfo(mode, iso.departure, timeContext) });
       renderSelection(iso.origin, label, iso.rings, mode);
     } catch (err) {
       if ((err as Error)?.name === "AbortError" || stale()) return;

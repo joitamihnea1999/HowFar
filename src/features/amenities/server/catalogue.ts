@@ -9,6 +9,7 @@ import {
 } from "@/features/amenities/server/catalogue-query";
 import { mergeCoincidentTransitStops } from "@/features/amenities/server/merge-transit-stops";
 import { withActiveDataset } from "@/features/amenities/server/catalogue-store";
+import { DEFAULT_PACE, type Pace } from "@/features/isochrones/pace";
 import { walkingIsochrone } from "@/features/isochrones/server/ors";
 import { getCachedSafe, setCachedSafe } from "@/lib/api-cache";
 import { db } from "@/lib/db";
@@ -45,15 +46,18 @@ export const CATALOGUE_STALE_AFTER_MS = 10 * 24 * 60 * 60 * 1_000;
 export const AMENITY_RESULT_TTL_MS = 24 * 60 * 60 * 1_000;
 
 /** Bump when the cached JSON shape changes. Includes datasetId so a publish
- * invalidates. v2 (task 047): amenities may now carry merged-transit `members`. */
-const AMENITY_RESULT_CACHE_PREFIX = "amenity:local:v2:";
+ * invalidates. v2 (task 047): merged-transit `members`. v3 (task 051): the walk
+ * ring used for the clip is PACE-dependent, so the pace is part of the key —
+ * Relaxed and Brisk must never share a cache entry (or counts would be wrong). */
+const AMENITY_RESULT_CACHE_PREFIX = "amenity:local:v3:";
 
 export function amenityResultCacheKey(
   datasetId: string,
   lat: number,
   lng: number,
+  pace: Pace,
 ): string {
-  return `${AMENITY_RESULT_CACHE_PREFIX}${datasetId}:${roundCoord(lat)},${roundCoord(lng)}`;
+  return `${AMENITY_RESULT_CACHE_PREFIX}${datasetId}:${pace}:${roundCoord(lat)},${roundCoord(lng)}`;
 }
 
 export function isCatalogueStale(sourceTimestamp: Date | null, now = new Date()): boolean {
@@ -93,19 +97,23 @@ export function rehydrateCachedNearby(
 // query (and one ORS walk-ring fetch underneath), mirroring ORS single-flight.
 const inFlight = new Map<string, Promise<NearbyAmenitiesResult>>();
 
-/** Runtime discovery uses only ORS for the walking ring and local PostGIS. */
+/** Runtime discovery uses only ORS for the walking ring (at the active `pace`)
+ * and local PostGIS. The `pace` widens the counting radius, so it is part of the
+ * cache key AND the single-flight key — otherwise a concurrent Brisk request
+ * could coalesce onto an in-flight Relaxed promise and render wrong counts. */
 export async function nearbyAmenities(
   latRaw: number,
   lngRaw: number,
+  pace: Pace = DEFAULT_PACE,
 ): Promise<NearbyAmenitiesResult> {
   const lat = Number(roundCoord(latRaw));
   const lng = Number(roundCoord(lngRaw));
-  const flightKey = `${lat},${lng}`;
+  const flightKey = `${pace}:${lat},${lng}`;
 
   const existing = inFlight.get(flightKey);
   if (existing) return existing;
 
-  const promise = computeNearbyAmenities(latRaw, lngRaw, lat, lng);
+  const promise = computeNearbyAmenities(latRaw, lngRaw, lat, lng, pace);
   inFlight.set(flightKey, promise);
   try {
     return await promise;
@@ -119,6 +127,7 @@ async function computeNearbyAmenities(
   lngRaw: number,
   lat: number,
   lng: number,
+  pace: Pace,
 ): Promise<NearbyAmenitiesResult> {
   // Cheap active-pointer + ApiCache probe OUTSIDE any long interactive
   // transaction so cache hits never hold a pool slot across a second client
@@ -129,7 +138,7 @@ async function computeNearbyAmenities(
   });
   if (!active) throw new CatalogueUnavailableError("No active amenity catalogue");
 
-  const cacheKey = amenityResultCacheKey(active.id, lat, lng);
+  const cacheKey = amenityResultCacheKey(active.id, lat, lng, pace);
   const hit = await getCachedSafe<CachedNearbyAmenities>(cacheKey);
   if (hit && hit.datasetId === active.id) {
     // Warm path: skip ORS + PostGIS. Stale is recomputed at read time.
@@ -137,7 +146,7 @@ async function computeNearbyAmenities(
   }
 
   // Miss path: need the walk ring for spatial clip, then a pinned dataset read.
-  const isochrone = await walkingIsochrone(latRaw, lngRaw);
+  const isochrone = await walkingIsochrone(latRaw, lngRaw, pace);
   const ring = isochrone.rings.find(({ minutes }) => minutes === WALK_CLIP_MINUTES);
   if (!ring?.geometry) {
     throw new ProviderError(`walk isochrone missing the ${WALK_CLIP_MINUTES}-min ring for clipping`);
@@ -216,7 +225,7 @@ async function computeNearbyAmenities(
     datasetId: summary.datasetId,
   };
   await setCachedSafe(
-    amenityResultCacheKey(summary.datasetId, lat, lng),
+    amenityResultCacheKey(summary.datasetId, lat, lng, pace),
     body,
     new Date(Date.now() + AMENITY_RESULT_TTL_MS),
   );

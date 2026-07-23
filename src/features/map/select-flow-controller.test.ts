@@ -36,9 +36,11 @@ function makeHarness(startMode: Mode = "walk") {
   const clearAmenities = vi.fn();
   const maybeFetchAmenities = vi.fn();
   const renderSelection = vi.fn();
+  const pendingInputRef = { current: null };
   const controller = createSelectFlowController({
     dispatchSel,
     selRef,
+    pendingInputRef,
     abortRef: { current: null },
     clearSelection,
     clearAmenities,
