@@ -64,7 +64,7 @@ test("toggling Transit then back to Walk before transit resolves keeps the origi
   await expect(map).toHaveAttribute("data-isochrone-rings", "3");
 
   // Toggle to Transit (slow, in-flight) then straight back to Walk.
-  await page.getByRole("button", { name: "Transit", exact: true }).click();
+  await page.getByRole("button", { name: "Public transport", exact: true }).click();
   await page.getByRole("button", { name: "Walk" }).click();
 
   // The origin survived: the walk isochrone re-renders from lastSelection with

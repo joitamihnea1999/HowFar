@@ -2,6 +2,7 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 
 import {
+  effectivePace,
   failureMessage,
   GENERIC_ERROR,
   initialSelectionState,
@@ -14,6 +15,7 @@ import {
   type SelectionAction,
   type SelectionState,
 } from "./selection-flow";
+import type { Pace } from "@/features/isochrones/pace";
 
 const ORIGIN = { lat: 44.4268, lng: 26.1025 };
 
@@ -295,6 +297,44 @@ describe("sameTimeContext", () => {
     expect(sameTimeContext({ kind: "custom", weekday: 6, hour: 9, minute: 30 }, { kind: "custom", weekday: 6, hour: 9, minute: 30 })).toBe(true);
     expect(sameTimeContext({ kind: "custom", weekday: 6, hour: 9, minute: 30 }, { kind: "custom", weekday: 6, hour: 9, minute: 0 })).toBe(false);
     expect(sameTimeContext({ kind: "preset", preset: "weekend" }, { kind: "custom", weekday: 6, hour: 12, minute: 0 })).toBe(false);
+  });
+});
+
+describe("effectivePace (task 052 — pace is walk-only)", () => {
+  const PACES: Pace[] = ["relaxed", "normal", "brisk"];
+
+  it("walk keeps the chosen pace", () => {
+    for (const p of PACES) expect(effectivePace("walk", p)).toBe(p);
+  });
+
+  it("transit is always Normal regardless of a pace left over from Walk", () => {
+    for (const p of PACES) expect(effectivePace("transit", p)).toBe("normal");
+  });
+
+  it("property: non-walk collapses to normal; walk is identity", () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom<"walk" | "transit">("walk", "transit"),
+        fc.constantFrom<Pace>(...PACES),
+        (mode, pace) => {
+          const eff = effectivePace(mode, pace);
+          return mode === "walk" ? eff === pace : eff === "normal";
+        },
+      ),
+    );
+  });
+
+  it("the transit request URL and any amenity fetch built from effectivePace carry pace=normal even after a Brisk walk pick", () => {
+    // Brisk was chosen in Walk; switching to transit must request Normal.
+    const req = effectivePace("transit", "brisk");
+    expect(isochroneUrl("transit", ORIGIN, req, { kind: "preset", preset: "evening" })).toBe(
+      "/api/transit?lat=44.4268&lng=26.1025&pace=normal&preset=evening",
+    );
+    expect(`/api/amenities?lat=${ORIGIN.lat}&lng=${ORIGIN.lng}&pace=${req}`).toBe(
+      "/api/amenities?lat=44.4268&lng=26.1025&pace=normal",
+    );
+    // And back in Walk, Brisk is honored.
+    expect(effectivePace("walk", "brisk")).toBe("brisk");
   });
 });
 

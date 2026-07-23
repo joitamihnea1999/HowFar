@@ -8,7 +8,9 @@ import fc from "fast-check";
 
 import {
   buildRings,
+  dropSmallComponents,
   EGRESS_M_PER_MIN,
+  MIN_TRANSIT_COMPONENT_AREA_M2,
   STREET_DETOUR,
   THRESHOLDS,
   unionRings,
@@ -313,5 +315,76 @@ describe("unionRings", () => {
       ),
       { numRuns: 40 },
     );
+  });
+});
+
+describe("dropSmallComponents (task 052 — speck filter)", () => {
+  const ORIG = { lat: 44.4268, lng: 26.1025 };
+  // Far centres, well clear of the origin so PIP can't accidentally keep them.
+  const BIG = { lat: 44.5, lng: 26.2 };
+  const SPECK = { lat: 44.3, lng: 26.0 };
+  const T = 200_000; // explicit threshold (decoupled from the tunable constant)
+
+  function inFiltered(r: Ring, lng: number, lat: number): boolean {
+    if (!r.geometry.coordinates.length) return false;
+    return booleanPointInPolygon(pt(lng, lat), asFeature(r));
+  }
+
+  it("drops a tiny far speck, keeps a substantial pocket, keeps the origin's own (small) component", () => {
+    // origin square is small (~35k m², below T) — kept only because it holds the
+    // origin; big pocket (~>T) kept on area; speck (~17k m²) dropped.
+    const ring = mpRing(15, [
+      square(ORIG.lat, ORIG.lng, 0.001), // origin component, small
+      square(BIG.lat, BIG.lng, 0.006), // big pocket
+      square(SPECK.lat, SPECK.lng, 0.0007), // speck
+    ]);
+    const [out] = dropSmallComponents([ring], ORIG, T);
+    expect(out.geometry.coordinates).toHaveLength(2); // speck gone
+    expect(inFiltered(out, ORIG.lng, ORIG.lat)).toBe(true); // origin kept
+    expect(inFiltered(out, BIG.lng, BIG.lat)).toBe(true); // pocket kept
+    expect(inFiltered(out, SPECK.lng, SPECK.lat)).toBe(false); // speck removed
+  });
+
+  it("keeps the origin component even when it is far below threshold", () => {
+    const ring = mpRing(30, [square(ORIG.lat, ORIG.lng, 0.0003)]); // ~3k m²
+    const [out] = dropSmallComponents([ring], ORIG, T);
+    expect(out.geometry.coordinates).toHaveLength(1);
+    expect(inFiltered(out, ORIG.lng, ORIG.lat)).toBe(true);
+  });
+
+  it("is a no-op on an empty ring", () => {
+    const [out] = dropSmallComponents([mpRing(15, [])], ORIG, T);
+    expect(out.geometry.coordinates).toEqual([]);
+  });
+
+  it("preserves geometric nesting 15 ⊆ 30 ⊆ 45 after filtering", () => {
+    // Three nested families: origin (grows), a big far pocket (grows), and a
+    // speck (stays tiny in every band → dropped everywhere).
+    const rings: Ring[] = [
+      mpRing(15, [square(ORIG.lat, ORIG.lng, 0.001), square(BIG.lat, BIG.lng, 0.004), square(SPECK.lat, SPECK.lng, 0.0006)]),
+      mpRing(30, [square(ORIG.lat, ORIG.lng, 0.004), square(BIG.lat, BIG.lng, 0.007), square(SPECK.lat, SPECK.lng, 0.0012)]),
+      mpRing(45, [square(ORIG.lat, ORIG.lng, 0.006), square(BIG.lat, BIG.lng, 0.010), square(SPECK.lat, SPECK.lng, 0.0018)]),
+    ];
+    const [r15, r30, r45] = dropSmallComponents(rings, ORIG, T);
+    // Speck dropped from all bands.
+    for (const r of [r15, r30, r45]) expect(inFiltered(r, SPECK.lng, SPECK.lat)).toBe(false);
+    // Geometric containment: (inner minus outer) has ~zero area.
+    const contained = (inner: Ring, outer: Ring) => {
+      const d = difference({ type: "FeatureCollection", features: [asFeature(inner), asFeature(outer)] });
+      return d === null || area(d) < 1; // 1 m² float slack
+    };
+    expect(contained(r15, r30)).toBe(true);
+    expect(contained(r30, r45)).toBe(true);
+    // And area is monotonic non-decreasing.
+    expect(ringArea(r15)).toBeLessThanOrEqual(ringArea(r30) + 1);
+    expect(ringArea(r30)).toBeLessThanOrEqual(ringArea(r45) + 1);
+  });
+
+  it("defaults to MIN_TRANSIT_COMPONENT_AREA_M2 when no threshold is given", () => {
+    // A component just under the default constant is dropped (not origin).
+    const justUnder = mpRing(45, [square(BIG.lat, BIG.lng, 0.0007)]); // ~17k m² << default 200k
+    const [out] = dropSmallComponents([justUnder], ORIG);
+    expect(MIN_TRANSIT_COMPONENT_AREA_M2).toBeGreaterThan(17_000);
+    expect(out.geometry.coordinates).toEqual([]);
   });
 });

@@ -86,8 +86,8 @@ export default function SelectionCard({ label, message, mode, ringFilter, loadin
           </div>
           {mode === "transit" && departure ? (
             <p data-testid="transit-departure-note" className="mt-2 text-[0.68rem] leading-4 text-[#667269]">
-              Scheduled transit for <span className="text-[#9ca9a0]">{departure.summary}</span> — an estimate from
-              published timetables; live delays and road traffic aren’t included.
+              Scheduled public transport for <span className="text-[#9ca9a0]">{departure.summary}</span> — an estimate
+              from published timetables; live delays and road traffic aren’t included.
             </p>
           ) : null}
         </>

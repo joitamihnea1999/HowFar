@@ -74,7 +74,7 @@ export default function TimeContextControl({ value, onSelect }: TimeContextContr
       <span className="mb-1.5 block px-1 text-[0.58rem] font-semibold uppercase tracking-[0.14em] text-[#78857b]">
         When you travel
       </span>
-      <div role="group" aria-label="Transit departure time" className="flex flex-wrap gap-1 rounded-xl border border-white/[.09] bg-[#080b09]/65 p-1">
+      <div role="group" aria-label="Public transport departure time" className="flex flex-wrap gap-1 rounded-xl border border-white/[.09] bg-[#080b09]/65 p-1">
         {TIME_PRESET_IDS.map((id) => (
           <button
             key={id}

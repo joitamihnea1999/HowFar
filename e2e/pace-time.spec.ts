@@ -114,14 +114,34 @@ test("changing pace sends &pace and re-renders amenities (Relaxed→Brisk count 
   expect(cap.iso.some((u) => /pace=brisk/.test(u))).toBe(true);
 });
 
+test("pace control is Walk-only; switching to Public transport hides it and requests Normal even after Brisk (task 052)", async ({ page }) => {
+  const cap = await stubBase(page);
+  const map = await loadAndSearch(page);
+  // Walk: the pace control is present.
+  await expect(page.getByRole("group", { name: "Walking pace" })).toBeVisible();
+  // Pick Brisk in Walk → amenity count grows to 9 (pace refetched).
+  await page.getByRole("button", { name: /Brisk/ }).click();
+  await expect(map).toHaveAttribute("data-amenity-count", "9");
+
+  // Switch to Public transport: the pace control is GONE (pace is walk-only)…
+  await page.getByTestId("command-surface").getByRole("button", { name: "Public transport", exact: true }).click();
+  await expect(page.getByRole("group", { name: "Walking pace" })).toHaveCount(0);
+  // …and the transit-era amenity refetch used Normal, not the remembered Brisk —
+  // the count returns to 4 (the P4 regression guard: effective pace, not sel.pace).
+  await expect(map).toHaveAttribute("data-amenity-count", "4");
+  expect(cap.amenities[cap.amenities.length - 1]).toContain("pace=normal");
+  expect(cap.transit.every((u) => /pace=normal/.test(u))).toBe(true);
+  expect(cap.transit.some((u) => /pace=brisk/.test(u))).toBe(false);
+});
+
 test("time control is absent in Walk, present in Transit; preset sends &preset and shows the honesty note", async ({ page }) => {
   const cap = await stubBase(page);
   await loadAndSearch(page);
   // Walk mode: no time control.
-  await expect(page.getByRole("group", { name: "Transit departure time" })).toHaveCount(0);
+  await expect(page.getByRole("group", { name: "Public transport departure time" })).toHaveCount(0);
   // Switch to transit.
-  await page.getByTestId("command-surface").getByRole("button", { name: "Transit", exact: true }).click();
-  await expect(page.getByRole("group", { name: "Transit departure time" })).toBeVisible();
+  await page.getByTestId("command-surface").getByRole("button", { name: "Public transport", exact: true }).click();
+  await expect(page.getByRole("group", { name: "Public transport departure time" })).toBeVisible();
   await expect(page.getByTestId("transit-departure-note")).toContainText("live delays and road traffic");
 
   await page.getByRole("button", { name: "Evening" }).click();
@@ -132,7 +152,7 @@ test("time control is absent in Walk, present in Transit; preset sends &preset a
 test("Custom: inline editor (no Apply button), reveals with no request, commits on each field change", async ({ page }) => {
   const cap = await stubBase(page);
   await loadAndSearch(page);
-  await page.getByTestId("command-surface").getByRole("button", { name: "Transit", exact: true }).click();
+  await page.getByTestId("command-surface").getByRole("button", { name: "Public transport", exact: true }).click();
   const before = cap.transit.length;
 
   // Revealing the inline editor must NOT fire a request on its own.

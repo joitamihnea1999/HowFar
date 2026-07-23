@@ -10,6 +10,8 @@ import {
 import { normalizeAmenitySelection } from "@/features/amenities/amenity-selection";
 import { mergeStopLines, type StopLine } from "@/features/amenities/stop-lines";
 import { buildStopPopupModel, STOP_POPUP_TEXT, type StopPopupModel } from "@/features/amenities/stop-popup";
+import type { ReachPlan } from "@/features/isochrones/server/transit-plan";
+import { buildReachSteps, isWalkOnly, reachSummary, walkReachText, type ReachRequest } from "@/features/map/reach";
 import type { EdgeInsets } from "@/features/map/route-framing";
 import type { RoutePathController } from "@/features/map/route-path-controller";
 
@@ -17,6 +19,10 @@ import type { RoutePathController } from "@/features/map/route-path-controller";
  * leave the popup on "Finding lines…" for the server's full host budget (task
  * 021 — the "never hang on loading" lesson). */
 const STOP_LINES_TIMEOUT_MS = 9000;
+/** Client deadline on the /api/reach trip plan so a slow MOTIS can't leave the
+ * popup on "Planning your trip…" forever (task 052 D). Generous — /plan is
+ * ~0.6s server but a cold cache + rate-limit wait can stack. */
+const REACH_TIMEOUT_MS = 12000;
 
 /**
  * The shared popup slot (task 021/024): one MapLibre popup at a time, routing a
@@ -45,6 +51,8 @@ export function createPopupController({
   let popupCategory: AmenityCategoryKey | null = null;
   let stopLinesAbort: AbortController | null = null;
   let stopLinesGen = 0;
+  let reachAbort: AbortController | null = null;
+  let reachGen = 0;
 
   // Build the popup DOM from the pure model. A row whose line carries a
   // relationId becomes a BUTTON that draws the line's full path + stops (task
@@ -279,6 +287,9 @@ export function createPopupController({
   function closeStopPopup() {
     stopLinesAbort?.abort();
     stopLinesGen += 1;
+    reachAbort?.abort();
+    reachGen += 1;
+    delete el.dataset.reachState;
     currentPopup?.remove();
     currentPopup = null;
     popupCategory = null;
@@ -359,10 +370,166 @@ export function createPopupController({
       .finally(() => clearTimeout(timer));
   }
 
+  // --- Right-click "how do I get there?" reach popup (task 052 D) ----------
+  // A small heading + detail, plus (for a planned transit trip) an ordered step
+  // list. All text via textContent (OSM stop names / line headsigns are
+  // untrusted). `state` drives an el-level `data-reach-state` stamp for e2e.
+  type ReachRender =
+    | { state: "hint" | "loading" | "none" | "error" | "outside"; title: string; detail: string }
+    | { state: "walk"; title: string; detail: string }
+    | { state: "transit"; title: string; detail: string; steps: { primary: string; secondary: string }[] };
+
+  function renderReachPopup(model: ReachRender): HTMLElement {
+    const root = document.createElement("div");
+    root.className = "hf-stop-popup hf-reach-popup";
+    root.dataset.testid = "reach-popup";
+    root.dataset.state = model.state;
+
+    const title = document.createElement("div");
+    title.className = "hf-stop-popup__title";
+    title.textContent = model.title;
+    root.appendChild(title);
+
+    if (model.detail) {
+      const detail = document.createElement("div");
+      detail.className = "hf-stop-popup__msg";
+      detail.textContent = model.detail;
+      root.appendChild(detail);
+    }
+
+    if (model.state === "transit") {
+      const list = document.createElement("ol");
+      list.className = "hf-reach-popup__steps";
+      for (const step of model.steps) {
+        const li = document.createElement("li");
+        li.className = "hf-reach-popup__step";
+        const primary = document.createElement("span");
+        primary.className = "hf-reach-popup__step-primary";
+        primary.textContent = step.primary;
+        const secondary = document.createElement("span");
+        secondary.className = "hf-reach-popup__step-secondary";
+        secondary.textContent = step.secondary;
+        li.append(primary, secondary);
+        list.appendChild(li);
+      }
+      root.appendChild(list);
+    }
+    return root;
+  }
+
+  function stampReach(state: string) {
+    el.dataset.reachState = state;
+  }
+
+  function showReach(model: ReachRender, coords: [number, number], popup?: maplibregl.Popup) {
+    const content = renderReachPopup(model);
+    stampReach(model.state);
+    if (popup) {
+      popup.setDOMContent(content);
+      return popup;
+    }
+    const next = new maplibregl.Popup({ closeButton: true, closeOnClick: false, maxWidth: "300px" })
+      .setLngLat(coords)
+      .setDOMContent(content)
+      .addTo(map);
+    currentPopup = next;
+    next.on("close", () => {
+      // Closing the popup (× / replacement / new selection) must also cancel any
+      // in-flight /api/reach fetch and its deadline, bump the generation so a
+      // late response can't repaint, and clear the e2e stamp (T5 — avoid a stale
+      // data-reach-state after the popup is gone).
+      reachAbort?.abort();
+      reachGen += 1;
+      delete el.dataset.reachState;
+      if (currentPopup === next) currentPopup = null;
+    });
+    return next;
+  }
+
+  /**
+   * Open the reach popup for a right-click / long-press. Walk + the no-selection
+   * hint render synchronously (client-side band); a transit request fetches the
+   * planned trip from `/api/reach` under one deadline/abort/generation (mirrors
+   * the stop-lines flow), then paints the steps or a not-reachable message.
+   */
+  function openReachPopup(req: ReachRequest) {
+    closeStopPopup(); // shared slot: replace any open popup + cancel its fetch
+
+    if (req.kind === "hint") {
+      showReach(
+        { state: "hint", title: "How do I get there?", detail: "Pick a starting point first, then right-click anywhere to see the way." },
+        req.coords,
+      );
+      return;
+    }
+    if (req.kind === "walk") {
+      const { title, detail } = walkReachText(req.band);
+      showReach({ state: "walk", title, detail }, req.coords);
+      return;
+    }
+    if (req.kind === "transit-unreachable") {
+      // Client point-in-ring said this point is outside the painted transit
+      // reach — answer honestly with NO provider call (T1/P2).
+      showReach(
+        { state: "none", title: "Beyond your reach", detail: "This point is outside your public-transport reach for the selected time." },
+        req.coords,
+      );
+      return;
+    }
+
+    // Transit (inside the band): loading → fetch → journey / none / error, under
+    // one generation. `band` frames the trip time against the visible reach (P8).
+    const band = req.band;
+    const gen = ++reachGen;
+    const controller = new AbortController();
+    reachAbort = controller;
+    const popup = showReach({ state: "loading", title: "Planning your trip…", detail: "Finding the best public-transport route." }, req.coords);
+
+    const timer = setTimeout(() => {
+      if (gen === reachGen) showReach({ state: "error", title: "Couldn’t plan this trip", detail: "The routing service is slow — please try again." }, req.coords, popup);
+      controller.abort();
+    }, REACH_TIMEOUT_MS);
+
+    fetch(req.url, { signal: controller.signal })
+      .then(async (res) => {
+        if (gen !== reachGen) return;
+        if (res.status === 422) {
+          return void showReach({ state: "outside", title: "Outside the area", detail: "That point is outside the Bucharest area we cover." }, req.coords, popup);
+        }
+        if (!res.ok) {
+          return void showReach({ state: "error", title: "Couldn’t plan this trip", detail: "Please try again in a moment." }, req.coords, popup);
+        }
+        const plan = (await res.json()) as ReachPlan;
+        if (gen !== reachGen) return;
+        if (!plan.reachable) {
+          return void showReach({ state: "none", title: "No public-transport route", detail: "No trip was found for this departure time." }, req.coords, popup);
+        }
+        // A plan with no transit leg is really walking directions (T4).
+        if (isWalkOnly(plan.legs)) {
+          return void showReach(
+            { state: "transit", title: "On foot", detail: `Within your ~${band}-min reach — about a ${plan.totalMinutes}-min walk.`, steps: buildReachSteps(plan.legs) },
+            req.coords,
+            popup,
+          );
+        }
+        showReach(
+          { state: "transit", title: "By public transport", detail: `Within your ~${band}-min reach — journey ${reachSummary(plan)}.`, steps: buildReachSteps(plan.legs) },
+          req.coords,
+          popup,
+        );
+      })
+      .catch((err) => {
+        if ((err as Error)?.name === "AbortError" || gen !== reachGen) return;
+        showReach({ state: "error", title: "Couldn’t plan this trip", detail: "Please try again in a moment." }, req.coords, popup);
+      })
+      .finally(() => clearTimeout(timer));
+  }
+
   return {
     openAmenityPopup,
     inspectAmenity,
     closeStopPopup,
+    openReachPopup,
     /** The category of the currently-open popup, so a hidden-category filter can
      * close it (amenities-controller reads this — never the private field). */
     getPopupCategory: () => popupCategory,

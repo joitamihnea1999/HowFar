@@ -38,6 +38,8 @@ import { createRingRevealController } from "@/features/map/ring-reveal-controlle
 import { createRoutePathController } from "@/features/map/route-path-controller";
 import { createSelectFlowController } from "@/features/map/select-flow-controller";
 import { createSelectionRender } from "@/features/map/selection-render";
+import { createLongPress } from "@/features/map/long-press";
+import { decideReach, reachBand } from "@/features/map/reach";
 import { teardownInOrder } from "@/features/map/teardown";
 import ModeToggle from "@/features/map/ModeToggle";
 import PaceControl from "@/features/map/PaceControl";
@@ -58,11 +60,13 @@ import {
   type SearchSuggestController,
 } from "@/features/search/search-suggest-controller";
 import {
+  effectivePace,
   initialSelectionState,
   sameTimeContext,
   selectionReducer,
   type Mode,
   type Origin,
+  type Ring,
   type SelectInput,
   type SelectionAction,
   type SelectionState,
@@ -94,6 +98,11 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
   // selection resolves can re-issue it rather than lose the change (finding G).
   const pendingInputRef = useRef<SelectInput | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // The rings + mode of the last resolved selection, stashed so a right-click
+  // ("how do I get there?") can classify a clicked point against the EXACT
+  // geometry the map drew (task 052 D) — walk band client-side, transit via a
+  // /api/reach trip plan. Cleared on a new/failed selection.
+  const reachRef = useRef<{ rings: Ring[]; mode: Mode; origin: Origin } | null>(null);
 
   // Amenities: keyed by rounded origin (NOT the selection token, which a mode
   // toggle bumps) so a Walk↔Transit toggle persists the markers with no refetch;
@@ -283,15 +292,26 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       closeStopPopup,
     });
     const { renderSelection, clearSelection } = selectionRender;
+    // Stash the rendered rings+mode+origin for the right-click reach popup, and
+    // clear them whenever the selection is dropped, so a right-click never reads
+    // stale geometry (task 052 D).
+    const renderSelectionStash = (origin: Origin, label: string, rings: Ring[], mode: Mode) => {
+      reachRef.current = { rings, mode, origin };
+      renderSelection(origin, label, rings, mode);
+    };
+    const clearSelectionReach = () => {
+      reachRef.current = null;
+      clearSelection();
+    };
     const selectFlow = createSelectFlowController({
       dispatchSel,
       selRef,
       pendingInputRef,
       abortRef,
-      clearSelection,
+      clearSelection: clearSelectionReach,
       clearAmenities,
       maybeFetchAmenities,
-      renderSelection,
+      renderSelection: renderSelectionStash,
     });
     selectRef.current = selectFlow.select;
 
@@ -312,7 +332,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       if (loadState.pending) {
         const p = loadState.pending;
         loadState.pending = null;
-        renderSelection(p.origin, p.label, p.rings, p.mode);
+        renderSelectionStash(p.origin, p.label, p.rings, p.mode);
       }
       if (loadState.pendingAmenities) {
         const a = loadState.pendingAmenities;
@@ -345,7 +365,93 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
     };
     window.addEventListener("resize", onResize);
 
+    // Right-click / long-press "how do I get there?" (task 052 D). Answers for
+    // the ACTIVE mode against the SAME rings the map drew: walk = client-side
+    // band; transit = a MOTIS trip plan via /api/reach. Only computes on demand.
+    const handleReach = (lngLat: { lng: number; lat: number }) => {
+      const sel = selRef.current;
+      const stash = reachRef.current;
+      const coords: [number, number] = [lngLat.lng, lngLat.lat];
+      // Deliberately does NOT defer to pickAmenity (unlike the left-click, which
+      // opens a marker's popup): the reach question is "how do I get to THIS
+      // point", answerable anywhere on the map — including over a marker.
+      // No resolved selection yet (or one still loading): explain what to do.
+      if (!sel.lastSelection || sel.status === "loading" || !stash) {
+        return void popup.openReachPopup({ kind: "hint", coords });
+      }
+      // Classify the point against the SAME rings the map drew (both modes) so
+      // the answer can never contradict the painted reach (task 052 P2 / impl T1).
+      const action = decideReach(stash.mode, reachBand(coords, stash.rings));
+      if (action.kind === "walk") {
+        return void popup.openReachPopup({ kind: "walk", coords, band: action.band });
+      }
+      if (action.kind === "transit-unreachable") {
+        // Outside every transit ring → answer honestly with NO provider call.
+        return void popup.openReachPopup({ kind: "transit-unreachable", coords });
+      }
+      const params = new URLSearchParams({
+        fromLat: String(stash.origin.lat),
+        fromLng: String(stash.origin.lng),
+        toLat: String(lngLat.lat),
+        toLng: String(lngLat.lng),
+      });
+      // Prefer the selection's resolved departure so the trip matches the rings
+      // on screen; else pass the time-context params for the server.
+      if (sel.departure?.iso) params.set("departure", sel.departure.iso);
+      else if (sel.timeContext.kind === "preset") params.set("preset", sel.timeContext.preset);
+      else {
+        params.set("weekday", String(sel.timeContext.weekday));
+        params.set("time", `${String(sel.timeContext.hour).padStart(2, "0")}:${String(sel.timeContext.minute).padStart(2, "0")}`);
+      }
+      popup.openReachPopup({ kind: "transit", coords, band: action.band, url: `/api/reach?${params.toString()}` });
+    };
+
+    // Touch long-press for iOS Safari (which never emits contextmenu). A fired
+    // long-press suppresses the synthetic click that follows on lift, so it
+    // never also starts a new selection.
+    let suppressNextClick = false;
+    let touchActive = false;
+    const longPress = createLongPress({ onLongPress: (info) => handleReach(info.lngLat) });
+
+    // Desktop right-click. On a touch device the long-press recognizer owns the
+    // gesture, so we skip the contextmenu path there (Android also emits
+    // contextmenu mid-press) — this avoids double-handling and the trailing-click
+    // selection bug (impl T7). preventDefault always stops the browser menu.
+    map.on("contextmenu", (e) => {
+      e.originalEvent?.preventDefault?.();
+      if (touchActive) return;
+      handleReach(e.lngLat);
+    });
+    map.on("touchstart", (e) => {
+      touchActive = true;
+      // A fresh press starts a fresh interaction: clear any stale suppression
+      // left by a prior gesture whose synthetic click never arrived (else it
+      // would wrongly swallow THIS tap's selection — a load-timing race).
+      suppressNextClick = false;
+      longPress.start(e.point, e.lngLat, e.originalEvent?.touches?.length ?? 1);
+    });
+    map.on("touchmove", (e) => longPress.move(e.point));
+    // A pan cancels the pending long-press immediately — more robust than waiting
+    // for a touchmove that CPU contention can delay past the hold threshold.
+    map.on("dragstart", () => longPress.cancel());
+    map.on("touchend", () => {
+      touchActive = false;
+      if (longPress.end()) suppressNextClick = true;
+    });
+    // An OS-interrupted touch (system UI, gesture takeover) emits touchcancel,
+    // not touchend — kill the pending timer so no ghost popup fires (impl T3).
+    map.on("touchcancel", () => {
+      touchActive = false;
+      longPress.cancel();
+    });
+
     map.on("click", (e) => {
+      // A long-press just fired the reach popup — swallow the follow-up click so
+      // it doesn't also start a selection.
+      if (suppressNextClick) {
+        suppressNextClick = false;
+        return;
+      }
       // ANY amenity click opens its popup and does NOT start a selection (no
       // geocode/reverse/isochrone) — the owner's ask: inspecting a marker must
       // never recompute the address (task 024). A click on the active drawn
@@ -382,6 +488,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
           ring.dispose,
           hover.dispose,
           camera.dispose,
+          () => longPress.cancel(),
           () => window.removeEventListener("resize", onResize),
           () => {
             applyAmenitySelectionRef.current = null;
@@ -474,7 +581,9 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
   // one whose fetch failed — an error never clears it, only a new selection does.
   function retryAmenities() {
     const origin = amenityOriginRef.current;
-    if (origin) fetchAmenitiesRef.current?.(origin, 0, selRef.current.pace);
+    // Same effective-pace rule as the main fetch (task 052 P4): a retry in a
+    // non-walk mode must use Normal, not a pace remembered from Walk.
+    if (origin) fetchAmenitiesRef.current?.(origin, 0, effectivePace(selRef.current.mode, selRef.current.pace));
   }
 
   function onSubmit(e: React.FormEvent) {
@@ -569,23 +678,31 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
               loading={sel.status === "loading"}
               departure={sel.departure}
             />
-            {/* Reach refinements live WITH the result they adjust — pace (both
-                modes) and, in transit, the departure context. Keeps the top
-                command dock compact (no map-covering rail). */}
-            <div className="mt-2.5 grid gap-2.5 border-t border-white/[.07] pt-2.5">
-              <PaceControl pace={sel.pace} onSelect={setPace} />
-              {sel.mode === "transit" ? (
-                <TimeContextControl value={sel.timeContext} onSelect={setTimeContext} />
-              ) : null}
-            </div>
+            {/* Reach refinements live WITH the result they adjust. Pace is a
+                WALKING concept, so it shows ONLY in Walk (task 052 P4); the
+                departure context shows only in Public transport. Exactly one
+                control renders per mode, so the bordered cluster is never empty.
+                Keeps the top command dock compact (no map-covering rail). */}
+            {sel.mode === "walk" || sel.mode === "transit" ? (
+              <div className="mt-2.5 grid gap-2.5 border-t border-white/[.07] pt-2.5">
+                {sel.mode === "walk" ? <PaceControl pace={sel.pace} onSelect={setPace} /> : null}
+                {sel.mode === "transit" ? (
+                  <TimeContextControl value={sel.timeContext} onSelect={setTimeContext} />
+                ) : null}
+              </div>
+            ) : null}
             <AmenityPanel
               // Key on amenity IDENTITY (resolved origin + pace) — the only
               // things that change the amenity set — NOT sel.token. A mode
               // toggle or a transit time change keeps the same origin+pace, so
               // the panel no longer remounts and lose its open Browse list /
               // text filter (impl-panel finding); a new origin or pace change
-              // still remounts to reset that transient state.
-              key={`${sel.lastSelection?.lat ?? "x"},${sel.lastSelection?.lng ?? "x"}:${sel.pace}`}
+              // still remounts to reset that transient state. Keyed on the
+              // EFFECTIVE pace (task 052 P4) so it matches the pace the amenities
+              // were actually fetched at — the common Normal-pace toggle keeps
+              // the panel mounted; only a Brisk/Relaxed-walk→transit toggle
+              // remounts, which is correct since the amenity set changed.
+              key={`${sel.lastSelection?.lat ?? "x"},${sel.lastSelection?.lng ?? "x"}:${effectivePace(sel.mode, sel.pace)}`}
               status={amenity.status}
               counts={amenityCounts}
               items={amenity.items}

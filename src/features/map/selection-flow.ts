@@ -87,6 +87,20 @@ export function isochronePath(mode: Mode): string {
   return mode === "transit" ? "/api/transit" : "/api/isochrone";
 }
 
+/**
+ * Pace is a WALKING concept (task 052): it scales the walk isochrone and the
+ * amenity clip radius. In any non-walk mode the user never sets a pace (the
+ * control is walk-only), so every request in a non-walk mode behaves as Normal —
+ * regardless of a pace the user picked earlier in Walk (which we remember, to
+ * restore when they switch back). This is the SINGLE source of that rule: the
+ * isochrone URL, the amenity fetch, the amenity dedupe key, the manual retry,
+ * and the AmenityPanel remount key all derive their pace through here, so they
+ * can never disagree (plan-panel P4).
+ */
+export function effectivePace(mode: Mode, pace: Pace): Pace {
+  return mode === "walk" ? pace : "normal";
+}
+
 /** Build the isochrone request URL for a mode + pace + (transit-only) departure
  * context. Walk carries only `pace`; transit adds `preset` or `weekday`+`time`.
  * Pure + exported so the exact query contract is unit-testable. */

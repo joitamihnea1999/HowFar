@@ -1,4 +1,5 @@
 import { area } from "@turf/area";
+import { booleanPointInPolygon } from "@turf/boolean-point-in-polygon";
 import { union } from "@turf/union";
 import { contours } from "d3-contour";
 import type { Feature, MultiPolygon, Polygon } from "geojson";
@@ -163,6 +164,58 @@ export function buildRings(
     (t): Ring =>
       byMinutes.get(t) ?? { minutes: t, geometry: { type: "MultiPolygon", coordinates: [] } },
   ).sort((a, b) => a.minutes - b.minutes);
+}
+
+/**
+ * Minimum area (m²) a disconnected ring component must have to survive the
+ * speck filter (task 052 C). Below this, a component is a visual artifact — a
+ * scatter of tiny polygons around far stops reads as "the map is broken" on a
+ * livability map, even though it is genuinely (barely) reachable. The right-click
+ * "how do I get there?" popup (task 052 D) is what surfaces the real far pockets
+ * that ARE substantial. Calibrated on real Bucharest addresses (see the task's C
+ * checkpoint): specks measured well under this; the far-metro pockets (e.g. the
+ * northern M2 area reachable from Berceni) measure far above it.
+ */
+export const MIN_TRANSIT_COMPONENT_AREA_M2 = 200_000; // ~0.2 km²; calibrated (task 052)
+
+/**
+ * Drop tiny disconnected components from each transit ring, keeping every
+ * component of at least `minAreaM2` AND — always, however small — the component
+ * containing the origin (so the user's own neighbourhood is never filtered out).
+ *
+ * Nesting (15⊆30⊆45) is preserved by a fixed threshold: a pocket's area only
+ * grows with the threshold band (15's component ⊆ 30's ⊆ 45's), so if it clears
+ * `minAreaM2` in a smaller band it clears it in every larger one; dropping it
+ * from a smaller band only SHRINKS that band, never breaking containment. The
+ * origin sits inside every band's origin-component, so it is kept in all three.
+ * Pure + deterministic (no cache/network) — unit-tested including the geometric
+ * nesting invariant.
+ */
+export function dropSmallComponents(
+  rings: Ring[],
+  origin: { lat: number; lng: number },
+  minAreaM2: number = MIN_TRANSIT_COMPONENT_AREA_M2,
+): Ring[] {
+  const point: [number, number] = [origin.lng, origin.lat];
+  return rings.map((ring) => {
+    const polygons = ring.geometry.coordinates;
+    if (!Array.isArray(polygons) || polygons.length === 0) return ring;
+    const kept = polygons.filter((polygon) => {
+      const feature: Feature<Polygon> = {
+        type: "Feature",
+        properties: {},
+        geometry: { type: "Polygon", coordinates: polygon },
+      };
+      if (area(feature) >= minAreaM2) return true;
+      // Always keep the origin's own component, however small.
+      try {
+        return booleanPointInPolygon(point, feature);
+      } catch {
+        return false;
+      }
+    });
+    return { minutes: ring.minutes, geometry: { type: "MultiPolygon", coordinates: kept } };
+  });
 }
 
 /** A walking ring as returned by the ORS provider (looser geometry typing). */

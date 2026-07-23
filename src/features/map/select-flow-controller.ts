@@ -1,6 +1,7 @@
 import { type Pace } from "@/features/isochrones/pace";
 import { timeContextSummary } from "@/features/isochrones/time-context";
 import {
+  effectivePace,
   isochroneUrl,
   reverseIsFatal,
   type Mode,
@@ -74,8 +75,11 @@ export function createSelectFlowController({
     const mode = selRef.current.mode;
     // Snapshot pace + departure context ONCE alongside mode (same staleness
     // guarantee): this response's rings, amenity radius and departure copy all
-    // agree even if the user changes pace/time mid-flight.
-    const pace = selRef.current.pace;
+    // agree even if the user changes pace/time mid-flight. Pace is passed through
+    // `effectivePace` so a non-walk request is Normal even if the user left a
+    // Brisk/Relaxed pace set in Walk (task 052 P4 — single source for isochrone
+    // URL AND amenity fetch, which is why it lives at this one snapshot point).
+    const pace = effectivePace(mode, selRef.current.pace);
     const timeContext = selRef.current.timeContext;
     const { token } = dispatchSel({ type: "start", mode, preserveLast: opts?.recompute });
     abortRef.current?.abort();

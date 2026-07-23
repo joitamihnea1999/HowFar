@@ -103,7 +103,7 @@ export function departureFields(tc: TimeContext): DepartureFields {
   return { weekday: p.weekday, hour: p.hour, minute: p.minute, allowToday: false };
 }
 
-/** Short human summary for the UI honesty copy ("Scheduled transit for …"). */
+/** Short human summary for the UI honesty copy ("Scheduled public transport for …"). */
 export function timeContextSummary(tc: TimeContext): string {
   if (tc.kind === "preset") return TIME_PRESETS[tc.preset].label;
   const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];

@@ -2,8 +2,10 @@ import { DEFAULT_PACE, PACE_MODEL, type Pace } from "@/features/isochrones/pace"
 import { walkingIsochrone } from "@/features/isochrones/server/ors";
 import {
   buildRings,
+  dropSmallComponents,
   THRESHOLDS,
   unionRings,
+  type Ring,
   type TransitStop,
   type WalkRing,
 } from "@/features/isochrones/server/transit-grid";
@@ -184,10 +186,12 @@ export async function transitIsochrone(
   timeContext: TimeContext = DEFAULT_TIME_CONTEXT,
 ): Promise<TransitIsochroneResult> {
   const departure = representativeDeparture(new Date(), departureFields(timeContext));
-  // v3: cache key includes pace + departure so paced/time-shifted rings never
-  // serve a Normal/other-time result (and different-pace/time concurrent callers
-  // don't share one flight). The bump also retires all pre-051 (v2) entries.
-  const key = `transit:v3:${pace}:${roundCoord(latRaw)},${roundCoord(lngRaw)}:${departure}`;
+  // v4 (task 052): cache key includes pace + departure so paced/time-shifted
+  // rings never serve a Normal/other-time result (and different-pace/time
+  // concurrent callers don't share one flight). Bumped v3→v4 because the cached
+  // ring geometry now has the speck filter applied (task 052 C) — the bump
+  // retires all pre-052 (v3) entries so no stale unfiltered rings serve.
+  const key = `transit:v4:${pace}:${roundCoord(latRaw)},${roundCoord(lngRaw)}:${departure}`;
 
   const hit = await getCachedSafe<TransitIsochroneResult>(key);
   if (hit) return hit;
@@ -263,7 +267,7 @@ async function fetchAndBuild(
 
   // Geometry construction is CPU work on caller-supplied shapes — a failure here
   // is a provider-side data problem (→ 502), not an internal 500.
-  let rings: TransitIsochroneResult["rings"];
+  let rings: Ring[];
   try {
     // With street-routed walk rings in hand, skip the radial origin stamp and
     // union the walk geometry in per threshold. unionRings is all-or-nothing:
@@ -282,6 +286,12 @@ async function fetchAndBuild(
   if (rings.length !== THRESHOLDS.length || rings.some((r) => !r.geometry?.coordinates)) {
     throw new ProviderError("transit isochrone produced unexpected rings");
   }
+
+  // Drop tiny disconnected specks from the FINAL rings — after the whole
+  // union/radial-fallback resolution above (task 052 C, plan-panel P11), so the
+  // fallback path is filtered too — while always keeping the origin's component.
+  // The nesting invariant survives (see dropSmallComponents).
+  rings = dropSmallComponents(rings, { lat, lng });
 
   const result: TransitIsochroneResult = { origin: { lat, lng }, rings, departure };
   await setCachedSafe(key, result, new Date(Date.now() + TTL_MS));

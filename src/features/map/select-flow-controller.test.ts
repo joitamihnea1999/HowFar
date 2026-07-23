@@ -93,6 +93,33 @@ describe("select() — mode frozen at entry", () => {
   });
 });
 
+describe("select() — effective pace (task 052: pace is walk-only)", () => {
+  it("a transit select requests Normal for BOTH the isochrone URL and amenities, even with a Brisk pace left from Walk", async () => {
+    const h = makeHarness("transit");
+    // User had picked Brisk in Walk; it's remembered in state but must not leak
+    // into a Public-transport request.
+    h.selRef.current = { ...h.selRef.current, pace: "brisk" };
+    await h.controller.select({ kind: "point", lat: 44.4, lng: 26.1, label: "X" });
+
+    const transitUrl = fetchedUrls.find((u) => u.startsWith("/api/transit"));
+    expect(transitUrl).toContain("pace=normal");
+    expect(transitUrl).not.toContain("pace=brisk");
+    // Amenity fetch (parallel branch) got the same effective pace.
+    expect(h.maybeFetchAmenities).toHaveBeenCalledTimes(1);
+    expect(h.maybeFetchAmenities.mock.calls[0][1]).toBe("normal");
+  });
+
+  it("a WALK select still honors the chosen Brisk pace on both the isochrone URL and amenities", async () => {
+    const h = makeHarness("walk");
+    h.selRef.current = { ...h.selRef.current, pace: "brisk" };
+    await h.controller.select({ kind: "point", lat: 44.4, lng: 26.1, label: "X" });
+
+    const walkUrl = fetchedUrls.find((u) => u.startsWith("/api/isochrone"));
+    expect(walkUrl).toContain("pace=brisk");
+    expect(h.maybeFetchAmenities.mock.calls[0][1]).toBe("brisk");
+  });
+});
+
 describe("select() — invariants", () => {
   it("reverse 422 is fatal: no rings, no amenities (click path)", async () => {
     const h = makeHarness();

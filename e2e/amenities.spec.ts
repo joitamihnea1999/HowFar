@@ -91,7 +91,7 @@ test("a selection renders amenity markers + five category counts, preserved acro
   await expect(page.getByText("200")).toBeVisible();
 
   // Toggle to Transit: rings change, amenities PERSIST with no refetch.
-  await page.getByRole("button", { name: "Transit", exact: true }).click();
+  await page.getByRole("button", { name: "Public transport", exact: true }).click();
   await expect(map).toHaveAttribute("data-mode", "transit");
   await expect(map).toHaveAttribute("data-amenity-count", "5");
   await expect(page.getByText("Within a 15-min walk")).toBeVisible();
@@ -191,7 +191,7 @@ test("a slow amenity response is not lost when the user toggles mode mid-flight"
 
   // Toggle before amenities resolve — the origin is unchanged, so the in-flight
   // fetch must survive (a toggle must not invalidate the amenity generation).
-  await page.getByRole("button", { name: "Transit", exact: true }).click();
+  await page.getByRole("button", { name: "Public transport", exact: true }).click();
   await expect(map).toHaveAttribute("data-mode", "transit");
 
   // The delayed response lands and paints, with no second request.
@@ -318,7 +318,7 @@ test("a mode toggle after an amenities error refetches instead of stranding the 
   // The toggle recomputes the SAME origin — before task 024 the stale origin key
   // swallowed this refetch and the error persisted forever.
   healthy = true;
-  await page.getByRole("button", { name: "Transit", exact: true }).click();
+  await page.getByRole("button", { name: "Public transport", exact: true }).click();
   await expect(map).toHaveAttribute("data-mode", "transit");
   await expect(map).toHaveAttribute("data-amenity-count", "5", { timeout: 10_000 });
 });
@@ -338,7 +338,7 @@ test("a failed mode-toggle recompute clears amenities instead of leaving orphan 
   // Toggle to Transit: the recompute 502s. The walk rings were already dropped
   // when the recompute started, so keeping the amenities would paint markers
   // anchored to nothing — they must clear along with the panel.
-  await page.getByRole("button", { name: "Transit", exact: true }).click();
+  await page.getByRole("button", { name: "Public transport", exact: true }).click();
   await expect(page.getByText(/could not compute transit reach/i)).toBeVisible();
   await expect(map).not.toHaveAttribute("data-isochrone-rings", /.*/);
   await expect(map).not.toHaveAttribute("data-amenity-count", /.*/);

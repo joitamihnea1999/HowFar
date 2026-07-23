@@ -75,10 +75,12 @@ test("toggling Walk→Transit re-renders transit rings for the same origin witho
   await expect(map).toHaveAttribute("data-mode", "walk");
 
   // 2. Toggle to Transit → transit isochrone for the SAME origin.
-  await page.getByRole("button", { name: "Transit", exact: true }).click();
+  await page.getByRole("button", { name: "Public transport", exact: true }).click();
   await expect(map).toHaveAttribute("data-mode", "transit");
   await expect(map).toHaveAttribute("data-isochrone-rings", "3");
-  await expect(page.getByText("Public transport")).toBeVisible();
+  // The legend reflects the mode (scope to the legend — the toggle button now
+  // also reads "Public transport" after the task-052 rename).
+  await expect(page.getByTestId("ring-legend").getByText("Public transport")).toBeVisible();
 
   // Call accounting: exactly one walk call, one transit call, and NO second
   // geocode/reverse triggered by the toggle.
@@ -108,7 +110,7 @@ test("a transit provider error surfaces a friendly message, not a crash", async 
   await page.getByRole("button", { name: "Go" }).click();
   await expect(map).toHaveAttribute("data-mode", "walk");
 
-  await page.getByRole("button", { name: "Transit", exact: true }).click();
+  await page.getByRole("button", { name: "Public transport", exact: true }).click();
   await expect(page.getByText(/could not compute transit reach/i)).toBeVisible();
 });
 
@@ -134,7 +136,7 @@ test("toggling mode while the first search is still loading does not strand the 
   // Loading: the submit button's accessible name becomes "Searching". Wait for
   // it so the toggle is genuinely mid-flight (no prior selection to fall back on).
   await expect(page.getByRole("button", { name: "Searching" })).toBeVisible({ timeout: 5000 });
-  await page.getByRole("button", { name: "Transit", exact: true }).click();
+  await page.getByRole("button", { name: "Public transport", exact: true }).click();
 
   // Aborting the in-flight search must return the UI to idle immediately — the
   // "Go" button reappears and is enabled well before the 5 s isochrone would resolve.

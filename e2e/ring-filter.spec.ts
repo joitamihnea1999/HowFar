@@ -103,7 +103,7 @@ test("the filter persists across a mode toggle AND a new selection (view prefere
   await expect(map).toHaveAttribute("data-visible-rings", "30");
 
   // Mode toggle recomputes the same origin — the filter must survive.
-  await page.getByRole("button", { name: "Transit", exact: true }).click();
+  await page.getByRole("button", { name: "Public transport", exact: true }).click();
   await expect(map).toHaveAttribute("data-mode", "transit");
   await expect(map).toHaveAttribute("data-ring-filter", "30");
   await expect(map).toHaveAttribute("data-visible-rings", "30");

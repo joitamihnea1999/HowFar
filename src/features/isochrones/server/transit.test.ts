@@ -253,14 +253,14 @@ describe("transitIsochrone", () => {
     })).toBe(true); // origin walk area present via the radial fallback
   });
 
-  it("serves a cache hit without a second fetch, under the v2 key", async () => {
+  it("serves a cache hit without a second fetch, under the v4 key", async () => {
     providerFetch.mockResolvedValue(oneToAll([stop(44.44, 26.12, 5)]));
     const first = await transitIsochrone(44.4, 26.1);
     const second = await transitIsochrone(44.4, 26.1);
     expect(providerFetch).toHaveBeenCalledTimes(1);
     expect(second).toEqual(first);
-    // v3 key: pace+departure scoped; pre-051 rings must never serve.
-    expect([...store.keys()].every((k) => k.startsWith("transit:v3:"))).toBe(true);
+    // v4 key (task 052): pace+departure scoped; pre-052 (v3) rings must never serve.
+    expect([...store.keys()].every((k) => k.startsWith("transit:v4:"))).toBe(true);
   });
 
   it("pins the speed model and routed transfers in the one-to-all request", async () => {

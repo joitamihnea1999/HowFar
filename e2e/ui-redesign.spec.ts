@@ -386,7 +386,7 @@ test("core controls meet touch-size, search-first focus, and live-state contract
     search,
     page.getByRole("button", { name: "Go" }),
     page.getByRole("button", { name: "Walk" }),
-    page.getByRole("button", { name: "Transit", exact: true }),
+    page.getByRole("button", { name: "Public transport", exact: true }),
     page.getByRole("button", { name: "15 min" }),
     page.getByRole("button", { name: "30 min" }),
     page.getByRole("button", { name: "45 min" }),
