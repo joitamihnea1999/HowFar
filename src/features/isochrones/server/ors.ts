@@ -35,11 +35,13 @@ const TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const NOMINAL_MINUTES = [15, 30, 45];
 // Car (task 053): owner-picked 10/20/30-min bands (600/1200/1800 s) so the
 // driving reach fits the Bucharest map extent — a 45-min drive is ~3.5× the
-// tiled area (measured). These are NOMINAL ORS free-flow driving times: NOT
-// calibrated and with NO live traffic on the free tier, so the UI labels them
-// an estimate. A 3-origin probe (2026-07-24) confirmed the response shape
-// matches `normalize` (3 Polygons, echoed `value`) and payloads stay ≤~34 KB /
-// ~1050 coords — well within the ApiCache row budget, so no size cap is needed.
+// tiled area (measured). Free-flow ORS driving times, with NO live traffic on
+// the free tier, so the UI labels them an estimate. AUDITED 2026-07-24 (task
+// 056, docs/PROVIDERS.md "Re-audit"): against an INDEPENDENT ruler (public OSRM
+// driving) + ORS-Matrix, boundary drive-durations land within ±5% of the labels
+// at 3 origins — the ranges are already accurate, so they are kept as-is (a ~1.0
+// calibration factor would be false precision). Payloads stay ≤~34 KB / ~1050
+// coords — within the ApiCache row budget, so no size cap is needed.
 const CAR_RANGES_S = [600, 1200, 1800];
 const CAR_MINUTES = [10, 20, 30];
 const RANGE_TOLERANCE_S = 1; // ORS echoes the requested range in properties.value

@@ -47,12 +47,13 @@ entries. Go/no-go bar: ≥100 fresh addresses/day headroom on every provider. **
   car selection is one extra POST (same key, same rate limiter) — still ≫ the ≥100 addresses/day bar.
 - Free API key required — server-side only. One request covers all three intervals via `range`.
 - **Walk** (`foot-walking`): 15/30/45-min bands, calibrated (below). **Car** (`driving-car`, task
-  053): **10/20/30-min** bands. Car ranges are **nominal free-flow** ORS driving times — NOT
-  calibrated and with **no live traffic** on the free tier — so the UI labels car reach an estimate
-  (SelectionCard note + right-click popup caveat). The 10/20/30 bands were chosen because a
-  45-min drive from central Bucharest is ~3.5× the tiled map extent; 10/20/30 fits the map (a
-  3-origin probe put 10 & 20-min rings fully in-map, 30-min 80–98% in-map). Calibrating car to real
-  drive times is parked (no free car "ruler"; ORS driving Matrix distance is the candidate ruler).
+  053): **10/20/30-min** bands, **free-flow** (no live traffic on the free tier — so the UI labels
+  car reach an estimate: SelectionCard note + right-click popup caveat). The 10/20/30 bands were
+  chosen because a 45-min drive from central Bucharest is ~3.5× the tiled map extent; 10/20/30 fits
+  the map (a 3-origin probe put 10 & 20-min rings fully in-map, 30-min 80–98% in-map). **Audited
+  2026-07-24 (below): the ranges are already accurate — boundaries match real free-flow driving
+  within ±5%, so no calibration factor is applied** (traffic remains the only caveat, and it is a
+  data limitation, not a calibration).
 
 ### Transit isochrones — Transitous (MOTIS) ✅ PICKED — **verified live**
 - API: `https://api.transitous.org/api/v6/one-to-all?one=<lat>,<lon>&maxTravelTime=<min>`
@@ -119,6 +120,35 @@ methodology below is re-runnable whenever providers or the city data change.
   still an open owner action** (see Action items) — no further calibration campaigns before it
   lands. For later travel modes (bike/car), `one-to-many` supports `mode=BIKE|CAR` — same
   instrument, same budget discipline.
+
+#### Re-audit of all modes with independent rulers (2026-07-24)
+
+All three modes were re-measured against **independent** routing engines (not ORS-vs-ORS, which
+is circular), 3 diverse origins × 3 bands, medians of ~5–10 boundary points per band:
+
+- **Car (`driving-car`):** ruler = public **OSRM `driving`** (separate engine) + an ORS-Matrix
+  self-consistency check. Boundary drive-durations landed at ORS-route 0.999–1.091× and OSRM
+  0.921–1.035× the labels — the two rulers **straddle 1.0** with no directional bias, i.e. within
+  ±5% (free-flow measurement noise). **Already accurate → no calibration factor applied** (a ~1.0
+  factor would be false precision).
+- **Walk (`foot-walking`):** ruler = **MOTIS `/plan` direct-walk distance** (a real pedestrian
+  engine, independent of ORS), converted at 80 m/min. All 9 (origin×band) ratios 0.978–1.049,
+  **median 0.999** — the calibrated `[827,1674,2528]` boundaries sit almost exactly at their
+  labelled walking minutes. **Confirmed; no change.**
+  *Ruler caveat: the public OSRM demo's `/foot/` profile is NOT pedestrian — it returns car
+  speeds (~35 km/h). An early walk pass using it showed a spurious 1.8× (car detours in the dense
+  centre) and was discarded. Validate a ruler's profile/units before trusting a ratio.*
+- **Transit:** ruler = **MOTIS `/plan` journeys** to the transit-ring boundaries (2 origins × 3
+  bands). Ratios 0.833–1.000 (median ~0.91) — the rings are consistently **conservative** (a
+  boundary point is reachable in slightly *less* than its labelled minutes; the reach is never
+  over-claimed). This is the safe direction and within the ±10% egress calibration above. Note the
+  measurement is semi-circular (MOTIS journeys vs a MOTIS-built isochrone), so it is a consistency
+  check, not a fully independent one. **No change** (widening the rings would risk over-claiming).
+
+**Verdict: no calibration change to any mode.** Walk/car are accurate within ±5%; transit is mildly
+conservative (safe). The car ranges, shipped as a nominal free-flow estimate, are now independently
+verified accurate — the only remaining caveat is live traffic, a free-tier data limitation the UI
+already discloses.
 
 ### Amenities / POIs — weekly OSM catalogue in PostGIS ✅ PICKED
 - Commons/fair use (<https://dev.overpass-api.de/overpass-doc/en/preface/commons.html>, wiki):
