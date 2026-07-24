@@ -1,4 +1,5 @@
 import { getCachedSafe, setCachedSafe } from "@/lib/api-cache";
+import { decodePolyline } from "@/features/isochrones/polyline";
 import { providerFetch, ProviderError, roundCoord, USER_AGENT } from "@/lib/provider-http";
 
 /**
@@ -19,6 +20,17 @@ const TIMEOUT_MS = 15_000; // /plan is lighter than one-to-all (~0.6s server), b
 // Schedules are stable within a day and the departure is in the cache key, so a
 // few hours of reuse is safe and keeps repeat right-clicks instant.
 const TTL_MS = 6 * 60 * 60 * 1000;
+/** Legs-per-itinerary cap (payload bound). Bucharest trips run ~3–9 legs; a
+ * value well above that drops only degenerate/hostile responses (task 054). */
+const MAX_REACH_LEGS = 24;
+
+/** A leg endpoint's coordinates ([lng, lat] carried as named fields). Optional:
+ * a malformed leg without finite coords still lists its step, it just can't be
+ * drawn (task 054). */
+export interface ReachPoint {
+  lat: number;
+  lng: number;
+}
 
 export interface ReachLeg {
   /** MOTIS mode: WALK | BUS | TRAM | SUBWAY | RAIL | COACH | … */
@@ -31,6 +43,15 @@ export interface ReachLeg {
   fromName: string;
   toName: string;
   minutes: number;
+  /** Board/alight coordinates, surfaced so the client can highlight the stops
+   * the rider actually uses (task 054). Absent when the leg lacks finite coords. */
+  from?: ReachPoint;
+  to?: ReachPoint;
+  /** The leg's drawn track as [lng, lat] points, decoded from MOTIS
+   * `legGeometry` (Google-encoded polyline, precision 7). Empty/absent when the
+   * leg carried no geometry or it decoded to nothing — the client then falls back
+   * to a straight from→to line so a transfer/alight is never silently omitted. */
+  path?: [number, number][];
 }
 
 export type ReachPlan =
@@ -39,6 +60,12 @@ export type ReachPlan =
 
 interface MotisPlace {
   name?: unknown;
+  lat?: unknown;
+  lon?: unknown;
+}
+interface MotisLegGeometry {
+  points?: unknown;
+  precision?: unknown;
 }
 interface MotisLeg {
   mode?: unknown;
@@ -47,6 +74,7 @@ interface MotisLeg {
   to?: MotisPlace | null;
   routeShortName?: unknown;
   headsign?: unknown;
+  legGeometry?: MotisLegGeometry | null;
 }
 interface MotisItinerary {
   duration?: unknown;
@@ -63,6 +91,29 @@ interface MotisPlanBody {
 
 function placeName(p: MotisPlace | null | undefined): string {
   return typeof p?.name === "string" ? p.name : "";
+}
+/** A leg endpoint's coords, or undefined when either is missing / non-numeric /
+ * out of range — a leg without drawable coords still lists as a step. Requires
+ * an ACTUAL number (not a coercible null/""): `Number(null)` is 0, which would
+ * otherwise plant a false (0,0) stop off West Africa (review). */
+function placePoint(p: MotisPlace | null | undefined): ReachPoint | undefined {
+  const lat = p?.lat;
+  const lng = p?.lon;
+  if (typeof lat !== "number" || typeof lng !== "number") return undefined;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return undefined;
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return undefined;
+  return { lat, lng };
+}
+/** Transitous encodes `legGeometry` at precision 7. Default to 7 (NOT the format's
+ * usual 5) when the field is missing, so a dropped precision degrades to correct
+ * decoding rather than silently pushing every path 100× out of range → empty →
+ * straight-line-only draw (review). */
+const DEFAULT_LEG_PRECISION = 7;
+/** Decode a MOTIS leg's `legGeometry` to a bounded [lng,lat] track. */
+function legPath(g: MotisLegGeometry | null | undefined): [number, number][] {
+  if (!g || typeof g !== "object") return [];
+  const precision = Number(g.precision);
+  return decodePolyline(g.points, Number.isFinite(precision) && precision > 0 ? precision : DEFAULT_LEG_PRECISION);
 }
 function minutesOf(seconds: unknown): number {
   const s = Number(seconds);
@@ -82,12 +133,27 @@ export function parseItinerary(it: MotisItinerary): ReachPlan {
   const rawLegs = Array.isArray(it?.legs) ? it.legs : [];
   const legs: ReachLeg[] = [];
   for (const l of rawLegs) {
+    // Bound legs-per-itinerary: with each leg's `path` now up to
+    // MAX_POLYLINE_POINTS, a degenerate/hostile MOTIS response could otherwise
+    // build a multi-MB ReachPlan that gets cached (6h) and shipped to the client.
+    // A real Bucharest trip is well under this (review).
+    if (legs.length >= MAX_REACH_LEGS) break;
     if (!l || typeof l !== "object") continue; // tolerate null/garbled leg entries (T2)
     const mode = str(l.mode) ?? "UNKNOWN";
     const minutes = minutesOf(l.duration);
     const isWalk = mode === "WALK";
     if (isWalk && minutes < 1) continue; // drop 0-min START/END walk stubs
-    const leg: ReachLeg = { mode, fromName: placeName(l.from), toName: placeName(l.to), minutes };
+    const leg: ReachLeg = {
+      mode,
+      fromName: placeName(l.from),
+      toName: placeName(l.to),
+      minutes,
+      // Coords + decoded track ride along so the client can DRAW the journey
+      // (task 054); from/to are kept even when the path decodes to nothing.
+      from: placePoint(l.from),
+      to: placePoint(l.to),
+      path: legPath(l.legGeometry),
+    };
     if (!isWalk) {
       const line = str(l.routeShortName);
       if (line) leg.line = line;
@@ -142,7 +208,9 @@ export async function planTrip(
   to: { lat: number; lng: number },
   departureIso: string,
 ): Promise<ReachPlan> {
-  const key = `reach:plan:v1:${roundCoord(from.lat)},${roundCoord(from.lng)}:${roundCoord(to.lat)},${roundCoord(to.lng)}:${departureIso}`;
+  // v2: the cached ReachPlan now carries per-leg coords + decoded geometry
+  // (task 054) — a v1 entry would deserialize without them.
+  const key = `reach:plan:v2:${roundCoord(from.lat)},${roundCoord(from.lng)}:${roundCoord(to.lat)},${roundCoord(to.lng)}:${departureIso}`;
   const hit = await getCachedSafe<ReachPlan>(key);
   if (hit) return hit;
   const existing = inFlight.get(key);

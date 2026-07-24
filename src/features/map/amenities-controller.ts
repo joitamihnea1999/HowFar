@@ -71,6 +71,14 @@ export function createAmenitiesController({
   let gen = 0;
   let key: string | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  // While a right-click journey is drawn, amenity markers are decluttered
+  // (hidden) so the trip is legible (task 054). This is PERSISTENT state consulted
+  // INSIDE the single filter chokepoint (`applyAmenityLayerFilter`), not a one-shot
+  // `setFilter` — otherwise a late amenity fetch (`renderAmenities`) or a
+  // category-tile toggle (`applyAmenitySelection`) would repaint markers over the
+  // journey (plan-panel B). A filter matching no feature hides them all.
+  let reachView = false;
+  const HIDE_ALL = ["in", ["get", "category"], ["literal", []]] as unknown as maplibregl.FilterSpecification;
 
   // `counts` are the server's TRUE clipped totals (may exceed the rendered
   // marker count when a category was capped) — the chips show these, not a
@@ -79,9 +87,30 @@ export function createAmenitiesController({
   // the browser list via the same selection array.
   function applyAmenityLayerFilter(categories: AmenityCategoryKey[]) {
     if (!loadState.styleLoaded || !map.getLayer("amenity-markers")) return;
-    const filter = amenityMapCategoryFilter(categories) as maplibregl.FilterSpecification | null;
+    // reachView wins over the category selection: composing here means EVERY
+    // filter application (fetch render, category toggle, selection) keeps markers
+    // hidden while a journey is shown, and the category selection is restored the
+    // moment reachView clears.
+    const filter = reachView
+      ? HIDE_ALL
+      : (amenityMapCategoryFilter(categories) as maplibregl.FilterSpecification | null);
     map.setFilter("amenity-markers", filter);
     if (map.getLayer("amenity-glyphs")) map.setFilter("amenity-glyphs", filter);
+    // Faithful read-back of the ACTUAL applied filter (set here, at the single
+    // setFilter chokepoint) — distinct from `data-amenity-count`, which is the
+    // filtered LIST length and would not change when reach-view hides markers
+    // (plan-panel #4). e2e asserts declutter on/off against this.
+    el.dataset.amenityDeclutter = reachView ? "on" : "off";
+  }
+
+  // Enter/leave declutter for the right-click journey. Re-applies the filter from
+  // the LIVE selected-categories ref (not a snapshot taken at enter) so a category
+  // toggle made while the journey was open is honoured on restore (review).
+  function setReachView(on: boolean) {
+    if (reachView === on) return;
+    reachView = on;
+    applyAmenityLayerFilter(selectedCategoriesRef.current);
+    resetAmenityHover(); // hidden markers must not keep a hover/pick affordance
   }
 
   function renderAmenities(items: Amenity[], counts: AmenityCounts) {
@@ -201,6 +230,7 @@ export function createAmenitiesController({
     clearAmenities,
     fetchAmenities,
     maybeFetchAmenities,
+    setReachView,
     dispose() {
       abort?.abort();
       if (retryTimer) clearTimeout(retryTimer);

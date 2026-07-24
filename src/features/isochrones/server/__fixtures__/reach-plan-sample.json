@@ -1,0 +1,71 @@
+{
+  "_source": "Transitous MOTIS /api/v1/plan, Bucharest Universitate-area, captured 2026-07-24; trimmed to the fields parseItinerary consumes. Real coords/geometry — the decode test derives expected endpoints from each leg's own from/to.",
+  "itineraries": [
+    {
+      "duration": 2040,
+      "transfers": 0,
+      "legs": [
+        {
+          "mode": "WALK",
+          "duration": 900,
+          "from": {
+            "name": "START",
+            "lat": 44.4268,
+            "lon": 26.1025
+          },
+          "to": {
+            "name": "Universitate",
+            "lat": 44.434372,
+            "lon": 26.103134
+          },
+          "legGeometry": {
+            "points": "yo~jnY}tvzpNpfB{_B??wpKqhT??}gGjS??crDtK??m_DlIke@uZgnDlVkdFpvJuo@gG??~Ae\\??|Ciq@??ToF??wUsD??d@sXi@aYcEwQwFqOeJgOsIgIiIaB??eHe@_rQz[??edLpP??mfKpK??ivHl^??au@hE??s{J|nA??sxP||B??oBe^??mEiy@??aFk~@??}Ei}@??mDep@??wj@fJ??cVzD??_S`D??ic@rR{_Cje@??ieCbg@??qrBvg@",
+            "precision": 7,
+            "length": 68
+          }
+        },
+        {
+          "mode": "BUS",
+          "duration": 540,
+          "from": {
+            "name": "Universitate",
+            "lat": 44.434372,
+            "lon": 26.103134
+          },
+          "to": {
+            "name": "Povernei",
+            "lat": 44.449127,
+            "lon": 26.092723999999997
+          },
+          "legGeometry": {
+            "points": "oyqonYwya{pNf@wBgdQ~fE_|Bf^ooBfpAolFfmEwoJ~fE_pk@vmUwda@vwPoic@vwPg{u@~pYw~OfxGgfFnoB_q@?wj@gEg^g^g^oKwj@oK_q@oKwj@?wj@fEgw@vj@wj@~bBoK~p@gE~p@nKfpAvQ~iAfEnvA_Xn}@waLvqXoiJfaUoiJnnTz@oA",
+            "precision": 7,
+            "length": 33
+          },
+          "routeShortName": "381",
+          "headsign": "Clabucet"
+        },
+        {
+          "mode": "WALK",
+          "duration": 600,
+          "from": {
+            "name": "Povernei",
+            "lat": 44.449127,
+            "lon": 26.092723999999997
+          },
+          "to": {
+            "name": "END",
+            "lat": 44.4479,
+            "lon": 26.087
+          },
+          "legGeometry": {
+            "points": "ghqxnYexutpN}t@vgB??mwAnrD??c`Bj_EqVtm@??sK|W??w\\zy@??~hAfhA??|QxQ??`UxT??cXpk@??xr@vFf]vFh\\zJ??zt@zpCrgDdxMtmDxzM??thBthHhKla@??`L`b@??r\\~`AlbBrnEdfBtnEvaBf`Ed`B||D??reC|aG??u|ElyE",
+            "precision": 7,
+            "length": 42
+          }
+        }
+      ]
+    }
+  ],
+  "direct": []
+}

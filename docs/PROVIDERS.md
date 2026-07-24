@@ -75,6 +75,11 @@ entries. Go/no-go bar: ≥100 fresh addresses/day headroom on every provider. **
   **"contact before … difficult to calculate requests (such as routing, isochrones)"** →
   **ACTION: send Transitous a short hello** (Matrix/email, see their site) describing
   HowFar's cached, Bucharest-only, low-volume use.
+- **Journey directions (`/api/v1/plan`):** the right-click "how do I get there?" trip uses the
+  same engine's point-to-point planner (cached, single-flighted). Each leg carries a
+  `legGeometry.points` encoded polyline **at precision 7 (1e7 scale), not the format's usual
+  precision 5** — decode with the leg's own `legGeometry.precision`, or the path lands ~100× out
+  of range. Legs also carry `from`/`to` `lat`/`lon` (board/alight stops) and `intermediateStops`.
 - Fallback if Transitous asks us to stop: TravelTime (docs.traveltime.com) — after 2-week trial,
   "a limit of 5 hits per minute applies"; isochrone detail capped at Medium on free; Romania
   transit coverage listed only behind account login — **unverified**. Kept as plan B, not the pick.

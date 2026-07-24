@@ -19,6 +19,7 @@ vi.mock("@/lib/provider-http", async (importOriginal) => ({
 }));
 
 import { bestPlan, parseItinerary, planTrip, type ReachPlan } from "./transit-plan";
+import sample from "./__fixtures__/reach-plan-sample.json";
 
 // Trimmed from the real Transitous /plan probe (Berceni → north): a WALK→BUS→
 // WALK→BUS→WALK itinerary, plus a faster alternative listed AFTER the slow one
@@ -60,7 +61,10 @@ describe("parseItinerary", () => {
     expect(plan.totalMinutes).toBe(83);
     expect(plan.transfers).toBe(1);
     expect(plan.legs).toHaveLength(5);
-    expect(plan.legs[1]).toEqual({ mode: "BUS", line: "243", headsign: "Bd. Lacul Tei", fromName: "Emil Racovita", toName: "Soseaua Colentina", minutes: 50 });
+    // These fixtures carry names only (no lat/lon/legGeometry), so from/to are
+    // undefined (dropped by toEqual) and path is []. Real geometry is exercised
+    // by the self-consistent fixture test below.
+    expect(plan.legs[1]).toEqual({ mode: "BUS", line: "243", headsign: "Bd. Lacul Tei", fromName: "Emil Racovita", toName: "Soseaua Colentina", minutes: 50, path: [] });
     // WALK legs carry no line/headsign.
     expect(plan.legs[0].line).toBeUndefined();
   });
@@ -79,7 +83,48 @@ describe("parseItinerary", () => {
 
   it("is defensive about missing/garbled fields", () => {
     const plan = parseItinerary({ legs: [{ mode: "BUS", duration: 120, from: null, to: undefined }] }) as Extract<ReachPlan, { reachable: true }>;
-    expect(plan.legs[0]).toEqual({ mode: "BUS", fromName: "", toName: "", minutes: 2 });
+    expect(plan.legs[0]).toEqual({ mode: "BUS", fromName: "", toName: "", minutes: 2, path: [] });
+  });
+
+  it("does NOT coerce null/blank endpoint coords to (0,0) — a leg with no numeric coords has undefined from/to", () => {
+    // Number(null)===0 / Number("")===0 would otherwise plant a false (0,0) stop
+    // off West Africa and draw a bogus straight route there (review).
+    const plan = parseItinerary({
+      legs: [{ mode: "BUS", duration: 300, from: { name: "X", lat: null, lon: null }, to: { name: "Y", lat: "", lon: "" } }],
+    }) as Extract<ReachPlan, { reachable: true }>;
+    expect(plan.legs[0].from).toBeUndefined();
+    expect(plan.legs[0].to).toBeUndefined();
+  });
+
+  it("caps legs per itinerary so a degenerate response can't build an unbounded plan", () => {
+    const many = Array.from({ length: 60 }, (_, i) => ({ mode: "BUS", duration: 120, from: { name: `S${i}` }, to: { name: `S${i + 1}` } }));
+    const plan = parseItinerary({ duration: 3600, transfers: 0, legs: many }) as Extract<ReachPlan, { reachable: true }>;
+    expect(plan.legs.length).toBeLessThanOrEqual(24);
+  });
+
+  // Self-consistent geometry check (plan-panel, Critical): rather than pin the
+  // precision-7 decode to hardcoded magic numbers, assert that each leg's decoded
+  // legGeometry endpoints reproduce THAT leg's own from/to coords, from a real
+  // committed /plan capture. If the MOTIS scale ever changes, this fails loudly
+  // instead of enshrining a wrong precision that still "passes".
+  it("decodes each fixture leg's geometry consistently with its own from/to coords", () => {
+    const plan = parseItinerary(sample.itineraries[0]) as Extract<ReachPlan, { reachable: true }>;
+    expect(plan.legs.length).toBeGreaterThan(0);
+    let drawnLegs = 0;
+    for (const leg of plan.legs) {
+      expect(leg.from).toBeDefined();
+      expect(leg.to).toBeDefined();
+      if (leg.path && leg.path.length >= 2) {
+        drawnLegs++;
+        const first = leg.path[0];
+        const last = leg.path[leg.path.length - 1];
+        expect(first[0]).toBeCloseTo(leg.from!.lng, 3);
+        expect(first[1]).toBeCloseTo(leg.from!.lat, 3);
+        expect(last[0]).toBeCloseTo(leg.to!.lng, 3);
+        expect(last[1]).toBeCloseTo(leg.to!.lat, 3);
+      }
+    }
+    expect(drawnLegs).toBeGreaterThan(0); // the fixture must actually exercise decoding
   });
 });
 
@@ -145,7 +190,7 @@ describe("planTrip", () => {
     const second = await planTrip(FROM, TO, DEP);
     expect(second).toEqual(first);
     expect(providerFetch).toHaveBeenCalledTimes(1);
-    expect([...store.keys()][0]).toMatch(/^reach:plan:v1:44\.37600,26\.12500:44\.47800,26\.12800:/);
+    expect([...store.keys()][0]).toMatch(/^reach:plan:v2:44\.37600,26\.12500:44\.47800,26\.12800:/);
   });
 
   it("passes fromPlace/toPlace/time to the plan endpoint", async () => {

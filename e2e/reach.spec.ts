@@ -33,14 +33,16 @@ const TRANSIT = {
 // "unreachable" with no /api/reach call (the T1 gate).
 const emptyRing = (minutes: number) => ({ minutes, geometry: { type: "MultiPolygon", coordinates: [] } });
 const TRANSIT_EMPTY = { origin: { lat: 44.4268, lng: 26.1025 }, rings: [emptyRing(15), emptyRing(30), emptyRing(45)], departure: "2026-07-29T05:30:00.000Z" };
+// Legs carry coords + decoded path (the server now surfaces these — task 054),
+// so the popup text AND the on-map journey draw are both exercised.
 const PLAN = {
   reachable: true,
   totalMinutes: 57,
   transfers: 1,
   legs: [
-    { mode: "WALK", fromName: "START", toName: "Emil Racovita", minutes: 9 },
-    { mode: "BUS", line: "243", headsign: "Bd. Lacul Tei", fromName: "Emil Racovita", toName: "Soseaua Colentina", minutes: 50 },
-    { mode: "WALK", fromName: "Soseaua Colentina", toName: "END", minutes: 5 },
+    { mode: "WALK", fromName: "START", toName: "Emil Racovita", minutes: 9, from: { lat: 44.4268, lng: 26.1025 }, to: { lat: 44.44, lng: 26.1 }, path: [[26.1025, 44.4268], [26.1, 44.44]] },
+    { mode: "BUS", line: "243", headsign: "Bd. Lacul Tei", fromName: "Emil Racovita", toName: "Soseaua Colentina", minutes: 50, from: { lat: 44.44, lng: 26.1 }, to: { lat: 44.46, lng: 26.09 }, path: [[26.1, 44.44], [26.095, 44.45], [26.09, 44.46]] },
+    { mode: "WALK", fromName: "Soseaua Colentina", toName: "END", minutes: 5, from: { lat: 44.46, lng: 26.09 }, to: { lat: 44.47, lng: 26.087 }, path: [[26.09, 44.46], [26.087, 44.47]] },
   ],
 };
 

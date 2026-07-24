@@ -136,6 +136,113 @@ export function addRoutePathLayers(map: LayerHost): void {
   });
 }
 
+/** Right-click journey draw palette (task 054). Walk legs = the walk-mode teal
+ * (dashed), transit legs = the transit violet, matching the isochrone ramp so
+ * the drawn trip reads in the same visual language as the rings. Board/alight
+ * dots are emphasized; transfers are a quieter hollow dot; the highlight layers
+ * pulse a near-white figure when a popup step is hovered. */
+export const REACH_WALK_COLOR = "#2dd4bf"; // --hf-walk
+export const REACH_TRANSIT_COLOR = "#a78bfa"; // --hf-transit
+const REACH_CASING = "#09090b";
+const REACH_HIGHLIGHT = "#fafafa";
+
+/** The journey a right-click drew (task 054): one GeoJSON source holds the leg
+ * LineStrings (props `kind:"leg"`, `legIndex`, `isWalk`) and the used-stop Points
+ * (props `kind:"stop"`, `stopKind`, `stopIndex`, `name`). Two `*-hl` layers stay
+ * filtered to nothing until a popup step is hovered. Added BETWEEN the OSM
+ * route-path and the amenity markers so a drawn journey never covers the
+ * interactive markers, and (with amenities decluttered while it shows) reads
+ * cleanly over the basemap + rings. */
+export function addReachPathLayers(map: LayerHost): void {
+  map.addSource("reach-path", { type: "geojson", data: EMPTY_FC as GeoJSON.FeatureCollection });
+  const isLine = ["==", ["geometry-type"], "LineString"] as maplibregl.FilterSpecification;
+  const isPoint = ["==", ["geometry-type"], "Point"] as maplibregl.FilterSpecification;
+  const round = { "line-cap": "round" as const, "line-join": "round" as const };
+
+  map.addLayer({
+    id: "reach-path-casing",
+    type: "line",
+    source: "reach-path",
+    filter: isLine,
+    layout: round,
+    paint: { "line-color": REACH_CASING, "line-width": 7, "line-opacity": 0.85 },
+  });
+  // Walk legs: dashed teal (a walked segment reads differently from a ridden one).
+  map.addLayer({
+    id: "reach-path-walk",
+    type: "line",
+    source: "reach-path",
+    filter: ["all", isLine, ["==", ["get", "isWalk"], true]] as maplibregl.FilterSpecification,
+    layout: round,
+    paint: { "line-color": REACH_WALK_COLOR, "line-width": 3, "line-dasharray": [1.4, 1.4], "line-opacity": 0.95 },
+  });
+  // Transit legs: solid violet.
+  map.addLayer({
+    id: "reach-path-transit",
+    type: "line",
+    source: "reach-path",
+    filter: ["all", isLine, ["==", ["get", "isWalk"], false]] as maplibregl.FilterSpecification,
+    layout: round,
+    paint: { "line-color": REACH_TRANSIT_COLOR, "line-width": 4.5, "line-opacity": 0.97 },
+  });
+  // Highlight line (hover): filtered to the active leg only; near-white figure.
+  map.addLayer({
+    id: "reach-path-line-hl",
+    type: "line",
+    source: "reach-path",
+    filter: ["all", isLine, ["==", ["get", "legIndex"], -1]] as maplibregl.FilterSpecification,
+    layout: round,
+    paint: { "line-color": REACH_HIGHLIGHT, "line-width": 6, "line-opacity": 0.9 },
+  });
+  // Used stops: board/alight are big filled violet dots; transfers a smaller
+  // hollow dot. White stroke gives figure/ground pop on the dark basemap.
+  map.addLayer({
+    id: "reach-path-stops",
+    type: "circle",
+    source: "reach-path",
+    filter: isPoint,
+    paint: {
+      "circle-radius": ["match", ["get", "stopKind"], "transfer", 5, 6.5],
+      "circle-color": ["match", ["get", "stopKind"], "transfer", REACH_CASING, REACH_TRANSIT_COLOR],
+      "circle-stroke-color": REACH_HIGHLIGHT,
+      "circle-stroke-width": 2,
+    },
+  });
+  // Highlight ring (hover): filtered to the hovered step's stop ids.
+  map.addLayer({
+    id: "reach-path-stops-hl",
+    type: "circle",
+    source: "reach-path",
+    filter: ["all", isPoint, ["in", ["get", "stopIndex"], ["literal", []]]] as maplibregl.FilterSpecification,
+    paint: {
+      "circle-radius": 10,
+      "circle-color": "rgba(250,250,250,0.14)",
+      "circle-stroke-color": REACH_HIGHLIGHT,
+      "circle-stroke-width": 2.5,
+    },
+  });
+  // Board/alight names (the endpoints that matter most); transfers stay unlabelled
+  // to avoid crowding — their dot + the popup step carry the detail.
+  map.addLayer({
+    id: "reach-path-labels",
+    type: "symbol",
+    source: "reach-path",
+    filter: ["all", isPoint, ["!=", ["get", "stopKind"], "transfer"]] as maplibregl.FilterSpecification,
+    layout: {
+      "text-field": ["get", "name"],
+      "text-font": ["Noto Sans Medium"],
+      "text-size": 11,
+      "text-anchor": "top",
+      "text-offset": [0, 0.8],
+    },
+    paint: {
+      "text-color": REACH_HIGHLIGHT,
+      "text-halo-color": REACH_CASING,
+      "text-halo-width": 1.5,
+    },
+  });
+}
+
 /** Amenity marker sizing: rest vs hover (task 024). The hover radius nearly
  * doubles the target and is what the shared 12px pick pad is calibrated to. */
 export const AMENITY_RADIUS = 7;

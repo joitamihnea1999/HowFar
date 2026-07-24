@@ -26,6 +26,7 @@ import EmptyState from "@/features/map/EmptyState";
 import {
   addAmenityLayers,
   addIsochroneLayers,
+  addReachPathLayers,
   addRoutePathLayers,
   createMapStyle,
 } from "@/features/map/map-setup";
@@ -34,6 +35,7 @@ import { createCameraController } from "@/features/map/camera-controller";
 import { createHoverController } from "@/features/map/hover-controller";
 import { createLoadState } from "@/features/map/load-state";
 import { createPopupController } from "@/features/map/popup-controller";
+import { createReachJourneyController } from "@/features/map/reach-journey-controller";
 import { createRingRevealController } from "@/features/map/ring-reveal-controller";
 import { createRoutePathController } from "@/features/map/route-path-controller";
 import { createSelectFlowController } from "@/features/map/select-flow-controller";
@@ -236,6 +238,12 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       attributionControl: { compact: false },
     });
     mapRef.current = map;
+    // Expose the map instance for e2e RENDERED-state assertions (task 054): the
+    // draw/declutter/highlight suites verify actual `queryRenderedFeatures` /
+    // `querySourceFeatures` output, not just the code's own `data-*` stamps
+    // (which can false-pass — impl-panel). Harmless in prod (a handle
+    // to the already-visible map); cleared on teardown.
+    (window as unknown as { __hfMap?: maplibregl.Map }).__hfMap = map;
     map.addControl(new maplibregl.NavigationControl({ showCompass: true, showZoom: true }), "bottom-right");
 
     // Shared lifecycle cell replayed at `load` (see load-state.ts). Buffers a
@@ -261,7 +269,13 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
     applyRingFilterRef.current = applyRingFilter;
     const route = createRoutePathController({ map, el, loadState, reducedMotion, applyCameraPadding });
     const { hitsActiveRoutePath } = route;
-    const popup = createPopupController({ map, el, reducedMotion, route, applyCameraPadding });
+    // The right-click journey draw (task 054). Created before the popup (no popup
+    // dep); the popup drives it. Amenity declutter is wired via a holder AFTER the
+    // amenities controller exists (it is created after the popup), breaking the
+    // popup↔amenities construction cycle (plan-panel K).
+    const reachJourney = createReachJourneyController({ map, el, loadState });
+    const reachDeclutter: { set: (on: boolean) => void } = { set: () => {} };
+    const popup = createPopupController({ map, el, reducedMotion, route, journey: reachJourney, reachDeclutter, applyCameraPadding });
     const { openAmenityPopup, inspectAmenity, closeStopPopup } = popup;
     inspectAmenityRef.current = inspectAmenity;
     const amenities = createAmenitiesController({
@@ -278,6 +292,8 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
     });
     const { renderAmenities, clearAmenities, fetchAmenities, maybeFetchAmenities, applyAmenitySelection } =
       amenities;
+    // Now that the amenities controller exists, let the popup toggle declutter.
+    reachDeclutter.set = amenities.setReachView;
     clearAmenitiesRef.current = clearAmenities;
     fetchAmenitiesRef.current = fetchAmenities;
     applyAmenitySelectionRef.current = applyAmenitySelection;
@@ -321,6 +337,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       // markers on top (their hover/click affordance stays primary).
       addIsochroneLayers(map);
       addRoutePathLayers(map);
+      addReachPathLayers(map); // task 054: between the OSM route path and the markers
       addAmenityLayers(map);
 
       loadState.styleLoaded = true;
@@ -339,6 +356,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
         loadState.pendingAmenities = null;
         renderAmenities(a.items, a.counts);
       }
+      reachJourney.flushPending(); // replay a right-click journey that raced `load`
       if (map.getLayer("amenity-markers") && map.getLayer("amenity-glyphs")) {
         el.dataset.amenityEncoding = "color+glyph";
       }
@@ -471,6 +489,10 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       const hit = pickAmenity(e.point);
       if (hit) return void openAmenityPopup(hit.feature, hit.coords);
       if (hitsActiveRoutePath(e.point)) return;
+      // A click on the drawn right-click journey (a leg line or a used-stop dot)
+      // is a no-op, not a new selection — mirrors the OSM route-path guard so
+      // inspecting the journey never moves the origin (task 054, plan-panel C).
+      if (reachJourney.hitsActiveJourney(e.point)) return;
       selectRef.current?.({ kind: "click", lat: e.lngLat.lat, lng: e.lngLat.lng });
     });
 
@@ -495,6 +517,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
           selectionRender.dispose,
           amenities.dispose,
           popup.dispose,
+          reachJourney.dispose,
           route.dispose,
           ring.dispose,
           hover.dispose,
@@ -511,6 +534,9 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
           },
         ],
         () => {
+          if ((window as unknown as { __hfMap?: maplibregl.Map }).__hfMap === map) {
+            delete (window as unknown as { __hfMap?: maplibregl.Map }).__hfMap;
+          }
           map.remove();
           maplibregl.removeProtocol("pmtiles");
           mapRef.current = null;

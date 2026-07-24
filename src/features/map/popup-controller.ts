@@ -11,7 +11,8 @@ import { normalizeAmenitySelection } from "@/features/amenities/amenity-selectio
 import { mergeStopLines, type StopLine } from "@/features/amenities/stop-lines";
 import { buildStopPopupModel, STOP_POPUP_TEXT, type StopPopupModel } from "@/features/amenities/stop-popup";
 import type { ReachPlan } from "@/features/isochrones/server/transit-plan";
-import { buildReachSteps, carReachText, isWalkOnly, reachSummary, walkReachText, type ReachRequest } from "@/features/map/reach";
+import { buildReachSteps, carReachText, hasTransitLeg, isWalkOnly, reachSummary, walkReachText, type ReachRequest } from "@/features/map/reach";
+import type { ReachJourneyController } from "@/features/map/reach-journey-controller";
 import type { EdgeInsets } from "@/features/map/route-framing";
 import type { RoutePathController } from "@/features/map/route-path-controller";
 
@@ -39,12 +40,20 @@ export function createPopupController({
   el,
   reducedMotion,
   route,
+  journey,
+  reachDeclutter,
   applyCameraPadding,
 }: {
   map: maplibregl.Map;
   el: HTMLElement;
   reducedMotion: MediaQueryList;
   route: RoutePathController;
+  /** Draws/clears/highlights the right-click journey (task 054). */
+  journey: ReachJourneyController;
+  /** Toggles amenity declutter while a journey is shown. A holder object so it
+   * can be wired after the amenities controller (created after this one) exists —
+   * breaks the popup↔amenities construction cycle (plan-panel K). */
+  reachDeclutter: { set: (on: boolean) => void };
   applyCameraPadding: (hasResults: boolean) => EdgeInsets;
 }) {
   let currentPopup: maplibregl.Popup | null = null;
@@ -281,6 +290,17 @@ export function createPopupController({
     focusKeyboardPopup(popup);
   }
 
+  // Clear any drawn right-click journey AND restore amenity markers (task 054).
+  // Idempotent, so it is safe to call from BOTH the universal `closeStopPopup`
+  // chokepoint and the reach popup's own `close` handler — every path that
+  // invalidates the reach (a new popup, a new selection, a mode toggle, dispose,
+  // or the × button) funnels through one of those, so the journey + declutter can
+  // never outlive the popup that owns them (plan-panel J).
+  function teardownReach() {
+    journey.clear();
+    reachDeclutter.set(false);
+  }
+
   // Tear down the popup AND invalidate its in-flight fetch (bumping the gen so a
   // late response can't repaint a removed popup). Called on a new stop click and
   // at the start of any new selection.
@@ -290,6 +310,7 @@ export function createPopupController({
     reachAbort?.abort();
     reachGen += 1;
     delete el.dataset.reachState;
+    teardownReach();
     currentPopup?.remove();
     currentPopup = null;
     popupCategory = null;
@@ -374,11 +395,39 @@ export function createPopupController({
   // A small heading + detail, plus (for a planned transit trip) an ordered step
   // list. All text via textContent (OSM stop names / line headsigns are
   // untrusted). `state` drives an el-level `data-reach-state` stamp for e2e.
+  type ReachStepView = { primary: string; secondary: string; mode: string };
   type ReachRender =
     | { state: "hint" | "loading" | "none" | "error" | "outside"; title: string; detail: string }
     | { state: "walk"; title: string; detail: string }
     | { state: "car"; title: string; detail: string }
-    | { state: "transit"; title: string; detail: string; steps: { primary: string; secondary: string }[] };
+    | { state: "transit"; title: string; detail: string; steps: ReachStepView[] };
+
+  // A compact glyph per leg mode for the step rail. Walk legs read teal-dashed;
+  // vehicle legs get a mode glyph in the transit violet. Plain unicode keeps the
+  // popup self-contained (no icon font / network) and legible at small size.
+  function stepGlyph(mode: string): string {
+    switch (mode.toUpperCase()) {
+      case "WALK":
+        return "→";
+      case "BUS":
+      case "COACH":
+        return "B";
+      case "TRAM":
+        return "T";
+      case "SUBWAY":
+      case "METRO":
+        return "M";
+      case "RAIL":
+      case "REGIONAL_RAIL":
+        return "R";
+      case "TROLLEYBUS":
+        return "Tb";
+      case "FERRY":
+        return "F";
+      default:
+        return "•";
+    }
+  }
 
   function renderReachPopup(model: ReachRender): HTMLElement {
     const root = document.createElement("div");
@@ -401,19 +450,46 @@ export function createPopupController({
     if (model.state === "transit") {
       const list = document.createElement("ol");
       list.className = "hf-reach-popup__steps";
-      for (const step of model.steps) {
+      model.steps.forEach((step, index) => {
+        const isWalk = step.mode.toUpperCase() === "WALK";
         const li = document.createElement("li");
         li.className = "hf-reach-popup__step";
+        li.dataset.stepMode = isWalk ? "walk" : "transit";
+        // Hovering (or focusing) a step highlights its leg + stops on the map,
+        // and clears on leave — the popup↔map tie the owner asked for. The step
+        // index is 1:1 with the journey leg (buildReachSteps maps one per leg).
+        li.tabIndex = 0;
+        const enter = () => journey.highlight(index);
+        const leave = () => journey.highlight(null);
+        li.addEventListener("mouseenter", enter);
+        li.addEventListener("mouseleave", leave);
+        li.addEventListener("focus", enter);
+        li.addEventListener("blur", leave);
+
+        const glyph = document.createElement("span");
+        glyph.className = "hf-reach-popup__glyph";
+        glyph.setAttribute("aria-hidden", "true");
+        glyph.textContent = stepGlyph(step.mode);
+
+        const body = document.createElement("span");
+        body.className = "hf-reach-popup__step-body";
         const primary = document.createElement("span");
         primary.className = "hf-reach-popup__step-primary";
         primary.textContent = step.primary;
         const secondary = document.createElement("span");
         secondary.className = "hf-reach-popup__step-secondary";
         secondary.textContent = step.secondary;
-        li.append(primary, secondary);
+        body.append(primary, secondary);
+
+        li.append(glyph, body);
         list.appendChild(li);
-      }
+      });
       root.appendChild(list);
+
+      const attribution = document.createElement("div");
+      attribution.className = "hf-reach-popup__attribution";
+      attribution.textContent = "Routing via transitous.org";
+      root.appendChild(attribution);
     }
     return root;
   }
@@ -442,6 +518,7 @@ export function createPopupController({
       reachAbort?.abort();
       reachGen += 1;
       delete el.dataset.reachState;
+      teardownReach(); // a drawn journey + declutter must not outlive its popup
       if (currentPopup === next) currentPopup = null;
     });
     return next;
@@ -494,7 +571,13 @@ export function createPopupController({
     const popup = showReach({ state: "loading", title: "Planning your trip…", detail: "Finding the best public-transport route." }, req.coords);
 
     const timer = setTimeout(() => {
-      if (gen === reachGen) showReach({ state: "error", title: "Couldn’t plan this trip", detail: "The routing service is slow — please try again." }, req.coords, popup);
+      if (gen === reachGen) {
+        // Invalidate this generation BEFORE aborting: otherwise a `res.json()`
+        // that resolved just before the abort could still pass the gen check and
+        // draw/declutter a journey after we already gave up (review).
+        reachGen += 1;
+        showReach({ state: "error", title: "Couldn’t plan this trip", detail: "The routing service is slow — please try again." }, req.coords, popup);
+      }
       controller.abort();
     }, REACH_TIMEOUT_MS);
 
@@ -512,16 +595,41 @@ export function createPopupController({
         if (!plan.reachable) {
           return void showReach({ state: "none", title: "No public-transport route", detail: "No trip was found for this departure time." }, req.coords, popup);
         }
-        // A plan with no transit leg is really walking directions (T4).
-        if (isWalkOnly(plan.legs)) {
+        // A plan with no transit leg is really walking directions (T4) — stay
+        // text-only: NO map draw, NO declutter (the visual treatment is for public
+        // transport; a walking answer would declutter for a bare straight line —
+        // plan-panel A). closeStopPopup already tore down any prior draw.
+        // buildReachSteps is 1:1 with plan.legs; carry each leg's mode so the
+        // popup can glyph the step and map hover→leg highlight by index.
+        const steps = buildReachSteps(plan.legs).map((s, i) => ({ ...s, mode: plan.legs[i].mode }));
+        // No transit leg at all — a `direct` walk-OR-BIKE fallback. Stay TEXT-ONLY:
+        // NO draw, NO declutter (the visual treatment is for public transport, and
+        // decluttering for a bare straight line is worse than the text — impl-panel
+        // A). closeStopPopup already tore down any prior draw.
+        if (!hasTransitLeg(plan.legs)) {
+          const walkOnly = isWalkOnly(plan.legs);
           return void showReach(
-            { state: "transit", title: "On foot", detail: `Within your ~${band}-min reach — about a ${plan.totalMinutes}-min walk.`, steps: buildReachSteps(plan.legs) },
+            {
+              state: "transit",
+              title: walkOnly ? "On foot" : "Directions",
+              detail: walkOnly
+                ? `Within your ~${band}-min reach — about a ${plan.totalMinutes}-min walk.`
+                : `Within your ~${band}-min reach — about ${plan.totalMinutes} min.`,
+              steps,
+            },
             req.coords,
             popup,
           );
         }
+        // A real public-transport journey: DRAW it and, ONLY if it produced
+        // drawable features, declutter the amenities so the trip is legible (a
+        // transit plan with no drawable coords must not hide markers behind an
+        // empty map — review). The step list stays 1:1 with
+        // plan.legs, so a popup step's index maps straight to a journey leg.
+        const drawn = journey.draw(plan.legs);
+        if (drawn) reachDeclutter.set(true);
         showReach(
-          { state: "transit", title: "By public transport", detail: `Within your ~${band}-min reach — journey ${reachSummary(plan)}.`, steps: buildReachSteps(plan.legs) },
+          { state: "transit", title: "By public transport", detail: `Within your ~${band}-min reach — journey ${reachSummary(plan)}.`, steps },
           req.coords,
           popup,
         );

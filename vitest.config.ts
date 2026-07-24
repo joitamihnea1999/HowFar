@@ -33,6 +33,7 @@ export default defineConfig({
         "src/features/map/hover-controller.ts",
         "src/features/map/ring-reveal-controller.ts",
         "src/features/map/route-path-controller.ts",
+        "src/features/map/reach-journey-controller.ts", // task 054: MapLibre draw/stamp/hover glue; pure model in reach.ts is measured
         "src/features/map/popup-controller.ts",
         "src/features/map/amenities-controller.ts",
         "src/features/map/selection-render.ts",
