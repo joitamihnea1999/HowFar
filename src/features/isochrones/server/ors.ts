@@ -4,18 +4,24 @@ import { serverEnv } from "@/lib/env";
 import { providerFetch, ProviderError, roundCoord } from "@/lib/provider-http";
 
 /**
- * OpenRouteService foot-walking isochrones (server-side, cached). One request
- * returns three nested reachability polygons (15/30/45 min). The API key is the
- * app's only secret provider key and must never reach the client.
+ * OpenRouteService isochrones (server-side, cached). One request returns three
+ * nested reachability polygons. Two profiles are used:
+ *   - foot-walking (walk mode): calibrated + pace-scaled 15/30/45-min ranges.
+ *   - driving-car  (car mode, task 053): nominal 10/20/30-min ranges.
+ * The API key is the app's only secret provider key and must never reach the
+ * client. The two profiles share the normalize contract, rate limiter, cache,
+ * and single-flight machinery — they differ only in URL, ranges, labels, and
+ * cache prefix.
  */
 
-const URL = "https://api.openrouteservice.org/v2/isochrones/foot-walking";
 const HOST = "api.openrouteservice.org";
+/** ORS isochrone endpoint for a routing profile (foot-walking | driving-car). */
+const isoUrl = (profile: string) => `https://api.openrouteservice.org/v2/isochrones/${profile}`;
 const MIN_INTERVAL_MS = 1500; // free tier ~40 isochrone req/min (PROVIDERS.md) ⇒ ≥1.5s spacing
 const TIMEOUT_MS = 12_000;
 const TTL_MS = 7 * 24 * 60 * 60 * 1000;
-// The requested ranges are CALIBRATED, not nominal, and now PACE-SCALED. ORS
-// foot-walking boundaries are systematically generous versus real street
+// The requested WALK ranges are CALIBRATED, not nominal, and now PACE-SCALED.
+// ORS foot-walking boundaries are systematically generous versus real street
 // walking: auditing ring boundaries with street-routed distances (MOTIS
 // one-to-many, withDistance) at three diverse origins (Unirii / Grozăvești /
 // Berceni, 2026-07-17) put the nominal 900/1800/2700 s boundaries at
@@ -27,6 +33,15 @@ const TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // "15/30/45 min" takes ≈ that many street-walking minutes at the chosen pace.
 // Methodology + re-run: docs/PROVIDERS.md "Calibration".
 const NOMINAL_MINUTES = [15, 30, 45];
+// Car (task 053): owner-picked 10/20/30-min bands (600/1200/1800 s) so the
+// driving reach fits the Bucharest map extent — a 45-min drive is ~3.5× the
+// tiled area (measured). These are NOMINAL ORS free-flow driving times: NOT
+// calibrated and with NO live traffic on the free tier, so the UI labels them
+// an estimate. A 3-origin probe (2026-07-24) confirmed the response shape
+// matches `normalize` (3 Polygons, echoed `value`) and payloads stay ≤~34 KB /
+// ~1050 coords — well within the ApiCache row budget, so no size cap is needed.
+const CAR_RANGES_S = [600, 1200, 1800];
+const CAR_MINUTES = [10, 20, 30];
 const RANGE_TOLERANCE_S = 1; // ORS echoes the requested range in properties.value
 
 // Loose GeoJSON typing to avoid pulling in @types/geojson; the client passes
@@ -39,7 +54,7 @@ interface Ring {
 export interface IsochroneResult {
   /** The rounded origin actually sent to ORS (== marker origin == cache key). */
   origin: { lat: number; lng: number };
-  /** Reachability rings, sorted ascending by minutes (15, 30, 45). */
+  /** Reachability rings, sorted ascending by minutes (walk 15/30/45; car 10/20/30). */
   rings: Ring[];
 }
 
@@ -48,12 +63,18 @@ interface OrsFeature {
   geometry?: { type?: string; coordinates?: unknown };
 }
 
-/** Strict bijection from response features to nominal rings: exactly one
- * feature per requested calibrated range, matched on the RAW echoed value and
- * only then relabeled to 15/30/45. A dropped, duplicated, reordered-but-wrong
- * or unscaled feature must 502 here — silently mislabeling would lie on the
- * map AND corrupt the amenities clip (it uses the "15-min" ring). */
-function normalize(features: OrsFeature[], expectedRangesS: readonly number[]): Ring[] {
+/** Strict bijection from response features to labelled rings: exactly one
+ * feature per requested range, matched on the RAW echoed value and only then
+ * relabeled to `labels` (walk 15/30/45; car 10/20/30). A dropped, duplicated,
+ * reordered-but-wrong or unscaled feature must 502 here — silently mislabeling
+ * would lie on the map AND corrupt the amenities clip (it uses the smallest
+ * walk ring). `expectedRangesS` and `labels` are positional-parallel, both
+ * ascending, so index i pairs the i-th requested range with its label. */
+function normalize(
+  features: OrsFeature[],
+  expectedRangesS: readonly number[],
+  labels: readonly number[],
+): Ring[] {
   if (features.length !== expectedRangesS.length) {
     throw new ProviderError(
       `openrouteservice returned ${features.length} rings (expected ${expectedRangesS.length})`,
@@ -84,15 +105,41 @@ function normalize(features: OrsFeature[], expectedRangesS: readonly number[]): 
     ) {
       throw new ProviderError("openrouteservice returned a ring with invalid geometry");
     }
-    return { minutes: NOMINAL_MINUTES[i]!, geometry: geometry as Ring["geometry"] };
+    return { minutes: labels[i]!, geometry: geometry as Ring["geometry"] };
   });
 }
 
 // In-flight requests, keyed by cache key, so two concurrent cold callers for the
 // same origin (e.g. the client's /api/isochrone and the amenities route, which
 // also needs the walk ring) share ONE ORS request instead of each burning a
-// rate-limited/quota-capped POST. Cleared on settle.
+// rate-limited/quota-capped POST. Cleared on settle. Shared across profiles —
+// the key prefix (iso:foot / iso:car) keeps walk and car requests distinct.
 const inFlight = new Map<string, Promise<IsochroneResult>>();
+
+/** Cached + single-flight core over an ORS `profile`. The caller owns the cache
+ *  key (prefix decides walk vs car) and the labels the rings are relabelled to. */
+async function orsIsochrone(
+  profile: string,
+  latRaw: number,
+  lngRaw: number,
+  ranges: readonly number[],
+  labels: readonly number[],
+  key: string,
+): Promise<IsochroneResult> {
+  const hit = await getCachedSafe<IsochroneResult>(key);
+  if (hit) return hit;
+
+  const existing = inFlight.get(key);
+  if (existing) return existing;
+
+  const promise = fetchAndCache(profile, latRaw, lngRaw, ranges, labels, key);
+  inFlight.set(key, promise);
+  try {
+    return await promise;
+  } finally {
+    inFlight.delete(key);
+  }
+}
 
 /** Walking isochrone (15/30/45 min) from a point at a walking `pace`. Coord is
  *  rounded ONCE and reused for the cache key, the ORS request, and the returned
@@ -106,31 +153,27 @@ export async function walkingIsochrone(
   // Normal ring (and concurrent different-pace callers don't share one flight).
   // The version bump also retires all pre-051 (v2) cached rings.
   const key = `iso:foot:v3:${pace}:${roundCoord(latRaw)},${roundCoord(lngRaw)}`;
+  return orsIsochrone("foot-walking", latRaw, lngRaw, PACE_MODEL[pace].orsRangesS, NOMINAL_MINUTES, key);
+}
 
-  const hit = await getCachedSafe<IsochroneResult>(key);
-  if (hit) return hit;
-
-  const existing = inFlight.get(key);
-  if (existing) return existing;
-
-  const promise = fetchAndCache(latRaw, lngRaw, pace, key);
-  inFlight.set(key, promise);
-  try {
-    return await promise;
-  } finally {
-    inFlight.delete(key);
-  }
+/** Driving-car isochrone (10/20/30 min, task 053). No pace and no departure
+ *  time — car is a fixed-profile mode (those are walk/transit concepts). Nominal
+ *  free-flow ranges, labelled an estimate in the UI. Cache prefix `iso:car:v1`. */
+export async function drivingIsochrone(latRaw: number, lngRaw: number): Promise<IsochroneResult> {
+  const key = `iso:car:v1:${roundCoord(latRaw)},${roundCoord(lngRaw)}`;
+  return orsIsochrone("driving-car", latRaw, lngRaw, CAR_RANGES_S, CAR_MINUTES, key);
 }
 
 async function fetchAndCache(
+  profile: string,
   latRaw: number,
   lngRaw: number,
-  pace: Pace,
+  ranges: readonly number[],
+  labels: readonly number[],
   key: string,
 ): Promise<IsochroneResult> {
   const lat = Number(roundCoord(latRaw));
   const lng = Number(roundCoord(lngRaw));
-  const ranges = PACE_MODEL[pace].orsRangesS;
 
   const apiKey = serverEnv().orsApiKey;
   if (!apiKey) throw new ProviderError("ORS_API_KEY is not configured");
@@ -138,7 +181,7 @@ async function fetchAndCache(
   // A stalled/unreachable/garbled upstream is a provider error (→ 502), not a 500.
   let body: { features?: OrsFeature[] };
   try {
-    const res = await providerFetch(URL, {
+    const res = await providerFetch(isoUrl(profile), {
       rateHost: HOST,
       minIntervalMs: MIN_INTERVAL_MS,
       timeoutMs: TIMEOUT_MS,
@@ -166,8 +209,8 @@ async function fetchAndCache(
     throw new ProviderError("openrouteservice returned a malformed response (features not an array)");
   }
   // normalize enforces the full contract (count, requested-range bijection,
-  // geometry) and throws ProviderError itself — rings ascending 15/30/45.
-  const rings = normalize(body.features ?? [], ranges);
+  // geometry) and throws ProviderError itself — rings ascending by label.
+  const rings = normalize(body.features ?? [], ranges, labels);
 
   const result: IsochroneResult = { origin: { lat, lng }, rings };
   await setCachedSafe(key, result, new Date(Date.now() + TTL_MS));

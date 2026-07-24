@@ -1,24 +1,25 @@
-import { RING_FILTER_OPTIONS, type RingFilter } from "@/features/isochrones/isochrone-view";
+import { bandMinutes, RING_FILTER_OPTIONS, type RingFilter } from "@/features/isochrones/isochrone-view";
+import type { Mode } from "@/features/map/selection-flow";
 
 /**
- * Time-band selector (task 024): which of the fetched 15/30/45 rings the map
+ * Time-band selector (task 024): which of the fetched ring bands the map
  * displays. Pure presentation — the layer-visibility application lives in
- * AppMap; the option list and default in isochrone-view.
+ * AppMap; the option list and default in isochrone-view. The band ids are fixed
+ * (15/30/45) but the LABEL is per-mode (car reads 10/20/30, task 053), so the
+ * label comes from `bandMinutes(mode, band)`, not the band id.
  */
 
 interface RingSelectorProps {
   value: RingFilter;
+  mode: Mode;
   onSelect: (next: RingFilter) => void;
 }
 
-const OPTION_LABEL: Record<string, string> = {
-  "15": "15 min",
-  "30": "30 min",
-  "45": "45 min",
-  all: "All",
-};
+function optionLabel(mode: Mode, option: RingFilter): string {
+  return option === "all" ? "All" : `${bandMinutes(mode, option)} min`;
+}
 
-export default function RingSelector({ value, onSelect }: RingSelectorProps) {
+export default function RingSelector({ value, mode, onSelect }: RingSelectorProps) {
   return (
     <div className="min-w-0">
       <span className="mb-1.5 block px-1 text-[0.58rem] font-semibold uppercase tracking-[0.14em] text-[#78857b]">
@@ -41,7 +42,7 @@ export default function RingSelector({ value, onSelect }: RingSelectorProps) {
                 : "text-[#8b978e] hover:bg-white/[.055] hover:text-[#edf2ed]"
             }`}
           >
-            {OPTION_LABEL[String(option)]}
+            {optionLabel(mode, option)}
           </button>
         ))}
       </div>

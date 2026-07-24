@@ -39,6 +39,14 @@ const TransitIcon = (
   </svg>
 );
 
+const CarIcon = (
+  <svg aria-hidden="true" viewBox="0 0 20 20" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.6">
+    <path d="M3 12v-2.2L5 6h10l2 3.8V12M3 12h14M3 12v2h1.5M17 12v2h-1.5" strokeLinecap="round" strokeLinejoin="round" />
+    <circle cx="6" cy="14" r="1.3" />
+    <circle cx="14" cy="14" r="1.3" />
+  </svg>
+);
+
 const MODES: ModeDef[] = [
   {
     id: "walk",
@@ -51,6 +59,12 @@ const MODES: ModeDef[] = [
     label: "Public transport",
     icon: TransitIcon,
     active: "bg-[#a78bfa] text-[#1d1238] shadow-[0_5px_16px_rgba(167,139,250,.18)]",
+  },
+  {
+    id: "car",
+    label: "Car",
+    icon: CarIcon,
+    active: "bg-[#3b82f6] text-[#0a1633] shadow-[0_5px_16px_rgba(59,130,246,.2)]",
   },
 ];
 

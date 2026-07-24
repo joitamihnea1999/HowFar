@@ -1,7 +1,7 @@
 import { layers, namedFlavor } from "@protomaps/basemaps";
 import { describe, expect, it } from "vitest";
 
-import { RING_MINUTES } from "@/features/isochrones/isochrone-view";
+import { RING_BANDS } from "@/features/isochrones/isochrone-view";
 
 import {
   addAmenityLayers,
@@ -54,21 +54,21 @@ describe("createMapStyle", () => {
 });
 
 describe("addIsochroneLayers", () => {
-  it("adds one empty geojson source and a fill+line layer pair per ring, filtered by minutes", () => {
+  it("adds one empty geojson source and a fill+line layer pair per ring, filtered by band", () => {
     const { host, sources, layerSpecs } = recorder();
     addIsochroneLayers(host);
 
     expect(sources).toEqual([["isochrone", { type: "geojson", data: EMPTY_FC }]]);
     expect(layerSpecs.map((l) => l.id)).toEqual(
-      RING_MINUTES.flatMap((m) => [`iso-fill-${m}`, `iso-line-${m}`]),
+      RING_BANDS.flatMap((b) => [`iso-fill-${b}`, `iso-line-${b}`]),
     );
 
-    for (const minutes of RING_MINUTES) {
-      const fill = layerSpecs.find((l) => l.id === `iso-fill-${minutes}`);
-      const line = layerSpecs.find((l) => l.id === `iso-line-${minutes}`);
-      const filter = ["==", ["get", "minutes"], minutes];
+    for (const band of RING_BANDS) {
+      const fill = layerSpecs.find((l) => l.id === `iso-fill-${band}`);
+      const line = layerSpecs.find((l) => l.id === `iso-line-${band}`);
+      const filter = ["==", ["get", "band"], band];
       expect(fill).toEqual({
-        id: `iso-fill-${minutes}`,
+        id: `iso-fill-${band}`,
         type: "fill",
         source: "isochrone",
         filter,
@@ -79,7 +79,7 @@ describe("addIsochroneLayers", () => {
         },
       });
       expect(line).toEqual({
-        id: `iso-line-${minutes}`,
+        id: `iso-line-${band}`,
         type: "line",
         source: "isochrone",
         filter,
@@ -109,7 +109,7 @@ describe("layer composition", () => {
       "amenity-markers",
       "amenity-glyphs",
     ]);
-    expect(layerSpecs).toHaveLength(RING_MINUTES.length * 2 + 6);
+    expect(layerSpecs).toHaveLength(RING_BANDS.length * 2 + 6);
   });
 });
 

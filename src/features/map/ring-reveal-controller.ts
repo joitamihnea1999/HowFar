@@ -1,7 +1,7 @@
 import type maplibregl from "maplibre-gl";
 
 import {
-  RING_MINUTES,
+  RING_BANDS,
   ringLayerVisibility,
   ringRevealStages,
   type RingFilter,
@@ -54,14 +54,14 @@ export function createRingRevealController({
   }
 
   function setRingTransition(duration: number) {
-    for (const minutes of RING_MINUTES) {
+    for (const minutes of RING_BANDS) {
       map.setPaintProperty(`iso-fill-${minutes}`, "fill-opacity-transition", { duration, delay: 0 });
       map.setPaintProperty(`iso-line-${minutes}`, "line-opacity-transition", { duration, delay: 0 });
     }
   }
 
   function stampRingPaintReadbacks() {
-    for (const minutes of RING_MINUTES) {
+    for (const minutes of RING_BANDS) {
       el.dataset[`ringPaint${minutes}`] = String(
         map.getPaintProperty(`iso-fill-${minutes}`, "fill-opacity"),
       );
@@ -69,10 +69,10 @@ export function createRingRevealController({
   }
 
   /** Cumulative paint trace: each stage records live fill opacities in
-   * RING_MINUTES order (45,30,15). Tests assert the settled attribute instead
+   * RING_BANDS order (45,30,15). Tests assert the settled attribute instead
    * of racing a sub-poll-interval intermediate. */
   function appendRingPaintTrace(stage: string) {
-    const paints = RING_MINUTES.map((minutes) =>
+    const paints = RING_BANDS.map((minutes) =>
       String(map.getPaintProperty(`iso-fill-${minutes}`, "fill-opacity")),
     ).join(",");
     const entry = `${stage}:${paints}`;
@@ -80,7 +80,7 @@ export function createRingRevealController({
     el.dataset.ringPaintTrace = prev ? `${prev}|${entry}` : entry;
   }
 
-  function setRingRevealed(minutes: (typeof RING_MINUTES)[number], revealed: boolean) {
+  function setRingRevealed(minutes: (typeof RING_BANDS)[number], revealed: boolean) {
     map.setPaintProperty(`iso-fill-${minutes}`, "fill-opacity", revealed ? ISOCHRONE_FILL_OPACITY : 0);
     map.setPaintProperty(`iso-line-${minutes}`, "line-opacity", revealed ? ISOCHRONE_LINE_OPACITY : 0);
     // Paint-property READ-BACK (not requested-state echo): keeps the signature
@@ -96,7 +96,7 @@ export function createRingRevealController({
     delete el.dataset.ringPaintTrace;
     if (reducedMotion.matches) {
       setRingTransition(0); // no inherited 320ms fade under reduced motion
-      for (const minutes of RING_MINUTES) setRingRevealed(minutes, true);
+      for (const minutes of RING_BANDS) setRingRevealed(minutes, true);
       el.dataset.ringReveal = "settled";
       el.dataset.ringRevealSequence = "instant";
       appendRingPaintTrace("instant");
@@ -143,7 +143,7 @@ export function createRingRevealController({
     if (!loadState.styleLoaded) return; // load applies the current filter itself
     cancelRingReveal(false);
     setRingTransition(0);
-    for (const minutes of RING_MINUTES) setRingRevealed(minutes, true);
+    for (const minutes of RING_BANDS) setRingRevealed(minutes, true);
     el.dataset.ringReveal = "settled";
     if (!el.dataset.ringRevealSequence) el.dataset.ringRevealSequence = "filter";
     for (const [layerId, visibility] of Object.entries(ringLayerVisibility(filter))) {
@@ -152,7 +152,7 @@ export function createRingRevealController({
     el.dataset.ringFilter = String(filter);
     // Derived from a layer READ-BACK, not the requested filter: the e2e contract
     // is "these bands are visible on the map".
-    el.dataset.visibleRings = [...RING_MINUTES]
+    el.dataset.visibleRings = [...RING_BANDS]
       .filter((m) => map.getLayoutProperty(`iso-fill-${m}`, "visibility") !== "none")
       .sort((a, b) => a - b)
       .join(",");

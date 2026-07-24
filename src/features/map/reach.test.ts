@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ReachLeg, ReachPlan } from "@/features/isochrones/server/transit-plan";
-import { buildReachSteps, decideReach, isWalkOnly, reachBand, reachSummary, transitModeLabel, walkReachText } from "@/features/map/reach";
+import { buildReachSteps, carReachText, decideReach, isWalkOnly, reachBand, reachSummary, transitModeLabel, walkReachText } from "@/features/map/reach";
 
 // A square Polygon centred at (clng, clat), half-width halfDeg, as a ring's geometry.
 function square(clat: number, clng: number, halfDeg: number) {
@@ -60,6 +60,13 @@ describe("decideReach (band → action policy, impl T1)", () => {
   });
   it("transit inside a band plans the trip, carrying the band for honest framing", () => {
     expect(decideReach("transit", 30)).toEqual({ kind: "transit", band: 30 });
+  });
+  it("car yields a car answer (band-only, NO transit fetch) for both a band and a null band (task 053)", () => {
+    // Car must be matched BEFORE the non-transit → walk fallthrough — a regression
+    // to `{kind:"walk"}` here would ship the wrong copy and (via handleReach)
+    // risk a transit fetch. This is the tripwire for plan-panel C-A/F3.
+    expect(decideReach("car", 20)).toEqual({ kind: "car", band: 20 });
+    expect(decideReach("car", null)).toEqual({ kind: "car", band: null });
   });
 });
 
@@ -123,5 +130,14 @@ describe("reachSummary + walkReachText", () => {
     expect(walkReachText(15).title).toBe("On foot");
     expect(walkReachText(15).detail).toContain("15");
     expect(walkReachText(null).title).toBe("Outside your walking reach");
+  });
+
+  it("car copy reflects the drive band with the estimate caveat, or 'beyond' (task 053, C-F)", () => {
+    expect(carReachText(20).title).toBe("By car");
+    expect(carReachText(20).detail).toContain("20");
+    // The no-live-traffic honesty caveat must be in the popup copy itself.
+    expect(carReachText(20).detail).toMatch(/estimate/i);
+    expect(carReachText(20).detail).toMatch(/traffic/i);
+    expect(carReachText(null).title).toBe("Beyond your driving reach");
   });
 });

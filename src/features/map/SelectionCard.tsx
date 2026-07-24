@@ -1,7 +1,9 @@
 import {
+  bandMinutes,
   legendColor,
+  MODE_ACCENT,
   MODE_LABEL,
-  visibleLegendMinutes,
+  visibleLegendBands,
   type RingFilter,
 } from "@/features/isochrones/isochrone-view";
 import type { Mode } from "@/features/map/selection-flow";
@@ -25,7 +27,7 @@ interface SelectionCardProps {
 
 export default function SelectionCard({ label, message, mode, ringFilter, loading, departure }: SelectionCardProps) {
   if (!label && !message && !loading) return null;
-  const modeColor = mode === "walk" ? "var(--hf-walk)" : "var(--hf-transit)";
+  const modeColor = MODE_ACCENT[mode];
   return (
     <div
       aria-live="polite"
@@ -76,10 +78,10 @@ export default function SelectionCard({ label, message, mode, ringFilter, loadin
               <span className="size-1.5 rounded-full bg-current" />
               {MODE_LABEL[mode]}
             </span>
-            {visibleLegendMinutes(ringFilter).map((m) => (
-              <span key={m} className="flex items-center gap-1.5">
-                <span className="inline-block size-2 rounded-full ring-1 ring-white/20" style={{ background: legendColor(mode, m) }} />
-                {m} min
+            {visibleLegendBands(ringFilter).map((band) => (
+              <span key={band} className="flex items-center gap-1.5">
+                <span className="inline-block size-2 rounded-full ring-1 ring-white/20" style={{ background: legendColor(mode, band) }} />
+                {bandMinutes(mode, band)} min
               </span>
             ))}
             <span className="ml-auto text-[#667269]">shown on map</span>
@@ -88,6 +90,11 @@ export default function SelectionCard({ label, message, mode, ringFilter, loadin
             <p data-testid="transit-departure-note" className="mt-2 text-[0.68rem] leading-4 text-[#667269]">
               Scheduled public transport for <span className="text-[#9ca9a0]">{departure.summary}</span> — an estimate
               from published timetables; live delays and road traffic aren’t included.
+            </p>
+          ) : null}
+          {mode === "car" ? (
+            <p data-testid="car-estimate-note" className="mt-2 text-[0.68rem] leading-4 text-[#667269]">
+              Driving times are an estimate from typical road speeds; live traffic isn’t included.
             </p>
           ) : null}
         </>

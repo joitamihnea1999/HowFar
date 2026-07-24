@@ -1,7 +1,7 @@
 import { layers, namedFlavor } from "@protomaps/basemaps";
 import type maplibregl from "maplibre-gl";
 
-import { RING_MINUTES } from "@/features/isochrones/isochrone-view";
+import { RING_BANDS } from "@/features/isochrones/isochrone-view";
 
 /**
  * Pure MapLibre setup: the basemap style and the source/layer definitions,
@@ -38,14 +38,15 @@ export function createMapStyle(tilesUrl: string): maplibregl.StyleSpecification 
   };
 }
 
-/** One fill + one line layer per ring, filtered by the feature's `minutes`.
- * Color comes from the feature (per-mode ramp) so both modes reuse these layers. */
+/** One fill + one line layer per ring BAND, filtered by the feature's `band`
+ * (fixed position id 15/30/45, mode-independent — see isochrone-view). Color
+ * comes from the feature (per-mode ramp) so every mode reuses these layers. */
 export function addIsochroneLayers(map: LayerHost): void {
   map.addSource("isochrone", { type: "geojson", data: EMPTY_FC as GeoJSON.FeatureCollection });
-  for (const minutes of RING_MINUTES) {
-    const filter = ["==", ["get", "minutes"], minutes] as maplibregl.FilterSpecification;
+  for (const band of RING_BANDS) {
+    const filter = ["==", ["get", "band"], band] as maplibregl.FilterSpecification;
     map.addLayer({
-      id: `iso-fill-${minutes}`,
+      id: `iso-fill-${band}`,
       type: "fill",
       source: "isochrone",
       filter,
@@ -56,7 +57,7 @@ export function addIsochroneLayers(map: LayerHost): void {
       },
     });
     map.addLayer({
-      id: `iso-line-${minutes}`,
+      id: `iso-line-${band}`,
       type: "line",
       source: "isochrone",
       filter,

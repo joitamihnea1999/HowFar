@@ -379,31 +379,42 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       if (!sel.lastSelection || sel.status === "loading" || !stash) {
         return void popup.openReachPopup({ kind: "hint", coords });
       }
-      // Classify the point against the SAME rings the map drew (both modes) so
+      // Classify the point against the SAME rings the map drew (all modes) so
       // the answer can never contradict the painted reach (task 052 P2 / impl T1).
+      // Exhaustive switch: only the `transit` arm fetches /api/reach, so car (and
+      // walk) can NEVER fall through to a public-transport plan (plan-panel C-A).
       const action = decideReach(stash.mode, reachBand(coords, stash.rings));
-      if (action.kind === "walk") {
-        return void popup.openReachPopup({ kind: "walk", coords, band: action.band });
+      switch (action.kind) {
+        case "walk":
+          return void popup.openReachPopup({ kind: "walk", coords, band: action.band });
+        case "car":
+          // Car reach is band-only, resolved client-side — no provider call.
+          return void popup.openReachPopup({ kind: "car", coords, band: action.band });
+        case "transit-unreachable":
+          // Outside every transit ring → answer honestly with NO provider call.
+          return void popup.openReachPopup({ kind: "transit-unreachable", coords });
+        case "transit": {
+          const params = new URLSearchParams({
+            fromLat: String(stash.origin.lat),
+            fromLng: String(stash.origin.lng),
+            toLat: String(lngLat.lat),
+            toLng: String(lngLat.lng),
+          });
+          // Prefer the selection's resolved departure so the trip matches the
+          // rings on screen; else pass the time-context params for the server.
+          if (sel.departure?.iso) params.set("departure", sel.departure.iso);
+          else if (sel.timeContext.kind === "preset") params.set("preset", sel.timeContext.preset);
+          else {
+            params.set("weekday", String(sel.timeContext.weekday));
+            params.set("time", `${String(sel.timeContext.hour).padStart(2, "0")}:${String(sel.timeContext.minute).padStart(2, "0")}`);
+          }
+          return void popup.openReachPopup({ kind: "transit", coords, band: action.band, url: `/api/reach?${params.toString()}` });
+        }
+        default: {
+          const _exhaustive: never = action;
+          return _exhaustive;
+        }
       }
-      if (action.kind === "transit-unreachable") {
-        // Outside every transit ring → answer honestly with NO provider call.
-        return void popup.openReachPopup({ kind: "transit-unreachable", coords });
-      }
-      const params = new URLSearchParams({
-        fromLat: String(stash.origin.lat),
-        fromLng: String(stash.origin.lng),
-        toLat: String(lngLat.lat),
-        toLng: String(lngLat.lng),
-      });
-      // Prefer the selection's resolved departure so the trip matches the rings
-      // on screen; else pass the time-context params for the server.
-      if (sel.departure?.iso) params.set("departure", sel.departure.iso);
-      else if (sel.timeContext.kind === "preset") params.set("preset", sel.timeContext.preset);
-      else {
-        params.set("weekday", String(sel.timeContext.weekday));
-        params.set("time", `${String(sel.timeContext.hour).padStart(2, "0")}:${String(sel.timeContext.minute).padStart(2, "0")}`);
-      }
-      popup.openReachPopup({ kind: "transit", coords, band: action.band, url: `/api/reach?${params.toString()}` });
     };
 
     // Touch long-press for iOS Safari (which never emits contextmenu). A fired
@@ -657,9 +668,15 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
                 onHover={(index) => dispatchCombo({ type: "hover", index })}
               />
             </div>
-            <div className="hf-command-settings mt-3 grid grid-cols-[minmax(0,.82fr)_minmax(184px,1.18fr)] gap-2 max-[350px]:grid-cols-1">
+            {/* Stacked full-width rows by default so the 3-up mode toggle (task
+                053) keeps ≥44px-wide touch targets and "Public transport" never
+                clips on phones (impl panel: 375/412px). Two columns only at md+,
+                where the dock is a fixed 388px and MUST stay one settings row
+                tall to clear the result sheet pinned at md:top-[21.3rem]; on
+                mobile the result sheet is a bottom sheet, so the extra row is free. */}
+            <div className="hf-command-settings mt-3 grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,.82fr)_minmax(184px,1.18fr)]">
               <ModeToggle mode={sel.mode} onSwitch={switchMode} />
-              <RingSelector value={ringFilter} onSelect={selectRingFilter} />
+              <RingSelector value={ringFilter} mode={sel.mode} onSelect={selectRingFilter} />
             </div>
           </section>
         </div>

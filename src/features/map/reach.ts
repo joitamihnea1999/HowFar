@@ -2,6 +2,7 @@ import { booleanPointInPolygon } from "@turf/boolean-point-in-polygon";
 import type { Feature, MultiPolygon, Polygon } from "geojson";
 
 import type { ReachLeg, ReachPlan } from "@/features/isochrones/server/transit-plan";
+import type { Mode } from "@/features/map/selection-flow";
 
 /**
  * Pure helpers for the right-click "how do I get there?" popup (task 052 D):
@@ -44,13 +45,26 @@ export function reachBand(point: [number, number], rings: RingLike[]): number | 
  * Pure + unit-tested so the gate can't silently regress to always-fetch. */
 export type ReachAction =
   | { kind: "walk"; band: number | null }
+  | { kind: "car"; band: number | null }
   | { kind: "transit-unreachable" }
   | { kind: "transit"; band: number };
 
-export function decideReach(mode: string, band: number | null): ReachAction {
-  if (mode !== "transit") return { kind: "walk", band };
-  if (band === null) return { kind: "transit-unreachable" };
-  return { kind: "transit", band };
+export function decideReach(mode: Mode, band: number | null): ReachAction {
+  // Exhaustive over Mode (not a `string` fallthrough): a future 4th mode without
+  // a case here is a compile error, not a silent walk-band regression — the same
+  // exhaustiveness guarantee the task gave `isochronePath`/`modeWord` (impl F1).
+  switch (mode) {
+    case "car":
+      return { kind: "car", band };
+    case "walk":
+      return { kind: "walk", band };
+    case "transit":
+      return band === null ? { kind: "transit-unreachable" } : { kind: "transit", band };
+    default: {
+      const _exhaustive: never = mode;
+      return _exhaustive;
+    }
+  }
 }
 
 const MODE_LABELS: Record<string, string> = {
@@ -90,6 +104,9 @@ function stopLabel(name: string): string {
 export type ReachRequest =
   | { kind: "hint"; coords: [number, number] }
   | { kind: "walk"; coords: [number, number]; band: number | null }
+  // Car reach is resolved fully client-side to a drive band (no provider call),
+  // like walk but with driving copy + an estimate caveat (task 053).
+  | { kind: "car"; coords: [number, number]; band: number | null }
   // The clicked point is outside every drawn transit ring — answer WITHOUT a
   // provider call, so the popup never contradicts the painted reach (T1/P2).
   | { kind: "transit-unreachable"; coords: [number, number] }
@@ -143,4 +160,17 @@ export function walkReachText(band: number | null): { title: string; detail: str
     return { title: "Outside your walking reach", detail: "This point is beyond your mapped walk area." };
   }
   return { title: "On foot", detail: `Within about ${band} minutes' walk of your start.` };
+}
+
+/** Car-mode reach copy from a drive band (or null = outside the drive area).
+ * Carries the estimate/no-live-traffic caveat, since the reach popup renders
+ * this copy directly (not just SelectionCard) — plan-panel C-F. */
+export function carReachText(band: number | null): { title: string; detail: string } {
+  if (band === null) {
+    return { title: "Beyond your driving reach", detail: "This point is outside your mapped drive area." };
+  }
+  return {
+    title: "By car",
+    detail: `Within about ${band} minutes' drive of your start — an estimate, without live traffic.`,
+  };
 }

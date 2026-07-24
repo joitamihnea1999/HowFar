@@ -85,9 +85,15 @@ export function createSelectionRender({
     const epoch = ++settleEpoch;
     delete el.dataset.cameraSettled;
     const instant = reducedMotion.matches;
+    // Mode-aware default zoom (task 053): a car covers far more ground per minute,
+    // so its inner (default 10-min) ring is several times the walk 15-min ring;
+    // at zoom 13 it would fill the viewport as an edgeless blue wash. Frame car
+    // one level wider so the default ring's BOUNDARY is visible. Walk/transit
+    // stay at 13 (transit stop-lines pixel math depends on it — e2e).
+    const zoom = mode === "car" ? 12 : 13;
     map.flyTo({
       center: [origin.lng, origin.lat],
-      zoom: 13,
+      zoom,
       essential: false,
       duration: instant ? 0 : 900,
       padding,

@@ -35,7 +35,7 @@ entries. Go/no-go bar: ≥100 fresh addresses/day headroom on every provider. **
   (Nominatim's ToS forbids per-keystroke search): bbox-constrained to Bucharest, debounced
   client-side, min 3 chars, cached. Nominatim still does submit-time geocoding + reverse.
 
-### Walking (later bike/car) isochrones — OpenRouteService ✅ PICKED
+### Walking + car isochrones — OpenRouteService ✅ PICKED
 - Restrictions: <https://openrouteservice.org/restrictions/> — isochrones: "Locations: 5",
   "Intervals: 10", "Range time (Foot profiles): 20 h". Profiles = foot / cycling / driving.
 - **No public-transport profile exists** — confirmed on the restrictions page; transit must come
@@ -43,8 +43,16 @@ entries. Go/no-go bar: ≥100 fresh addresses/day headroom on every provider. **
 - Free "Standard" plan quotas (via <https://account.heigit.org/info/plans>, corroborated by
   <https://apispine.com/openrouteserviceorg/pricing>): "Isochrones V2 (2500 / 40)" — i.e. ~2,500
   isochrone requests/day @ 40/min. Page is JS-rendered; **re-read exact numbers at key signup**
-  (even the historical 500/day floor is 5× our bar).
-- Free API key required — server-side only. One request covers 15/30/45 via `range` intervals.
+  (even the historical 500/day floor is 5× our bar). Walk + car share this one daily budget; a
+  car selection is one extra POST (same key, same rate limiter) — still ≫ the ≥100 addresses/day bar.
+- Free API key required — server-side only. One request covers all three intervals via `range`.
+- **Walk** (`foot-walking`): 15/30/45-min bands, calibrated (below). **Car** (`driving-car`, task
+  053): **10/20/30-min** bands. Car ranges are **nominal free-flow** ORS driving times — NOT
+  calibrated and with **no live traffic** on the free tier — so the UI labels car reach an estimate
+  (SelectionCard note + right-click popup caveat). The 10/20/30 bands were chosen because a
+  45-min drive from central Bucharest is ~3.5× the tiled map extent; 10/20/30 fits the map (a
+  3-origin probe put 10 & 20-min rings fully in-map, 30-min 80–98% in-map). Calibrating car to real
+  drive times is parked (no free car "ruler"; ORS driving Matrix distance is the candidate ruler).
 
 ### Transit isochrones — Transitous (MOTIS) ✅ PICKED — **verified live**
 - API: `https://api.transitous.org/api/v6/one-to-all?one=<lat>,<lon>&maxTravelTime=<min>`

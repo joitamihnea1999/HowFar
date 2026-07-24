@@ -11,7 +11,7 @@ import { normalizeAmenitySelection } from "@/features/amenities/amenity-selectio
 import { mergeStopLines, type StopLine } from "@/features/amenities/stop-lines";
 import { buildStopPopupModel, STOP_POPUP_TEXT, type StopPopupModel } from "@/features/amenities/stop-popup";
 import type { ReachPlan } from "@/features/isochrones/server/transit-plan";
-import { buildReachSteps, isWalkOnly, reachSummary, walkReachText, type ReachRequest } from "@/features/map/reach";
+import { buildReachSteps, carReachText, isWalkOnly, reachSummary, walkReachText, type ReachRequest } from "@/features/map/reach";
 import type { EdgeInsets } from "@/features/map/route-framing";
 import type { RoutePathController } from "@/features/map/route-path-controller";
 
@@ -377,6 +377,7 @@ export function createPopupController({
   type ReachRender =
     | { state: "hint" | "loading" | "none" | "error" | "outside"; title: string; detail: string }
     | { state: "walk"; title: string; detail: string }
+    | { state: "car"; title: string; detail: string }
     | { state: "transit"; title: string; detail: string; steps: { primary: string; secondary: string }[] };
 
   function renderReachPopup(model: ReachRender): HTMLElement {
@@ -465,6 +466,13 @@ export function createPopupController({
     if (req.kind === "walk") {
       const { title, detail } = walkReachText(req.band);
       showReach({ state: "walk", title, detail }, req.coords);
+      return;
+    }
+    if (req.kind === "car") {
+      // Car reach is a client-side drive band — no provider call, with the
+      // estimate/no-live-traffic caveat baked into the copy (task 053, C-F).
+      const { title, detail } = carReachText(req.band);
+      showReach({ state: "car", title, detail }, req.coords);
       return;
     }
     if (req.kind === "transit-unreachable") {

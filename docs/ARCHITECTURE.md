@@ -24,7 +24,8 @@ address text ──► /api/suggest ──► Photon      (type-ahead)
 map click   ──► /api/reverse ──► Nominatim    (label only — the click IS the origin)
      │
      ▼
-/api/isochrone ──► OpenRouteService           (walking rings, 15/30/45 min)
+/api/isochrone ──► OpenRouteService foot-walking (walking rings, 15/30/45 min)
+/api/car      ──► OpenRouteService driving-car   (car rings, 10/20/30 min — nominal estimate)
 /api/transit  ──► Transitous one-to-all ──► transit-grid (rings built in-process)
 /api/amenities ──► ORS walk ring ∥ active PostGIS snapshot ──► spatial intersection
      │

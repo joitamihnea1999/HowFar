@@ -15,7 +15,7 @@
 import { DEFAULT_PACE, type Pace } from "@/features/isochrones/pace";
 import { DEFAULT_TIME_CONTEXT, type TimeContext } from "@/features/isochrones/time-context";
 
-export type Mode = "walk" | "transit";
+export type Mode = "walk" | "transit" | "car";
 export type SelectionStatus = "idle" | "loading" | "error";
 export type Stage = "geocode" | "reverse" | "isochrone";
 
@@ -77,14 +77,40 @@ export type SelectionAction =
 export const GENERIC_ERROR = "Something went wrong. Try again.";
 const OUT_OF_AREA = "That spot is outside Bucharest.";
 
-/** Human word for the active travel mode, used in copy. */
+/** Human word for the active travel mode, used in copy. Exhaustive switch: a
+ * new Mode without a case here is a compile error (the `never` assignment), so
+ * car can never silently borrow walk's word. */
 export function modeWord(mode: Mode): string {
-  return mode === "transit" ? "transit" : "walking";
+  switch (mode) {
+    case "walk":
+      return "walking";
+    case "transit":
+      return "transit";
+    case "car":
+      return "driving";
+    default: {
+      const _exhaustive: never = mode;
+      return _exhaustive;
+    }
+  }
 }
 
-/** The API route that computes reach for the mode. */
+/** The API route that computes reach for the mode. Exhaustive switch so a
+ * missing car branch is a compile error, not a silent fall-through to the walk
+ * endpoint (which would render walk rings mislabeled as car). */
 export function isochronePath(mode: Mode): string {
-  return mode === "transit" ? "/api/transit" : "/api/isochrone";
+  switch (mode) {
+    case "walk":
+      return "/api/isochrone";
+    case "transit":
+      return "/api/transit";
+    case "car":
+      return "/api/car";
+    default: {
+      const _exhaustive: never = mode;
+      return _exhaustive;
+    }
+  }
 }
 
 /**
@@ -105,8 +131,14 @@ export function effectivePace(mode: Mode, pace: Pace): Pace {
  * context. Walk carries only `pace`; transit adds `preset` or `weekday`+`time`.
  * Pure + exported so the exact query contract is unit-testable. */
 export function isochroneUrl(mode: Mode, origin: Origin, pace: Pace, timeContext: TimeContext): string {
-  const base = `${isochronePath(mode)}?lat=${origin.lat}&lng=${origin.lng}&pace=${pace}`;
-  if (mode !== "transit") return base;
+  const coords = `?lat=${origin.lat}&lng=${origin.lng}`;
+  // Car is a fixed profile: no pace and no departure time (those are walk/
+  // transit concepts). It carries lat/lng ONLY, so a pace left over from Walk
+  // can never leak into a car request (plan-panel C-E). /api/car ignores such
+  // params anyway, but not emitting them keeps the contract honest + testable.
+  if (mode === "car") return `${isochronePath(mode)}${coords}`;
+  const base = `${isochronePath(mode)}${coords}&pace=${pace}`;
+  if (mode !== "transit") return base; // walk: pace only
   if (timeContext.kind === "preset") return `${base}&preset=${timeContext.preset}`;
   const hh = String(timeContext.hour).padStart(2, "0");
   const mm = String(timeContext.minute).padStart(2, "0");

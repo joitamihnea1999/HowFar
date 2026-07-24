@@ -215,11 +215,15 @@ describe("failureMessage", () => {
 });
 
 describe("pure helpers", () => {
-  it("modeWord / isochronePath key off the mode", () => {
+  it("modeWord / isochronePath key off the mode (incl. car, task 053)", () => {
     expect(modeWord("walk")).toBe("walking");
     expect(modeWord("transit")).toBe("transit");
+    expect(modeWord("car")).toBe("driving");
     expect(isochronePath("walk")).toBe("/api/isochrone");
     expect(isochronePath("transit")).toBe("/api/transit");
+    // Car must route to its own endpoint — NOT silently fall through to the
+    // walk endpoint (which would render walk rings mislabeled as car).
+    expect(isochronePath("car")).toBe("/api/car");
   });
 
   it("reverseIsFatal is true only for the out-of-area 422", () => {
@@ -353,5 +357,12 @@ describe("isochroneUrl (task 051 query contract)", () => {
     expect(isochroneUrl("transit", ORIGIN, "relaxed", { kind: "custom", weekday: 6, hour: 9, minute: 0 })).toBe(
       "/api/transit?lat=44.4268&lng=26.1025&pace=relaxed&weekday=6&time=09%3A00",
     );
+  });
+  it("car carries lat/lng ONLY — no pace/preset/weekday/time can leak (task 053, plan C-E)", () => {
+    // Even with a Brisk pace + a custom time left over from another mode, the
+    // car URL must not emit them (car is a fixed profile; /api/car ignores them).
+    const url = isochroneUrl("car", ORIGIN, "brisk", { kind: "custom", weekday: 6, hour: 9, minute: 0 });
+    expect(url).toBe("/api/car?lat=44.4268&lng=26.1025");
+    expect(url).not.toMatch(/pace|preset|weekday|time/);
   });
 });

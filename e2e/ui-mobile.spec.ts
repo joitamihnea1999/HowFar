@@ -232,3 +232,51 @@ test("touch journey stays usable through selection, results, inspection, map ges
     await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth),
   ).toBe(true);
 });
+
+test("Car mode toggle: three options meet the 44px target and don't overflow or occlude zoom controls (task 053, C-I)", async ({
+  page,
+}) => {
+  await page.route("**/api/suggest**", (route) => route.fulfill({ json: { suggestions: [] } }));
+  await page.goto("/");
+  const map = page.getByTestId("app-map");
+  await expect(map).toHaveAttribute("data-map-loaded", "true", { timeout: 30_000 });
+
+  const toggle = page.getByRole("group", { name: "Travel mode" });
+  await expect(toggle).toBeVisible();
+
+  const viewportWidth = page.viewportSize()!.width;
+  for (const name of ["Walk", "Public transport", "Car"]) {
+    const btn = page.getByRole("button", { name, exact: true });
+    await expect(btn).toBeVisible();
+    const box = await btn.boundingBox();
+    if (!box) throw new Error(`no box for ${name}`);
+    // 44px minimum touch target on BOTH axes (impl panel: 3-up was ~37px WIDE
+    // at 375px), and no horizontal overflow past the viewport.
+    expect(box.height).toBeGreaterThanOrEqual(44);
+    expect(box.width).toBeGreaterThanOrEqual(44);
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(viewportWidth + 1);
+  }
+  // The label must not clip — its full text must fit inside the button box
+  // (scrollWidth ≤ clientWidth for the label span), at the narrowest phone width.
+  await page.setViewportSize({ width: 375, height: 812 });
+  for (const name of ["Walk", "Public transport", "Car"]) {
+    const btn = page.getByRole("button", { name, exact: true });
+    const box = await btn.boundingBox();
+    if (!box) throw new Error(`no box for ${name} at 375px`);
+    expect(box.width).toBeGreaterThanOrEqual(44);
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+
+  // The command dock must not sit on top of the bottom-right zoom controls.
+  const zoomIn = page.locator(".maplibregl-ctrl-zoom-in");
+  await expect(zoomIn).toBeVisible();
+  const zb = await zoomIn.boundingBox();
+  const tb = await toggle.boundingBox();
+  if (!zb || !tb) throw new Error("missing zoom/toggle box");
+  const overlap = !(tb.x + tb.width <= zb.x || zb.x + zb.width <= tb.x || tb.y + tb.height <= zb.y || zb.y + zb.height <= tb.y);
+  expect(overlap).toBe(false);
+
+  // No horizontal page overflow at portrait mobile width.
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+});
