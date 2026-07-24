@@ -25,7 +25,8 @@ map click   ──► /api/reverse ──► Nominatim    (label only — the cl
      │
      ▼
 /api/isochrone ──► OpenRouteService foot-walking (walking rings, 15/30/45 min)
-/api/car      ──► OpenRouteService driving-car   (car rings, 10/20/30 min — nominal estimate)
+/api/car      ──► OpenRouteService driving-car   (car rings, 10/20/30 min — free-flow ÷ per-time-of-day
+                                                  congestion factor = traffic-aware estimate, task 058)
 /api/transit  ──► Transitous one-to-all ──► transit-grid (rings built in-process)
 /api/amenities ──► ORS walk ring ∥ active PostGIS snapshot ──► spatial intersection
      │
@@ -58,7 +59,7 @@ server code only.
 | `src/app/api/*/route.ts` | Thin HTTP glue: status codes only, no business logic |
 | `src/app/api/tiles/route.ts` | Serves the self-hosted PMTiles basemap with HTTP Range semantics |
 | `src/features/map/AppMap.tsx` | Thin client shell: holds render state, creates the controllers below in dependency order, wires the map event handlers, renders the shell + JSX. No business logic of its own |
-| `src/features/map/{camera,hover,ring-reveal,route-path,popup,amenities,select-flow}-controller.ts`, `selection-render.ts` | Single-responsibility controllers, each `create*(...) → { …methods, dispose }`. One shared `load-state.ts` cell carries style-load readiness + the pre-`load` replay buffers; teardown disposes them in reverse create order, then removes the map last. Imperative MapLibre/network glue — verified by the e2e suite |
+| `src/features/map/{camera,hover,ring-reveal,route-path,popup,amenities,select-flow,reach-directions,reach-journey}-controller.ts`, `selection-render.ts` | Single-responsibility controllers, each `create*(...) → { …methods, dispose }`. One shared `load-state.ts` cell carries style-load readiness + the pre-`load` replay buffers; teardown disposes them in reverse create order, then removes the map last. Imperative MapLibre/network glue — verified by the e2e suite. **Right-click directions (task 058):** `reach-directions-controller` owns the reach state machine + `/api/reach` fetch (gen/abort/deadline) and orchestrates `reach-journey-controller` (draws the trip + the destination pin in one atomic `reach-path` source) + amenity declutter; it `subscribe`s AppMap into React so the directions render in the **result-sheet dock** (`ReachPanel`), replacing the selection card/filters while active — NOT a map-covering popup. The directions and the stop/POI popup are mutually-exclusive "active map surfaces" (each closes the other via injected callbacks) |
 | `src/features/map/{route-framing,load-state}.ts` | Pure/near-pure helpers pulled out of the controllers: route-fit corridor math, framing read-backs, the stamp-retry decision (unit-tested); the shared load-state cell |
 | `src/features/search/search-suggest-controller.ts` | Autocomplete debounce timer + fetch/abort glue driving the combobox reducer |
 | `src/features/map/selection-flow.ts` | Selection state machine (token staleness, mode snapshot, failure mapping); owns the `Mode`/`Ring`/`Origin` types |
@@ -69,7 +70,8 @@ server code only.
 | `src/features/search/combobox.ts` | Autocomplete state machine (generation staleness, keyboard nav) |
 | `src/features/search/server/{nominatim,photon}.ts` | Geocode/reverse + type-ahead provider clients |
 | `src/features/isochrones/isochrone-view.ts` | Pure ring view-model: per-mode ramps, GeoJSON features, legend |
-| `src/features/isochrones/server/{ors,transit}.ts` | Walking + transit reachability provider clients |
+| `src/features/isochrones/server/{ors,transit}.ts` | Walking + transit reachability provider clients (ors also serves the time-aware car isochrone) |
+| `src/features/isochrones/car-traffic.ts` | Pure Bucharest traffic model (task 058): time-of-day → congestion factor, and the free-flow-range scaler; `CAR_FACTOR_REVISION` feeds the car cache key |
 | `src/features/isochrones/server/transit-grid.ts` | Pure geometry: reachability grid + marching-squares contours |
 | `src/features/amenities/amenities.ts` | Shared category config/classifier for importer, API DTOs and UI |
 | `src/features/amenities/amenity-selection.ts` | Versioned selectable-category state and category+text filtering |

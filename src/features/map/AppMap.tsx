@@ -35,7 +35,13 @@ import { createCameraController } from "@/features/map/camera-controller";
 import { createHoverController } from "@/features/map/hover-controller";
 import { createLoadState } from "@/features/map/load-state";
 import { createPopupController } from "@/features/map/popup-controller";
+import {
+  createReachDirectionsController,
+  type ReachDirectionsController,
+  type ReachView,
+} from "@/features/map/reach-directions-controller";
 import { createReachJourneyController } from "@/features/map/reach-journey-controller";
+import ReachPanel from "@/features/map/ReachPanel";
 import { createRingRevealController } from "@/features/map/ring-reveal-controller";
 import { createRoutePathController } from "@/features/map/route-path-controller";
 import { createSelectFlowController } from "@/features/map/select-flow-controller";
@@ -66,6 +72,7 @@ import {
   initialSelectionState,
   sameTimeContext,
   selectionReducer,
+  type CarMeta,
   type Mode,
   type Origin,
   type Ring,
@@ -80,12 +87,17 @@ import { type TimeContext } from "@/features/isochrones/time-context";
 const BUCHAREST_CENTER: [number, number] = [26.1025, 44.4268];
 const SUGGEST_DEBOUNCE_MS = 250;
 
-/** Shared result-surface predicate for the React shell and camera resize path. */
+/** Shared result-surface predicate for the React shell and camera resize path.
+ * The reach directions panel occupies the SAME result-sheet slot (task 058), so
+ * an active reach view is a result surface too — otherwise a pre-selection hint
+ * or a reach view after an error-cleared selection would have no dock and the
+ * resize padding would drop it (panel gpt5.5-2). */
 function hasResultSurface(
   sel: Pick<SelectionState, "status" | "label" | "message">,
   amenityStatus: AmenityUi["status"],
+  reachActive: boolean,
 ): boolean {
-  return sel.status === "loading" || Boolean(sel.label || sel.message) || amenityStatus !== "idle";
+  return reachActive || sel.status === "loading" || Boolean(sel.label || sel.message) || amenityStatus !== "idle";
 }
 
 interface AppMapProps {
@@ -104,7 +116,19 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
   // ("how do I get there?") can classify a clicked point against the EXACT
   // geometry the map drew (task 052 D) — walk band client-side, transit via a
   // /api/reach trip plan. Cleared on a new/failed selection.
-  const reachRef = useRef<{ rings: Ring[]; mode: Mode; origin: Origin } | null>(null);
+  const reachRef = useRef<{ rings: Ring[]; mode: Mode; origin: Origin; car: CarMeta | null } | null>(null);
+  // The right-click directions view (task 058), mirrored from the reach-
+  // directions controller into React so the result-sheet dock can render it in
+  // place of the amenity filters. A ref mirror lets the resize handler read it
+  // without re-binding, and the controller ref lets render-scope handlers
+  // (ReachPanel close/highlight) drive it.
+  const reachControllerRef = useRef<ReachDirectionsController | null>(null);
+  const [reachView, setReachView] = useState<ReachView | null>(null);
+  // Mirrored so the resize handler (empty-deps effect) reads the latest active
+  // flag without re-binding. Set SYNCHRONOUSLY in the controller's subscribe
+  // callback (below) — NOT in a [reachView] effect, which would lag a rotate/
+  // resize by one tick and drop the dock padding (panel grok-2).
+  const reachActiveRef = useRef(false);
 
   // Amenities: keyed by rounded origin (NOT the selection token, which a mode
   // toggle bumps) so a Walk↔Transit toggle persists the markers with no refetch;
@@ -275,8 +299,29 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
     // popup↔amenities construction cycle (plan-panel K).
     const reachJourney = createReachJourneyController({ map, el, loadState, reducedMotion });
     const reachDeclutter: { set: (on: boolean) => void } = { set: () => {} };
-    const popup = createPopupController({ map, el, reducedMotion, route, journey: reachJourney, reachDeclutter, applyCameraPadding });
+    // The directions controller and the popup controller are mutually-exclusive
+    // "active map surfaces" (panel opus-1). Each must be able to close the other,
+    // so the popup's `closeStopPopup` is injected into the directions controller
+    // through a holder (the popup is created just after), breaking the cycle.
+    const closeStopPopupHolder: { current: () => void } = { current: () => {} };
+    const reachDirections = createReachDirectionsController({
+      el,
+      journey: reachJourney,
+      reachDeclutter,
+      applyCameraPadding,
+      closeStopPopup: () => closeStopPopupHolder.current(),
+    });
+    reachControllerRef.current = reachDirections;
+    // Mirror the active flag SYNCHRONOUSLY (panel grok-2) — the resize handler
+    // reads reachActiveRef, and a rotate/resize before React's effect ran would
+    // otherwise drop the dock's camera padding for a reach-only (hint) surface.
+    reachDirections.subscribe((v) => {
+      reachActiveRef.current = v !== null;
+      setReachView(v);
+    });
+    const popup = createPopupController({ map, el, reducedMotion, route, applyCameraPadding, closeReach: reachDirections.close });
     const { openAmenityPopup, inspectAmenity, closeStopPopup } = popup;
+    closeStopPopupHolder.current = closeStopPopup;
     inspectAmenityRef.current = inspectAmenity;
     const amenities = createAmenitiesController({
       map,
@@ -312,7 +357,11 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
     // clear them whenever the selection is dropped, so a right-click never reads
     // stale geometry (task 052 D).
     const renderSelectionStash = (origin: Origin, label: string, rings: Ring[], mode: Mode) => {
-      reachRef.current = { rings, mode, origin };
+      // `dispatchSel({type:"resolved",…,car})` runs synchronously BEFORE this in
+      // the controller, so `selRef.current.car` is the fresh basis for THIS
+      // resolution (null for walk/transit) — snapshot it into the atomic reach
+      // stash so a right-click car band names the traffic it was computed for.
+      reachRef.current = { rings, mode, origin, car: selRef.current.car };
       renderSelection(origin, label, rings, mode);
     };
     const clearSelectionReach = () => {
@@ -357,6 +406,10 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
         renderAmenities(a.items, a.counts);
       }
       reachJourney.flushPending(); // replay a right-click journey that raced `load`
+      // A journey replayed from a pre-load right-click was buffered without a
+      // camera fit — reframe it now so the path isn't left off-screen with the
+      // dock open (panel luna-1/terra-1). No-op when nothing was drawn.
+      reachDirections.reframe();
       if (map.getLayer("amenity-markers") && map.getLayer("amenity-glyphs")) {
         el.dataset.amenityEncoding = "color+glyph";
       }
@@ -373,7 +426,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
     // Keep the visible-map contract in sync through browser resizing and
     // orientation changes, including after a result has already been framed.
     const onResize = () => {
-      const hasResults = hasResultSurface(selRef.current, amenityRef.current.status);
+      const hasResults = hasResultSurface(selRef.current, amenityRef.current.status, reachActiveRef.current);
       // applyCameraPadding already commits map.setPadding + dataset read-backs.
       applyCameraPadding(hasResults);
       map.resize();
@@ -382,7 +435,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       if (route.hasActiveBounds()) requestAnimationFrame(() => route.refit(0));
       // Same for a drawn right-click journey (task 057): reframe it (instant) so a
       // rotation / responsive change never clips the path. No-op when none is drawn.
-      requestAnimationFrame(() => reachJourney.frame(applyCameraPadding(true), true));
+      requestAnimationFrame(() => reachDirections.reframe());
     };
     window.addEventListener("resize", onResize);
 
@@ -398,7 +451,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       // point", answerable anywhere on the map — including over a marker.
       // No resolved selection yet (or one still loading): explain what to do.
       if (!sel.lastSelection || sel.status === "loading" || !stash) {
-        return void popup.openReachPopup({ kind: "hint", coords });
+        return void reachDirections.open({ kind: "hint", coords });
       }
       // Classify the point against the SAME rings the map drew (all modes) so
       // the answer can never contradict the painted reach (task 052 P2 / impl T1).
@@ -407,13 +460,14 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       const action = decideReach(stash.mode, reachBand(coords, stash.rings));
       switch (action.kind) {
         case "walk":
-          return void popup.openReachPopup({ kind: "walk", coords, band: action.band });
+          return void reachDirections.open({ kind: "walk", coords, band: action.band });
         case "car":
           // Car reach is band-only, resolved client-side — no provider call.
-          return void popup.openReachPopup({ kind: "car", coords, band: action.band });
+          // Carry the stashed car basis/slot so the copy names the traffic.
+          return void reachDirections.open({ kind: "car", coords, band: action.band, carMeta: stash.car });
         case "transit-unreachable":
           // Outside every transit ring → answer honestly with NO provider call.
-          return void popup.openReachPopup({ kind: "transit-unreachable", coords });
+          return void reachDirections.open({ kind: "transit-unreachable", coords });
         case "transit": {
           const params = new URLSearchParams({
             fromLat: String(stash.origin.lat),
@@ -432,7 +486,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
             params.set("weekday", String(sel.timeContext.weekday));
             params.set("time", `${String(sel.timeContext.hour).padStart(2, "0")}:${String(sel.timeContext.minute).padStart(2, "0")}`);
           }
-          return void popup.openReachPopup({ kind: "transit", coords, band: action.band, url: `/api/reach?${params.toString()}` });
+          return void reachDirections.open({ kind: "transit", coords, band: action.band, url: `/api/reach?${params.toString()}` });
         }
         default: {
           const _exhaustive: never = action;
@@ -523,6 +577,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
           selectionRender.dispose,
           amenities.dispose,
           popup.dispose,
+          reachDirections.dispose,
           reachJourney.dispose,
           route.dispose,
           ring.dispose,
@@ -537,6 +592,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
             inspectAmenityRef.current = null;
             applyRingFilterRef.current = null;
             selectRef.current = null;
+            reachControllerRef.current = null;
           },
         ],
         () => {
@@ -614,9 +670,10 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
     if (sameTimeContext(next, selRef.current.timeContext)) return;
     abortRef.current?.abort();
     dispatchSel({ type: "setTimeContext", timeContext: next });
-    // Departure only affects transit; in walk mode just record it for when the
-    // user switches to transit (no recompute needed).
-    if (selRef.current.mode === "transit") recomputeCurrent();
+    // Departure affects transit AND car (task 058: car reach is time-aware for
+    // traffic realism). In walk mode just record it for when the user switches
+    // to a time-aware mode (no recompute needed).
+    if (selRef.current.mode !== "walk") recomputeCurrent();
   }
 
   // Manual retry from the AmenityPanel error state. Restarts the attempt
@@ -659,8 +716,17 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
   const sel = selState;
   const combo = comboState;
   const amenityCounts = amenity.counts;
-  const hasResults = hasResultSurface(sel, amenity.status);
+  const reachActive = reachView !== null;
+  // The reach directions dock counts as a result surface (task 058): the sheet
+  // renders — and camera padding holds — whenever there's a selection OR reach.
+  const hasResults = hasResultSurface(sel, amenity.status, reachActive);
   const showFirstRun = !hasResults && sel.lastSelection === null;
+  const closeReachPanel = () => {
+    reachControllerRef.current?.close();
+    // Return focus to the map container (the panel took it on open) — the div is
+    // tabIndex=-1 so it can receive focus (panel terra-5).
+    containerRef.current?.focus();
+  };
 
   return (
     <div className="hf-map-shell absolute inset-0" data-has-results={hasResults ? "true" : "false"}>
@@ -716,50 +782,62 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
         {hasResults ? (
           <section
             data-testid="result-sheet"
-            aria-label="Location result"
+            aria-label={reachActive ? "Directions" : "Location result"}
             className="hf-result-sheet pointer-events-auto absolute inset-x-3 bottom-[max(2.8rem,calc(env(safe-area-inset-bottom)+2.3rem))] z-20 max-h-[min(30dvh,14.5rem)] overflow-y-auto overscroll-contain rounded-[1.5rem] border border-white/[.11] bg-[#0d110e]/94 p-2.5 shadow-[0_24px_70px_rgba(0,0,0,.4)] backdrop-blur-2xl sm:inset-x-4 md:bottom-auto md:left-4 md:right-auto md:top-[21.3rem] md:max-h-[calc(100dvh-22.3rem)] md:w-[388px] md:p-3"
           >
-            <SelectionCard
-              label={sel.label}
-              message={sel.message}
-              mode={sel.mode}
-              ringFilter={ringFilter}
-              loading={sel.status === "loading"}
-              departure={sel.departure}
-            />
-            {/* Reach refinements live WITH the result they adjust. Pace is a
-                WALKING concept, so it shows ONLY in Walk (task 052 P4); the
-                departure context shows only in Public transport. Exactly one
-                control renders per mode, so the bordered cluster is never empty.
-                Keeps the top command dock compact (no map-covering rail). */}
-            {sel.mode === "walk" || sel.mode === "transit" ? (
+            {/* Right-click directions REPLACE the selection card + filters while
+                active (task 058, owner item 2). The selection block stays MOUNTED
+                but hidden + inert (panel grok-5) so the AmenityPanel keeps its
+                open Browse list / text filter — unmounting it would wipe that and
+                "restore" would feel broken. */}
+            {reachActive ? (
+              <ReachPanel view={reachView!} onHighlight={(i) => reachControllerRef.current?.highlight(i)} onClose={closeReachPanel} />
+            ) : null}
+            <div hidden={reachActive} inert={reachActive}>
+              <SelectionCard
+                label={sel.label}
+                message={sel.message}
+                mode={sel.mode}
+                ringFilter={ringFilter}
+                loading={sel.status === "loading"}
+                departure={sel.departure}
+                car={sel.car}
+              />
+              {/* Reach refinements live WITH the result they adjust. The two
+                  controls are gated INDEPENDENTLY (plan-panel grok-3): PaceControl
+                  is strictly Walk (pace is a walking concept, task 052 P4);
+                  TimeContextControl is transit OR car (task 058 — car reach is
+                  time-aware for traffic realism). They are never merged into one
+                  non-walk wrapper (that would resurrect pace in car). Exactly one
+                  control renders per mode, so the bordered cluster is never empty.
+                  Keeps the top command dock compact (no map-covering rail). */}
               <div className="mt-2.5 grid gap-2.5 border-t border-white/[.07] pt-2.5">
                 {sel.mode === "walk" ? <PaceControl pace={sel.pace} onSelect={setPace} /> : null}
-                {sel.mode === "transit" ? (
-                  <TimeContextControl value={sel.timeContext} onSelect={setTimeContext} />
+                {sel.mode === "transit" || sel.mode === "car" ? (
+                  <TimeContextControl value={sel.timeContext} onSelect={setTimeContext} mode={sel.mode} />
                 ) : null}
               </div>
-            ) : null}
-            <AmenityPanel
-              // Key on amenity IDENTITY (resolved origin + pace) — the only
-              // things that change the amenity set — NOT sel.token. A mode
-              // toggle or a transit time change keeps the same origin+pace, so
-              // the panel no longer remounts and lose its open Browse list /
-              // text filter (impl-panel finding); a new origin or pace change
-              // still remounts to reset that transient state. Keyed on the
-              // EFFECTIVE pace (task 052 P4) so it matches the pace the amenities
-              // were actually fetched at — the common Normal-pace toggle keeps
-              // the panel mounted; only a Brisk/Relaxed-walk→transit toggle
-              // remounts, which is correct since the amenity set changed.
-              key={`${sel.lastSelection?.lat ?? "x"},${sel.lastSelection?.lng ?? "x"}:${effectivePace(sel.mode, sel.pace)}`}
-              status={amenity.status}
-              counts={amenityCounts}
-              items={amenity.items}
-              selectedCategories={selectedAmenityCategories}
-              onSelectedCategoriesChange={selectAmenityCategories}
-              onRetry={retryAmenities}
-              onInspect={(item) => inspectAmenityRef.current?.(item)}
-            />
+              <AmenityPanel
+                // Key on amenity IDENTITY (resolved origin + pace) — the only
+                // things that change the amenity set — NOT sel.token. A mode
+                // toggle or a transit time change keeps the same origin+pace, so
+                // the panel no longer remounts and lose its open Browse list /
+                // text filter (impl-panel finding); a new origin or pace change
+                // still remounts to reset that transient state. Keyed on the
+                // EFFECTIVE pace (task 052 P4) so it matches the pace the amenities
+                // were actually fetched at — the common Normal-pace toggle keeps
+                // the panel mounted; only a Brisk/Relaxed-walk→transit toggle
+                // remounts, which is correct since the amenity set changed.
+                key={`${sel.lastSelection?.lat ?? "x"},${sel.lastSelection?.lng ?? "x"}:${effectivePace(sel.mode, sel.pace)}`}
+                status={amenity.status}
+                counts={amenityCounts}
+                items={amenity.items}
+                selectedCategories={selectedAmenityCategories}
+                onSelectedCategoriesChange={selectAmenityCategories}
+                onRetry={retryAmenities}
+                onInspect={(item) => inspectAmenityRef.current?.(item)}
+              />
+            </div>
           </section>
         ) : showFirstRun ? (
           <div className="absolute inset-x-3 bottom-[max(3.6rem,calc(env(safe-area-inset-bottom)+3rem))] z-10 sm:inset-x-4 md:bottom-auto md:left-4 md:right-auto md:top-[21.3rem] md:w-[388px]">
@@ -777,7 +855,10 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
         ref={containerRef}
         data-testid="app-map"
         aria-label="Interactive map of travel reach and nearby places in Bucharest"
-        className="h-full w-full"
+        // tabIndex -1 so directions can return focus here on close (panel
+        // terra-5): the map container is otherwise not focusable.
+        tabIndex={-1}
+        className="h-full w-full outline-none"
       />
 
       <AttributionBadge elevated={hasResults} />

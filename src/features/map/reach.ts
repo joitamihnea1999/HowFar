@@ -2,7 +2,7 @@ import { booleanPointInPolygon } from "@turf/boolean-point-in-polygon";
 import type { Feature, MultiPolygon, Polygon } from "geojson";
 
 import type { ReachLeg, ReachPlan, ReachPoint } from "@/features/isochrones/server/transit-plan";
-import type { Mode } from "@/features/map/selection-flow";
+import type { CarMeta, Mode } from "@/features/map/selection-flow";
 
 /**
  * Pure helpers for the right-click "how do I get there?" popup (task 052 D):
@@ -105,8 +105,10 @@ export type ReachRequest =
   | { kind: "hint"; coords: [number, number] }
   | { kind: "walk"; coords: [number, number]; band: number | null }
   // Car reach is resolved fully client-side to a drive band (no provider call),
-  // like walk but with driving copy + an estimate caveat (task 053).
-  | { kind: "car"; coords: [number, number]; band: number | null }
+  // like walk but with driving copy + the traffic-estimate caveat (tasks 053/
+  // 058). `carMeta` carries the traffic slot the rings were computed for so the
+  // popup names WHICH traffic it assumed (honest copy).
+  | { kind: "car"; coords: [number, number]; band: number | null; carMeta: CarMeta | null }
   // The clicked point is outside every drawn transit ring — answer WITHOUT a
   // provider call, so the popup never contradicts the painted reach (T1/P2).
   | { kind: "transit-unreachable"; coords: [number, number] }
@@ -271,14 +273,25 @@ export function walkReachText(band: number | null): { title: string; detail: str
 }
 
 /** Car-mode reach copy from a drive band (or null = outside the drive area).
- * Carries the estimate/no-live-traffic caveat, since the reach popup renders
- * this copy directly (not just SelectionCard) — plan-panel C-F. */
-export function carReachText(band: number | null): { title: string; detail: string } {
+ * Names the traffic slot the reach was computed for and carries the
+ * estimate/typical-congestion caveat (the rings are ORS free-flow adjusted by a
+ * per-time-of-day congestion factor, NOT live traffic — tasks 053/058). The
+ * reach popup renders this copy directly (not just SelectionCard) — plan-panel
+ * C-F. */
+export function carReachText(band: number | null, carMeta?: CarMeta | null): { title: string; detail: string } {
   if (band === null) {
-    return { title: "Beyond your driving reach", detail: "This point is outside your mapped drive area." };
+    // Keep the traffic/estimate context even on a negative result — trust
+    // matters most here (panel terra-2), and the dock hides the SelectionCard
+    // note while directions are shown.
+    const forTraffic = carMeta ? ` for typical ${carMeta.slotLabel} traffic` : "";
+    return {
+      title: "Beyond your driving reach",
+      detail: `This point is outside your mapped drive area${forTraffic} — an estimate from typical congestion, not live traffic.`,
+    };
   }
+  const traffic = carMeta ? ` in typical ${carMeta.slotLabel} traffic` : "";
   return {
     title: "By car",
-    detail: `Within about ${band} minutes' drive of your start — an estimate, without live traffic.`,
+    detail: `Within about ${band} minutes' drive of your start${traffic} — an estimate from typical congestion, not live traffic.`,
   };
 }

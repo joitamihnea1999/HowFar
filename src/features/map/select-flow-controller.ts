@@ -4,6 +4,7 @@ import {
   effectivePace,
   isochroneUrl,
   reverseIsFatal,
+  type CarMeta,
   type Mode,
   type Origin,
   type Ring,
@@ -27,6 +28,20 @@ function departureInfo(
 ): { iso: string; summary: string } | null {
   if (mode !== "transit" || !departureIso) return null;
   return { iso: departureIso, summary: timeContextSummary(timeContext) };
+}
+
+/** The honest car-reach basis echoed by /api/car (task 058) — only for car
+ * selections that actually returned it; walk/transit carry null (cleared). */
+function carInfo(mode: Mode, car: CarMeta | undefined): CarMeta | null {
+  if (mode !== "car" || !car) return null;
+  return { basis: "estimate", slotId: car.slotId, slotLabel: car.slotLabel };
+}
+
+interface IsoResponse {
+  origin: Origin;
+  rings: Ring[];
+  departure?: string;
+  car?: CarMeta;
 }
 
 /**
@@ -144,9 +159,9 @@ export function createSelectFlowController({
           clearAmenities();
           return void dispatchSel({ type: "failed", token, stage: "isochrone", httpStatus: isoRes.status });
         }
-        const iso = (await isoRes.json()) as { origin: Origin; rings: Ring[]; departure?: string };
+        const iso = (await isoRes.json()) as IsoResponse;
         if (stale()) return;
-        dispatchSel({ type: "resolved", token, origin: iso.origin, label, departure: departureInfo(mode, iso.departure, timeContext) });
+        dispatchSel({ type: "resolved", token, origin: iso.origin, label, departure: departureInfo(mode, iso.departure, timeContext), car: carInfo(mode, iso.car) });
         renderSelection(iso.origin, label, iso.rings, mode);
         return;
       }
@@ -165,12 +180,12 @@ export function createSelectFlowController({
         clearAmenities();
         return void dispatchSel({ type: "failed", token, stage: "isochrone", httpStatus: isoRes.status });
       }
-      const iso = (await isoRes.json()) as { origin: Origin; rings: Ring[]; departure?: string };
+      const iso = (await isoRes.json()) as IsoResponse;
       if (stale()) return;
 
       // Fresh (stale() just checked): accept and paint. Reducer records the
       // isochrone's rounded origin so a mode toggle recomputes the same point.
-      dispatchSel({ type: "resolved", token, origin: iso.origin, label, departure: departureInfo(mode, iso.departure, timeContext) });
+      dispatchSel({ type: "resolved", token, origin: iso.origin, label, departure: departureInfo(mode, iso.departure, timeContext), car: carInfo(mode, iso.car) });
       renderSelection(iso.origin, label, iso.rings, mode);
     } catch (err) {
       if ((err as Error)?.name === "AbortError" || stale()) return;

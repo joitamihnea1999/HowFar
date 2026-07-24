@@ -1,3 +1,8 @@
+import {
+  CAR_FACTOR_REVISION,
+  scaledCarRangesS,
+  type CarTrafficSlot,
+} from "@/features/isochrones/car-traffic";
 import { DEFAULT_PACE, PACE_MODEL, type Pace } from "@/features/isochrones/pace";
 import { getCachedSafe, setCachedSafe } from "@/lib/api-cache";
 import { serverEnv } from "@/lib/env";
@@ -35,13 +40,21 @@ const TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const NOMINAL_MINUTES = [15, 30, 45];
 // Car (task 053): owner-picked 10/20/30-min bands (600/1200/1800 s) so the
 // driving reach fits the Bucharest map extent — a 45-min drive is ~3.5× the
-// tiled area (measured). Free-flow ORS driving times, with NO live traffic on
-// the free tier, so the UI labels them an estimate. AUDITED 2026-07-24 (task
-// 056, docs/PROVIDERS.md "Re-audit"): against an INDEPENDENT ruler (public OSRM
-// driving) + ORS-Matrix, boundary drive-durations land within ±5% of the labels
-// at 3 origins — the ranges are already accurate, so they are kept as-is (a ~1.0
-// calibration factor would be false precision). Payloads stay ≤~34 KB / ~1050
-// coords — within the ApiCache row budget, so no size cap is needed.
+// tiled area (measured). These are NOMINAL FREE-FLOW seconds.
+//
+// TASK 058 — traffic realism: the task-056 re-audit ("ranges already accurate,
+// no calibration factor") was FREE-FLOW-ONLY — it validated the ORS free-flow
+// number against free-flow rulers (public OSRM + ORS-Matrix), and is silent on
+// CONGESTION. Bucharest is heavily congested (public TomTom Traffic Index 2025:
+// 62.5% congestion, 18.5 km/h avg), so free-flow reach over-claims 1.5–2.2× at
+// peak. Car reach is now TIME-AWARE: `drivingIsochrone` divides these nominal
+// seconds by a per-time-of-day congestion factor (features/isochrones/
+// car-traffic.ts) so the painted band reflects real drive time. We do NOT call
+// a live-traffic provider — TomTom's free tier is Evaluation-Use-only (Portal
+// T&C §2.2) and its Results can't be cached-to-scale (§11.4) or turned into a
+// derived product (§11.6.1); Mapbox/HERE are disqualified/parked. See
+// docs/PROVIDERS.md "Car traffic realism". Payloads stay ≤~34 KB / ~1050 coords
+// — within the ApiCache row budget, so no size cap is needed.
 const CAR_RANGES_S = [600, 1200, 1800];
 const CAR_MINUTES = [10, 20, 30];
 const RANGE_TOLERANCE_S = 1; // ORS echoes the requested range in properties.value
@@ -158,12 +171,23 @@ export async function walkingIsochrone(
   return orsIsochrone("foot-walking", latRaw, lngRaw, PACE_MODEL[pace].orsRangesS, NOMINAL_MINUTES, key);
 }
 
-/** Driving-car isochrone (10/20/30 min, task 053). No pace and no departure
- *  time — car is a fixed-profile mode (those are walk/transit concepts). Nominal
- *  free-flow ranges, labelled an estimate in the UI. Cache prefix `iso:car:v1`. */
-export async function drivingIsochrone(latRaw: number, lngRaw: number): Promise<IsochroneResult> {
-  const key = `iso:car:v1:${roundCoord(latRaw)},${roundCoord(lngRaw)}`;
-  return orsIsochrone("driving-car", latRaw, lngRaw, CAR_RANGES_S, CAR_MINUTES, key);
+/** Driving-car isochrone (10/20/30-min labels, tasks 053/058). Time-aware: the
+ *  nominal free-flow ranges are DIVIDED by the traffic slot's congestion factor,
+ *  so the painted band reflects real Bucharest drive time at that time of day.
+ *  No pace (a walk concept). Cache `iso:car:v2:{frev}:est:{slotId}:{coords}` —
+ *  the factor-table revision (`frev`) is IN THE KEY so a recalibration can never
+ *  serve rings computed with the old factors (panel fable-4/terra-4); `slotId`
+ *  keeps the eight traffic periods distinct. `v2` retires all free-flow `v1`
+ *  entries. `basis` on the payload is always "estimate" (typical-congestion
+ *  adjustment, not live traffic) — surfaced honestly in the UI. */
+export async function drivingIsochrone(
+  latRaw: number,
+  lngRaw: number,
+  slot: CarTrafficSlot,
+): Promise<IsochroneResult> {
+  const ranges = scaledCarRangesS(CAR_RANGES_S, slot.factor);
+  const key = `iso:car:v2:${CAR_FACTOR_REVISION}:est:${slot.slotId}:${roundCoord(latRaw)},${roundCoord(lngRaw)}`;
+  return orsIsochrone("driving-car", latRaw, lngRaw, ranges, CAR_MINUTES, key);
 }
 
 async function fetchAndCache(

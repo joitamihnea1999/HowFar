@@ -85,7 +85,20 @@ test("right-click with no selection shows the hint", async ({ page }) => {
   const { map } = await setup(page);
   await rightClickCentre(page);
   await expect(map).toHaveAttribute("data-reach-state", "hint");
-  await expect(page.getByTestId("reach-popup")).toContainText("Pick a starting point");
+  await expect(page.getByTestId("reach-panel")).toContainText("Pick a starting point");
+});
+
+test("Escape closes the directions even after focus has left the panel (panel fable-1)", async ({ page }) => {
+  const { map } = await setup(page);
+  await search(page, map);
+  await rightClickCentre(page);
+  await expect(map).toHaveAttribute("data-reach-state", "walk");
+  // Move focus off the panel to the map container (tabIndex=-1) — a panel-scoped
+  // Escape handler would go dead here; the document-level one must still close.
+  await page.getByTestId("app-map").focus();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("reach-panel")).toHaveCount(0);
+  await expect(map).not.toHaveAttribute("data-reach-state", /.+/);
 });
 
 test("walk mode: right-click answers client-side with no /api/reach call", async ({ page }) => {
@@ -93,7 +106,7 @@ test("walk mode: right-click answers client-side with no /api/reach call", async
   await search(page, map);
   await rightClickCentre(page);
   await expect(map).toHaveAttribute("data-reach-state", "walk");
-  const popup = page.getByTestId("reach-popup");
+  const popup = page.getByTestId("reach-panel");
   await expect(popup).toBeVisible();
   await expect(popup).toContainText("On foot"); // inside the (large) walk ring → deterministic band
   expect(reachCalls).toHaveLength(0); // walk is fully client-side
@@ -107,16 +120,45 @@ test("public-transport mode: right-click shows the planned trip with a specific 
 
   await rightClickCentre(page);
   await expect(map).toHaveAttribute("data-reach-state", "transit");
-  const popup = page.getByTestId("reach-popup");
-  await expect(popup).toContainText("By public transport");
-  await expect(popup).toContainText("~57 min · 1 transfer");
-  await expect(popup).toContainText("Bus 243 → Bd. Lacul Tei");
-  await expect(popup).toContainText("Walk 9 min");
+  const panel = page.getByTestId("reach-panel");
+  await expect(panel).toContainText("By public transport");
+  await expect(panel).toContainText("~57 min · 1 transfer");
+  await expect(panel).toContainText("Bus 243 → Bd. Lacul Tei");
+  await expect(panel).toContainText("Walk 9 min");
   // The trip was fetched with both endpoints AND the selection's resolved
   // departure ISO (so the plan matches the painted rings' time — P5).
   expect(reachCalls.length).toBeGreaterThan(0);
   expect(reachCalls[0]).toMatch(/fromLat=.*&fromLng=.*&toLat=.*&toLng=/);
   expect(decodeURIComponent(reachCalls[0])).toContain("departure=2026-07-29T05:30");
+});
+
+test("directions DOCK in the result sheet — selection/filters block hidden, no reach popup, Back restores it (task 058, owner item 2)", async ({ page }) => {
+  const { map } = await setup(page);
+  await search(page, map);
+  await page.getByRole("button", { name: "Public transport", exact: true }).click();
+  await expect(map).toHaveAttribute("data-mode", "transit");
+  const sheet = page.getByTestId("result-sheet");
+  // Before the right-click: the selection card + its filters/controls are shown.
+  const selectionBlock = page.getByText("Your selected place");
+  await expect(selectionBlock).toBeVisible();
+  await expect(sheet).toHaveAttribute("aria-label", "Location result");
+
+  await rightClickCentre(page);
+  await expect(map).toHaveAttribute("data-reach-state", "transit");
+  // The directions render IN the result sheet (not a map-anchored popup)…
+  await expect(sheet.getByTestId("reach-panel")).toBeVisible();
+  await expect(sheet).toHaveAttribute("aria-label", "Directions");
+  // …there is NO MapLibre reach popup covering the map…
+  await expect(page.locator(".maplibregl-popup")).toHaveCount(0);
+  // …and the selection card + amenity filters are hidden while directions are
+  // active (owner's ask; the block stays mounted-but-hidden so its state survives).
+  await expect(selectionBlock).not.toBeVisible();
+
+  // Back restores the selection card + filters and clears the directions.
+  await page.getByRole("button", { name: "Back to your area" }).click();
+  await expect(page.getByTestId("reach-panel")).toHaveCount(0);
+  await expect(selectionBlock).toBeVisible();
+  await expect(sheet).toHaveAttribute("aria-label", "Location result");
 });
 
 test("public-transport mode: a point outside the rings is unreachable with NO /api/reach call (T1 gate)", async ({ page }) => {
@@ -141,7 +183,7 @@ test("public-transport mode: a point outside the rings is unreachable with NO /a
 
   await rightClickCentre(page);
   await expect(map).toHaveAttribute("data-reach-state", "none");
-  await expect(page.getByTestId("reach-popup")).toContainText("Beyond your reach");
+  await expect(page.getByTestId("reach-panel")).toContainText("Beyond your reach");
   expect(reachCalls).toHaveLength(0); // outside the painted reach → never hits the planner
 });
 
@@ -163,5 +205,5 @@ test("public-transport mode: no route found is reported", async ({ page }) => {
   await page.getByRole("button", { name: "Public transport", exact: true }).click();
   await rightClickCentre(page);
   await expect(map).toHaveAttribute("data-reach-state", "none");
-  await expect(page.getByTestId("reach-popup")).toContainText("No public-transport route");
+  await expect(page.getByTestId("reach-panel")).toContainText("No public-transport route");
 });

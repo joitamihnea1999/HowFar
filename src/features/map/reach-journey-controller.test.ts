@@ -19,6 +19,7 @@ function fakeMap(opts: { rendered?: unknown[] } = {}) {
     "reach-path-transit",
     "reach-path-walk",
     "reach-path-stops",
+    "reach-path-destination",
   ]);
   return {
     setData: source.setData,
@@ -27,7 +28,9 @@ function fakeMap(opts: { rendered?: unknown[] } = {}) {
       getSource: () => source,
       getLayer: (id: string) => (layers.has(id) ? {} : undefined),
       // Non-empty so the stamp poll stamps on its first tick.
-      querySourceFeatures: () => [{}],
+      // A drawn journey leg feature (carries kind so the journey-only stamp
+      // predicate matches — the destination pin has kind:"destination" instead).
+      querySourceFeatures: () => [{ properties: { kind: "leg", legIndex: 0 } }],
       queryRenderedFeatures: () => opts.rendered ?? [],
       setFilter: vi.fn(),
     },
@@ -92,5 +95,38 @@ describe("reach-journey-controller", () => {
     const { ctrl } = make([{}]);
     ctrl.draw([{ mode: "WALK", fromName: "a", toName: "b", minutes: 1 }]);
     expect(ctrl.hitsActiveJourney({ x: 1, y: 1 } as never)).toBe(false);
+  });
+
+  it("setDestination writes a kind:'destination' pin and stamps data-reach-pin (task 058)", () => {
+    const { ctrl, el, fm } = make();
+    ctrl.setDestination([26.12, 44.44]);
+    expect(el.dataset.reachPin).toBe("true");
+    const fc = fm.setData.mock.calls.at(-1)![0] as GeoJSON.FeatureCollection;
+    const pins = fc.features.filter((f) => (f.properties as { kind?: string })?.kind === "destination");
+    expect(pins).toHaveLength(1);
+    expect(pins[0].geometry).toEqual({ type: "Point", coordinates: [26.12, 44.44] });
+  });
+
+  it("a pin arms the click-guard independently of a journey (walk/car reach has no journey)", () => {
+    const point = { x: 100, y: 100 } as never;
+    const { ctrl } = make([{}]);
+    ctrl.setDestination([26.12, 44.44]); // pin only, no draw
+    expect(ctrl.hitsActiveJourney(point)).toBe(true); // pinActive guards the click
+    ctrl.clear();
+    expect(ctrl.hitsActiveJourney(point)).toBe(false);
+  });
+
+  it("draw + pin coexist in one atomic source write, and clear drops both", () => {
+    const { ctrl, el, fm } = make();
+    ctrl.setDestination([26.12, 44.44]);
+    ctrl.draw(TRANSIT_LEGS);
+    const fc = fm.setData.mock.calls.at(-1)![0] as GeoJSON.FeatureCollection;
+    const kinds = fc.features.map((f) => (f.properties as { kind?: string })?.kind);
+    expect(kinds).toContain("destination");
+    expect(kinds).toContain("leg");
+    expect(kinds).toContain("stop");
+    ctrl.clear();
+    expect(el.dataset.reachPin).toBeUndefined();
+    expect(el.dataset.reachJourney).toBeUndefined();
   });
 });

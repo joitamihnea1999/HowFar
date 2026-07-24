@@ -50,9 +50,52 @@ export function createReachJourneyController({
   // click-guard must be armed the instant features exist, or a click in that
   // one-frame window falls through to a new selection (review).
   let active = false;
+  // The destination pin (task 058): the point the user asked "how do I get
+  // there?" about, drawn for EVERY reach kind (walk/car band answers too, which
+  // have no journey). This controller atomically owns BOTH the journey features
+  // and the pin in the one `reach-path` source (panel gpt5.5-3/luna-3/terra-3 —
+  // no split writer can clobber the other). `pinActive` is INDEPENDENT of
+  // `active`: a walk/car pin must guard its own clicks WITHOUT enabling journey
+  // framing/reframe.
+  let destination: [number, number] | null = null;
+  let pinActive = false;
+  // Cache of the last drawn journey line+stop features, so writing the pin can
+  // re-emit them without recomputing (and vice-versa) — one atomic setData.
+  let journeyFeatures: GeoJSON.Feature[] = [];
+  // A destination set before the style loaded, replayed by flushPending. Note
+  // `undefined` = nothing pending; `null` = a pending clear.
+  let pendingDestination: [number, number] | null | undefined = undefined;
 
   function reachSource(): maplibregl.GeoJSONSource | undefined {
     return map.getSource("reach-path") as maplibregl.GeoJSONSource | undefined;
+  }
+
+  function destinationFeature(coords: [number, number]): GeoJSON.Feature {
+    return { type: "Feature", properties: { kind: "destination" }, geometry: { type: "Point", coordinates: coords } };
+  }
+
+  /** Write the union of the cached journey features + the destination pin as ONE
+   * setData, so neither writer clobbers the other (atomic source ownership). */
+  function writeReachSource() {
+    if (!loadState.styleLoaded) return;
+    const features = [...journeyFeatures];
+    if (destination) features.push(destinationFeature(destination));
+    reachSource()?.setData({ type: "FeatureCollection", features });
+  }
+
+  /** Drop (or clear) the destination pin. Independent of the journey — a walk/
+   * car reach sets a pin with no journey; a transit reach sets both. */
+  function setDestination(coords: [number, number] | null) {
+    destination = coords;
+    pinActive = coords !== null;
+    if (!loadState.styleLoaded) {
+      pendingDestination = coords;
+      return;
+    }
+    pendingDestination = undefined;
+    writeReachSource();
+    if (coords) el.dataset.reachPin = "true";
+    else delete el.dataset.reachPin;
   }
 
   function coincident(a: [number, number], lat: number, lng: number): boolean {
@@ -62,8 +105,12 @@ export function createReachJourneyController({
   function clear() {
     gen += 1;
     active = false;
+    pinActive = false;
     activeBounds = null;
     stopIdsByLeg = {};
+    journeyFeatures = [];
+    destination = null;
+    pendingDestination = undefined;
     loadState.pendingJourney = null;
     if (loadState.styleLoaded) {
       reachSource()?.setData(EMPTY_FC as GeoJSON.FeatureCollection);
@@ -72,6 +119,7 @@ export function createReachJourneyController({
     delete el.dataset.reachJourney;
     delete el.dataset.reachHover;
     delete el.dataset.reachFramed;
+    delete el.dataset.reachPin;
   }
 
   function resetHighlightFilters() {
@@ -98,10 +146,12 @@ export function createReachJourneyController({
     }
     const drawGen = ++gen;
 
-    // No drawable geometry at all: stamp "none" and draw nothing, rather than
-    // leaving the stamp poll to time out invisibly (plan-panel F).
+    // No drawable geometry at all: stamp "none" and draw no journey, but KEEP
+    // any destination pin (writeReachSource re-emits it) rather than blanking the
+    // source — plan-panel F + task-058 pin lifecycle.
     if (!hasGeometry) {
-      reachSource()?.setData(EMPTY_FC as GeoJSON.FeatureCollection);
+      journeyFeatures = [];
+      writeReachSource();
       resetHighlightFilters();
       stopIdsByLeg = {};
       el.dataset.reachJourney = "none";
@@ -152,15 +202,26 @@ export function createReachJourneyController({
         ]
       : null;
 
+    journeyFeatures = [...lineFeatures, ...stopFeatures];
     resetHighlightFilters();
-    reachSource()?.setData({ type: "FeatureCollection", features: [...lineFeatures, ...stopFeatures] });
+    writeReachSource(); // journey + any destination pin, atomically
     delete el.dataset.reachHover;
     delete el.dataset.reachFramed;
 
     // Stamp once the source actually holds queryable features (e2e contract:
     // "the journey is on the map"). Self-terminates if a clear/replace bumped gen.
     runRoutePathStampPoll({
-      hasFeatures: () => map.querySourceFeatures("reach-path").length > 0,
+      // Journey-only predicate (panel gpt5.5-2): the reach-path source also holds
+      // the destination pin (written by setDestination, possibly before the legs
+      // land), so a bare `.length > 0` could stamp "rendered" off the pin alone.
+      // Require an actual leg/stop feature so the stamp means the TRIP is drawn.
+      hasFeatures: () =>
+        map
+          .querySourceFeatures("reach-path")
+          .some((f) => {
+            const kind = (f.properties as { kind?: string } | null)?.kind;
+            return kind === "leg" || kind === "stop";
+          }),
       now: () => performance.now(),
       schedule: (tick) => requestAnimationFrame(tick),
       cancelled: () => drawGen !== gen,
@@ -190,15 +251,19 @@ export function createReachJourneyController({
    * the map click handler can skip starting a NEW selection — the same guard the
    * OSM route path uses (plan-panel C). */
   function hitsActiveJourney(point: maplibregl.Point): boolean {
-    // `active` (set synchronously in draw) — NOT the e2e stamp, which lags one
-    // frame — so the guard is armed the instant features are on the map.
-    if (!active) return false;
+    // `active`/`pinActive` (set synchronously) — NOT the e2e stamp, which lags
+    // one frame — so the guard is armed the instant features are on the map. A
+    // walk/car reach has only a pin (pinActive, active=false): a click ON the
+    // pin must still be swallowed (no reselect), so guard on either.
+    if (!active && !pinActive) return false;
     const pad = MARKER_PICK_PAD_PX;
     const bbox: [maplibregl.PointLike, maplibregl.PointLike] = [
       [point.x - pad, point.y - pad],
       [point.x + pad, point.y + pad],
     ];
-    const layers = ["reach-path-transit", "reach-path-walk", "reach-path-stops"].filter((id) => map.getLayer(id));
+    const layers = ["reach-path-transit", "reach-path-walk", "reach-path-stops", "reach-path-destination"].filter(
+      (id) => map.getLayer(id),
+    );
     return map.queryRenderedFeatures(bbox, { layers }).length > 0;
   }
 
@@ -239,8 +304,15 @@ export function createReachJourneyController({
     map.easeTo({ ...camera, duration: 700, essential: false });
   }
 
-  /** Replay a buffered pre-load draw (called from AppMap's `load`). */
+  /** Replay a buffered pre-load draw + destination pin (called from AppMap's
+   * `load`). The pin is applied first so a subsequent journey draw's atomic
+   * write includes it. */
   function flushPending() {
+    if (pendingDestination !== undefined) {
+      const d = pendingDestination;
+      pendingDestination = undefined;
+      setDestination(d);
+    }
     const pending = loadState.pendingJourney;
     if (pending) {
       loadState.pendingJourney = null;
@@ -251,6 +323,7 @@ export function createReachJourneyController({
   return {
     draw,
     clear,
+    setDestination,
     highlight,
     frame,
     hitsActiveJourney,

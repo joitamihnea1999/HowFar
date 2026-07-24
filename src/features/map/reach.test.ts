@@ -223,4 +223,14 @@ describe("reachSummary + walkReachText", () => {
     expect(carReachText(20).detail).toMatch(/traffic/i);
     expect(carReachText(null).title).toBe("Beyond your driving reach");
   });
+
+  it("car copy names the assumed traffic slot when carMeta is present (task 058 honesty)", () => {
+    const withMeta = carReachText(20, { basis: "estimate", slotId: "am-peak", slotLabel: "weekday morning rush" });
+    expect(withMeta.detail).toContain("weekday morning rush");
+    expect(withMeta.detail).toMatch(/not live traffic/i);
+    // Null band ignores meta and stays the "beyond" message.
+    expect(carReachText(null, { basis: "estimate", slotId: "am-peak", slotLabel: "weekday morning rush" }).title).toBe(
+      "Beyond your driving reach",
+    );
+  });
 });

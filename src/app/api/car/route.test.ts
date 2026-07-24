@@ -12,6 +12,7 @@ const call = (qs: string) => GET(new Request(`http://localhost/api/car${qs}`));
 // Braces matter: a value returned from beforeEach runs as TEARDOWN.
 beforeEach(() => {
   drivingIsochrone.mockReset();
+  drivingIsochrone.mockResolvedValue({ origin: { lat: 44.4268, lng: 26.1025 }, rings: [] });
 });
 
 describe("GET /api/car", () => {
@@ -24,19 +25,39 @@ describe("GET /api/car", () => {
     expect(drivingIsochrone).not.toHaveBeenCalled();
   });
 
-  it("200 + isochrone on success", async () => {
+  it("400 on a malformed departure time (never a silent fallback)", async () => {
+    expect((await call("?lat=44.4268&lng=26.1025&weekday=9&time=nope")).status).toBe(400);
+    expect(drivingIsochrone).not.toHaveBeenCalled();
+  });
+
+  it("200 + isochrone on success, with a car meta block", async () => {
     const result = { origin: { lat: 44.4268, lng: 26.1025 }, rings: [{ minutes: 10, geometry: {} }] };
     drivingIsochrone.mockResolvedValue(result);
     const res = await call("?lat=44.4268&lng=26.1025");
     expect(res.status).toBe(200);
-    expect((await res.json()).rings).toHaveLength(1);
+    const body = await res.json();
+    expect(body.rings).toHaveLength(1);
+    // Default (no params) resolves weekday-morning → am-peak, basis estimate.
+    expect(body.car).toEqual({ basis: "estimate", slotId: "am-peak", slotLabel: "weekday morning rush", factor: 2.1 });
   });
 
-  it("ignores pace/preset/time params — car is a fixed profile (called with lat/lng only)", async () => {
-    drivingIsochrone.mockResolvedValue({ origin: { lat: 44.4268, lng: 26.1025 }, rings: [] });
-    await call("?lat=44.4268&lng=26.1025&pace=brisk&preset=weekday-morning&time=08:30");
-    // The route never forwards pace/time: drivingIsochrone takes only (lat,lng).
-    expect(drivingIsochrone).toHaveBeenCalledExactlyOnceWith(44.4268, 26.1025);
+  it("resolves the traffic slot from a preset and passes it to the isochrone", async () => {
+    await call("?lat=44.4268&lng=26.1025&preset=weekend");
+    expect(drivingIsochrone).toHaveBeenCalledTimes(1);
+    const slot = drivingIsochrone.mock.calls[0][2];
+    expect(slot.slotId).toBe("weekend-day");
+    expect(drivingIsochrone.mock.calls[0].slice(0, 2)).toEqual([44.4268, 26.1025]);
+  });
+
+  it("resolves the traffic slot from a custom weekday+time", async () => {
+    await call("?lat=44.4268&lng=26.1025&weekday=2&time=18:00");
+    expect(drivingIsochrone.mock.calls[0][2].slotId).toBe("pm-peak");
+  });
+
+  it("ignores a leftover pace param — car has no pace", async () => {
+    const res = await call("?lat=44.4268&lng=26.1025&pace=brisk");
+    expect(res.status).toBe(200);
+    expect(drivingIsochrone.mock.calls[0][2].slotId).toBe("am-peak");
   });
 
   it("502 + a logged cause when the provider fails", async () => {

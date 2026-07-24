@@ -118,6 +118,33 @@ describe("select() — effective pace (task 052: pace is walk-only)", () => {
     expect(walkUrl).toContain("pace=brisk");
     expect(h.maybeFetchAmenities.mock.calls[0][1]).toBe("brisk");
   });
+
+  it("a CAR select threads the /api/car `car` block (basis + slot) into resolved state (task 058, panel grok-4)", async () => {
+    const h = makeHarness("car");
+    fetchImpl = (url) => {
+      fetchedUrls.push(url);
+      return res(200, {
+        origin: { lat: 44.4, lng: 26.1 },
+        rings: [],
+        car: { basis: "estimate", slotId: "am-peak", slotLabel: "weekday morning rush" },
+      });
+    };
+    await h.controller.select({ kind: "point", lat: 44.4, lng: 26.1, label: "X" });
+    expect(fetchedUrls.some((u) => u.startsWith("/api/car"))).toBe(true);
+    // The car block is threaded (carInfo → resolved.car) so the right-click copy
+    // + SelectionCard note can name the traffic slot.
+    expect(h.selRef.current.car).toEqual({ basis: "estimate", slotId: "am-peak", slotLabel: "weekday morning rush" });
+  });
+
+  it("carInfo is mode-gated: a WALK select ignores any stray car block (task 058)", async () => {
+    const h = makeHarness("walk");
+    fetchImpl = (url) => {
+      fetchedUrls.push(url);
+      return res(200, { origin: { lat: 44.4, lng: 26.1 }, rings: [], car: { basis: "estimate", slotId: "am-peak", slotLabel: "x" } });
+    };
+    await h.controller.select({ kind: "point", lat: 44.4, lng: 26.1, label: "X" });
+    expect(h.selRef.current.car).toBeNull();
+  });
 });
 
 describe("select() — invariants", () => {

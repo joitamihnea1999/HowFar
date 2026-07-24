@@ -19,7 +19,7 @@ import type { Pace } from "@/features/isochrones/pace";
 
 const ORIGIN = { lat: 44.4268, lng: 26.1025 };
 
-function start(mode: "walk" | "transit" = "walk", from: SelectionState = initialSelectionState) {
+function start(mode: "walk" | "transit" | "car" = "walk", from: SelectionState = initialSelectionState) {
   return selectionReducer(from, { type: "start", mode });
 }
 
@@ -129,6 +129,21 @@ describe("selectionReducer — mode snapshot & toggle", () => {
     expect(ok.status).toBe("idle");
     expect(ok.message).toBeNull();
     expect(ok.label).toBe("B");
+  });
+
+  it("resolved accepts, clears, and stale-ignores the car meta (task 058)", () => {
+    const car = { basis: "estimate" as const, slotId: "am-peak", slotLabel: "weekday morning rush" };
+    // Accept: a car resolution carries the basis + slot.
+    const withCar = selectionReducer(start("car"), { type: "resolved", token: 1, origin: ORIGIN, label: "A", car });
+    expect(withCar.car).toEqual(car);
+    // Clear: a later walk/transit resolution (no car field) resets it to null.
+    const toWalk = selectionReducer(withCar, { type: "start", mode: "walk" }); // token 2
+    const walkResolved = selectionReducer(toWalk, { type: "resolved", token: 2, origin: ORIGIN, label: "A" });
+    expect(walkResolved.car).toBeNull();
+    // Stale: a superseded resolution never overwrites the current car meta.
+    const carAgain = selectionReducer(start("car"), { type: "resolved", token: 1, origin: ORIGIN, label: "A", car }); // token…
+    const bumped = selectionReducer(carAgain, { type: "start", mode: "car" }); // token+1
+    expect(selectionReducer(bumped, { type: "resolved", token: 1, origin: ORIGIN, label: "stale", car: null })).toBe(bumped);
   });
 
   it("double-toggle mid-recompute keeps the origin recoverable (B1 fix)", () => {
@@ -358,11 +373,16 @@ describe("isochroneUrl (task 051 query contract)", () => {
       "/api/transit?lat=44.4268&lng=26.1025&pace=relaxed&weekday=6&time=09%3A00",
     );
   });
-  it("car carries lat/lng ONLY — no pace/preset/weekday/time can leak (task 053, plan C-E)", () => {
-    // Even with a Brisk pace + a custom time left over from another mode, the
-    // car URL must not emit them (car is a fixed profile; /api/car ignores them).
-    const url = isochroneUrl("car", ORIGIN, "brisk", { kind: "custom", weekday: 6, hour: 9, minute: 0 });
-    expect(url).toBe("/api/car?lat=44.4268&lng=26.1025");
-    expect(url).not.toMatch(/pace|preset|weekday|time/);
+  it("car carries TIME but NEVER pace (task 058: time-aware for traffic, pace stays a walk concept)", () => {
+    // Even with a Brisk pace left over from Walk, the car URL must not emit pace
+    // (a walk concept /api/car doesn't accept) — but it now DOES carry the time
+    // context so the traffic slot can be resolved (task 058).
+    const preset = isochroneUrl("car", ORIGIN, "brisk", { kind: "preset", preset: "evening" });
+    expect(preset).toBe("/api/car?lat=44.4268&lng=26.1025&preset=evening");
+    expect(preset).not.toMatch(/pace/);
+
+    const custom = isochroneUrl("car", ORIGIN, "brisk", { kind: "custom", weekday: 6, hour: 9, minute: 0 });
+    expect(custom).toBe("/api/car?lat=44.4268&lng=26.1025&weekday=6&time=09%3A00");
+    expect(custom).not.toMatch(/pace/);
   });
 });

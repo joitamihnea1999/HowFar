@@ -46,14 +46,16 @@ entries. Go/no-go bar: ≥100 fresh addresses/day headroom on every provider. **
   (even the historical 500/day floor is 5× our bar). Walk + car share this one daily budget; a
   car selection is one extra POST (same key, same rate limiter) — still ≫ the ≥100 addresses/day bar.
 - Free API key required — server-side only. One request covers all three intervals via `range`.
-- **Walk** (`foot-walking`): 15/30/45-min bands, calibrated (below). **Car** (`driving-car`, task
-  053): **10/20/30-min** bands, **free-flow** (no live traffic on the free tier — so the UI labels
-  car reach an estimate: SelectionCard note + right-click popup caveat). The 10/20/30 bands were
-  chosen because a 45-min drive from central Bucharest is ~3.5× the tiled map extent; 10/20/30 fits
-  the map (a 3-origin probe put 10 & 20-min rings fully in-map, 30-min 80–98% in-map). **Audited
-  2026-07-24 (below): the ranges are already accurate — boundaries match real free-flow driving
-  within ±5%, so no calibration factor is applied** (traffic remains the only caveat, and it is a
-  data limitation, not a calibration).
+- **Walk** (`foot-walking`): 15/30/45-min bands, calibrated (below). **Car** (`driving-car`, tasks
+  053/058): **10/20/30-min** bands. The 10/20/30 bands were chosen because a 45-min drive from
+  central Bucharest is ~3.5× the tiled map extent; 10/20/30 fits the map (a 3-origin probe put 10 &
+  20-min rings fully in-map, 30-min 80–98% in-map). **Task 058 makes car reach TIME-AWARE**: the
+  nominal free-flow ORS seconds are DIVIDED by a per-time-of-day congestion factor before the
+  request, so the painted band reflects real Bucharest drive time (see "Car traffic realism" below).
+  The 2026-07-24 re-audit that found the ranges "already accurate → no calibration factor" was
+  **FREE-FLOW-ONLY** (its rulers — public OSRM + ORS-Matrix — are themselves free-flow); it is
+  accurate for free-flow but silent on congestion, and is **superseded for car** by the traffic-
+  factor work. The UI still labels car reach an estimate (typical congestion, not live traffic).
 
 ### Transit isochrones — Transitous (MOTIS) ✅ PICKED — **verified live**
 - API: `https://api.transitous.org/api/v6/one-to-all?one=<lat>,<lon>&maxTravelTime=<min>`
@@ -134,8 +136,11 @@ is circular), 3 diverse origins × 3 bands, medians of ~5–10 boundary points p
 - **Car (`driving-car`):** ruler = public **OSRM `driving`** (separate engine) + an ORS-Matrix
   self-consistency check. Boundary drive-durations landed at ORS-route 0.999–1.091× and OSRM
   0.921–1.035× the labels — the two rulers **straddle 1.0** with no directional bias, i.e. within
-  ±5% (free-flow measurement noise). **Already accurate → no calibration factor applied** (a ~1.0
-  factor would be false precision).
+  ±5% (free-flow measurement noise). **⚠️ SUPERSEDED for car by task 058:** these rulers are
+  **free-flow-only** (OSRM demo + ORS-Matrix don't model live/historical congestion), so "already
+  accurate → no factor" is true ONLY for free-flow. Real Bucharest driving is 1.5–2.2× slower at
+  peak; car reach is now time-aware (per-slot congestion factor — see "Car traffic realism"). The
+  free-flow accuracy result stands as the FLOOR the factor scales.
 - **Walk (`foot-walking`):** ruler = **MOTIS `/plan` direct-walk distance** (a real pedestrian
   engine, independent of ORS), converted at 80 m/min. All 9 (origin×band) ratios 0.978–1.049,
   **median 0.999** — the calibrated `[827,1674,2528]` boundaries sit almost exactly at their
@@ -150,10 +155,74 @@ is circular), 3 diverse origins × 3 bands, medians of ~5–10 boundary points p
   measurement is semi-circular (MOTIS journeys vs a MOTIS-built isochrone), so it is a consistency
   check, not a fully independent one. **No change** (widening the rings would risk over-claiming).
 
-**Verdict: no calibration change to any mode.** Walk/car are accurate within ±5%; transit is mildly
-conservative (safe). The car ranges, shipped as a nominal free-flow estimate, are now independently
-verified accurate — the only remaining caveat is live traffic, a free-tier data limitation the UI
-already discloses.
+**Verdict (2026-07-24 free-flow re-audit): no FREE-FLOW calibration change to any mode.** Walk is
+accurate within ±5%; transit is mildly conservative (safe); car free-flow is accurate within ±5%.
+**Car realism update (task 058):** free-flow accuracy is not enough for a "how far can I really
+get" promise in a congested city — car reach now scales the free-flow ranges by a per-time-of-day
+congestion factor (next section). Walk + transit ring geometry are unchanged (both re-audited
+accurate/safe; transit peak honesty is a copy matter, handled in the UI).
+
+### Car traffic realism (task 058) — calibrated congestion factor over ORS free-flow ✅ PICKED
+
+Bucharest is one of Europe's most congested cities (public **TomTom Traffic Index 2025**: 62.5%
+congestion, 18.5 km/h average, ~4.6 km per 15 min), so ORS **free-flow** driving times over-claim
+reach by roughly 1.5–2.2× at peak. Car reach is therefore made **time-aware**: the nominal free-flow
+ranges `[600,1200,1800]s` are **divided by a per-time-of-day congestion factor** so a "20-min" band
+paints the area actually reachable in 20 real minutes. Implementation: pure `features/isochrones/
+car-traffic.ts` (`carTrafficSlot` → `{slotId,label,factor}`; `scaledCarRangesS`), consumed by
+`ors.ts` `drivingIsochrone(lat,lng,slot)` and the `/api/car` route (which parses the same
+`preset`/`weekday`+`time` time-context as transit). The response carries `car:{basis:"estimate",…}`;
+the UI labels it typical-congestion, **not live traffic**.
+
+**Provider decision matrix (why a calibrated factor, not a live-traffic API):**
+- **TomTom Routing / `calculateReachableRange`** (free 2,500/mo, no card, traffic-aware) — **NOT
+  USABLE in production.** Its binding **Portal (Docs) Terms & Conditions §2.2 license the free tier
+  for "Evaluation Use only"** ("internal evaluation and testing by you of the Licensed Products"); a
+  public live app is not that. Production needs §2.1 (paid License Fees + a Subscription Plan
+  accepted by TomTom + a "Permitted Solution", *defined* as requiring Asset Management Functionality
+  — HowFar isn't). Also **§11.4** bars caching Results server-side "for the purpose of scaling
+  results to serve multiple clients or users"; **§11.6.1** bars building a "secondary or derived
+  database/product" from the Results (a baked factor table from `calculateRoute` would be exactly
+  that); **§20.2.3** bars combining Licensed content with copyleft/open data — our basemap + amenity
+  data are **ODbL** (a Copyleft License per the T&C's own definition). Verified 2026-07-24 against
+  the T&C the owner supplied. Technically it works well (a dev-time Evaluation-Use probe showed peak
+  reach = 0.275× night area, 100%-nesting polygons), but it cannot ship.
+- **Mapbox Isochrone** (`driving-traffic`+`depart_at`) — **DISQUALIFIED**: results "must be displayed
+  on a Mapbox map"; HowFar renders MapLibre + self-hosted Protomaps (also card-on-file required).
+- **HERE Isoline v8** — traffic-aware, but the no-card plan ended 2025-08-31; Base plan requires a
+  card on file (standing billing risk for a boss-only owner). Parked as a documented alternative.
+- **Chosen:** ORS free-flow (already used, no new provider) **÷ a congestion factor grounded in the
+  PUBLIC TomTom Traffic Index** (published editorial statistics — freely citable, NOT API Results) +
+  peak/off-peak traffic literature. Deliberately conservative (under- rather than over-claims).
+
+**Factor table (revision `c1`, embedded in the cache key as `{frev}`):**
+
+| Period (weekday) | Hours | Factor | | Weekend | Factor |
+|---|---|---|---|---|---|
+| overnight | 23–06 | ×1.05 | | daytime 10–20 | ×1.30 |
+| early morning (shoulder) | 06–07 | ×1.40 | | off-peak (else) | ×1.10 |
+| **AM peak** | 07–10 | **×2.10** | | | |
+| midday | 10–16 | ×1.50 | | | |
+| **PM peak** | 16–20 | **×2.20** | | | |
+| evening | 20–23 | ×1.25 | | | |
+
+Presets map through `departureFields`: weekday-morning→AM peak, midday→midday, evening→PM peak,
+weekend→weekend daytime; custom weekday+hour buckets through the same table. Factors clamp to
+[1.0, 4.0]; scaled ranges are guaranteed strictly ascending/distinct/≥60s.
+
+**Provenance + re-run methodology:** the shipped factors are grounded in the **public TomTom Traffic
+Index** (citable published statistics) plus peak/off-peak congestion literature, and are set
+deliberately conservative (≥ typical measured congestion, so reach under- rather than over-claims). A
+developer MAY sanity-check them against a private, dev-time Routing campaign under TomTom's
+Evaluation-Use licence (internal testing only) — but **no TomTom-derived figures are published or
+shipped** (this doc keeps only public-source provenance, per the licence analysis above). **If you
+change the factors, you MUST bump `CAR_FACTOR_REVISION` in `car-traffic.ts`** — it is part of the
+7-day car isochrone cache key (`iso:car:v2:{frev}:est:{slotId}:{coords}`), so without the bump,
+prior-geometry rings silently survive the new factors (a unit test asserts a frev change can't hit
+prior keys).
+
+**Env:** `TOM_TOM_API_KEY` / `CAR_TRAFFIC_LAYER2` are **not used** by the app (TomTom is out per the
+T&C above); a live TomTom layer would require an owner decision on a paid Permitted-Solution license.
 
 ### Amenities / POIs — weekly OSM catalogue in PostGIS ✅ PICKED
 - Commons/fair use (<https://dev.overpass-api.de/overpass-doc/en/preface/commons.html>, wiki):

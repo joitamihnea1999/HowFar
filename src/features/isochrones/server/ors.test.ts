@@ -21,6 +21,8 @@ vi.mock("@/lib/provider-http", async (importOriginal) => ({
 
 vi.mock("@/lib/env", () => ({ serverEnv }));
 
+import { carTrafficSlot, scaledCarRangesS } from "@/features/isochrones/car-traffic";
+
 import { drivingIsochrone, walkingIsochrone } from "./ors";
 
 const poly = (value: number) => ({
@@ -160,41 +162,57 @@ describe("walkingIsochrone", () => {
   });
 });
 
-describe("drivingIsochrone (car, task 053)", () => {
-  // Car uses the driving-car profile, NOMINAL 600/1200/1800 s ranges, and
-  // relabels to 10/20/30 min — the shared normalize/rate-limit/cache machinery
-  // otherwise matches walk. These assertions pin the driving request CONTRACT
-  // (profile URL, no Accept header, car ranges, iso:car cache key) so a future
-  // refactor can't silently request foot polygons as car or 406 in prod.
-  it("requests the driving-car profile with the car ranges, [lng,lat] order, and NO Accept header", async () => {
-    providerFetch.mockResolvedValue(orsResponse([poly(600), poly(1200), poly(1800)]));
-    await drivingIsochrone(44.4268, 26.1025);
+describe("drivingIsochrone (car, tasks 053/058)", () => {
+  // Car uses the driving-car profile and relabels to 10/20/30 min. Task 058
+  // makes it TIME-AWARE: the nominal 600/1200/1800 s free-flow ranges are
+  // DIVIDED by the traffic slot's congestion factor, so the request carries the
+  // SCALED ranges. midday (×1.5) → [400,800,1200]; am-peak (×2.1) → smaller.
+  // These assertions pin the driving request CONTRACT (profile URL, no Accept
+  // header, scaled ranges, iso:car:v2:{frev}:est:{slotId} cache key).
+  const midday = carTrafficSlot(3, 12); // factor 1.5
+  const amPeak = carTrafficSlot(3, 8); // factor 2.1
+  const MIDDAY_RANGES = scaledCarRangesS([600, 1200, 1800], 1.5); // [400,800,1200]
+
+  it("requests the driving-car profile with the SCALED (traffic-adjusted) ranges, [lng,lat] order, and NO Accept header", async () => {
+    providerFetch.mockResolvedValue(orsResponse(MIDDAY_RANGES.map(poly)));
+    await drivingIsochrone(44.4268, 26.1025, midday);
     const [url, opts] = providerFetch.mock.calls[0] as [string, { init: { body: string; headers: Record<string, string> } }];
     expect(url).toBe("https://api.openrouteservice.org/v2/isochrones/driving-car");
     const parsed = JSON.parse(opts.init.body);
     expect(parsed.locations[0]).toEqual([26.1025, 44.4268]);
-    expect(parsed.range).toEqual([600, 1200, 1800]);
-    // ORS isochrones serves geo+json; an Accept: application/json → 406.
+    expect(parsed.range).toEqual([400, 800, 1200]);
     expect(Object.keys(opts.init.headers)).not.toContain("Accept");
   });
 
+  it("heavier traffic requests strictly smaller ranges (am-peak < midday)", async () => {
+    providerFetch.mockResolvedValue(orsResponse(scaledCarRangesS([600, 1200, 1800], 2.1).map(poly)));
+    await drivingIsochrone(44.4268, 26.1025, amPeak);
+    const parsed = JSON.parse((providerFetch.mock.calls[0] as [string, { init: { body: string } }])[1].init.body);
+    parsed.range.forEach((v: number, i: number) => expect(v).toBeLessThan(MIDDAY_RANGES[i]!));
+  });
+
   it("relabels the driving rings to 10/20/30 min, ascending regardless of input order", async () => {
-    providerFetch.mockResolvedValue(orsResponse([poly(1800), poly(600), poly(1200)]));
-    const result = await drivingIsochrone(44.4268, 26.1025);
+    providerFetch.mockResolvedValue(orsResponse([poly(1200), poly(400), poly(800)]));
+    const result = await drivingIsochrone(44.4268, 26.1025, midday);
     expect(result.rings.map((r) => r.minutes)).toEqual([10, 20, 30]);
     expect(result.origin).toEqual({ lat: 44.4268, lng: 26.1025 });
   });
 
-  it("caches under an isolated iso:car:v1 key (never collides with the walk iso:foot key)", async () => {
-    providerFetch.mockResolvedValue(orsResponse([poly(600), poly(1200), poly(1800)]));
-    await drivingIsochrone(44.4, 26.1);
-    await drivingIsochrone(44.4, 26.1);
+  it("caches under an isolated iso:car:v2:{frev}:est:{slotId} key (never collides with walk, or across slots)", async () => {
+    providerFetch.mockResolvedValue(orsResponse(MIDDAY_RANGES.map(poly)));
+    await drivingIsochrone(44.4, 26.1, midday);
+    await drivingIsochrone(44.4, 26.1, midday);
     expect(providerFetch).toHaveBeenCalledTimes(1); // second served from cache
-    expect([...store.keys()]).toEqual(["iso:car:v1:44.40000,26.10000"]);
+    expect([...store.keys()]).toEqual(["iso:car:v2:c1:est:midday:44.40000,26.10000"]);
+    // A different slot must NOT hit the midday cache entry (frev/slot in key).
+    providerFetch.mockResolvedValue(orsResponse(scaledCarRangesS([600, 1200, 1800], 2.1).map(poly)));
+    await drivingIsochrone(44.4, 26.1, amPeak);
+    expect(providerFetch).toHaveBeenCalledTimes(2);
+    expect([...store.keys()]).toContain("iso:car:v2:c1:est:am-peak:44.40000,26.10000");
   });
 
-  it("rejects a driving response echoing the wrong (e.g. walk) ranges — the bijection is load-bearing", async () => {
-    providerFetch.mockResolvedValue(orsResponse([poly(827), poly(1674), poly(2528)]));
-    await expect(drivingIsochrone(44.4, 26.1)).rejects.toThrow(/requested ranges/i);
+  it("rejects a driving response echoing the wrong (e.g. free-flow) ranges — the bijection is load-bearing", async () => {
+    providerFetch.mockResolvedValue(orsResponse([poly(600), poly(1200), poly(1800)]));
+    await expect(drivingIsochrone(44.4, 26.1, midday)).rejects.toThrow(/requested ranges/i);
   });
 });

@@ -332,12 +332,13 @@ test("mobile: long-press transit directions show a compact card and draw the jou
     await expect(map).toHaveAttribute("data-reach-state", "transit", { timeout: 2000 });
   }).toPass({ timeout: 20_000 });
 
-  // Compact card: not a full-screen slab (Pixel 7 is 412px wide).
-  const popup = await page.locator(".hf-reach-popup").boundingBox();
-  expect(popup).not.toBeNull();
-  expect(popup!.width).toBeLessThanOrEqual(280);
+  // Docked directions (task 058): the panel lives in the result-sheet bottom
+  // sheet, capped at min(30dvh,14.5rem) — never a full-screen slab (Pixel 7 is
+  // 412px wide). The sheet scrolls; the panel is inside it.
+  const panel = await page.getByTestId("reach-panel").boundingBox();
+  expect(panel).not.toBeNull();
   const vh = await page.evaluate(() => window.innerHeight);
-  expect(popup!.height).toBeLessThanOrEqual(vh * 0.7);
+  expect(panel!.height).toBeLessThanOrEqual(vh * 0.7);
   // The journey drew AND the camera actually framed it on a phone-sized viewport
   // (guards the double-counted-padding Critical: the fit must not silently fail).
   await expect(map).toHaveAttribute("data-reach-journey", "2", { timeout: 5000 });

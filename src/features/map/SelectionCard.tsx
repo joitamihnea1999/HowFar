@@ -6,7 +6,7 @@ import {
   visibleLegendBands,
   type RingFilter,
 } from "@/features/isochrones/isochrone-view";
-import type { Mode } from "@/features/map/selection-flow";
+import type { CarMeta, Mode } from "@/features/map/selection-flow";
 
 /**
  * Selected-address card: the resolved label + per-mode ring legend, or the
@@ -23,9 +23,12 @@ interface SelectionCardProps {
   /** Transit only: the resolved representative departure + summary, so we can
    * honestly qualify the reach (schedule-based, no live traffic — task 051). */
   departure?: { iso: string; summary: string } | null;
+  /** Car only: the resolved reach basis + traffic slot, so the note can name
+   * WHICH traffic the estimate assumed (task 058). */
+  car?: CarMeta | null;
 }
 
-export default function SelectionCard({ label, message, mode, ringFilter, loading, departure }: SelectionCardProps) {
+export default function SelectionCard({ label, message, mode, ringFilter, loading, departure, car }: SelectionCardProps) {
   if (!label && !message && !loading) return null;
   const modeColor = MODE_ACCENT[mode];
   return (
@@ -88,13 +91,15 @@ export default function SelectionCard({ label, message, mode, ringFilter, loadin
           </div>
           {mode === "transit" && departure ? (
             <p data-testid="transit-departure-note" className="mt-2 text-[0.68rem] leading-4 text-[#667269]">
-              Scheduled public transport for <span className="text-[#9ca9a0]">{departure.summary}</span> — an estimate
-              from published timetables; live delays and road traffic aren’t included.
+              Scheduled public transport for <span className="text-[#9ca9a0]">{departure.summary}</span> — from
+              published timetables. Metro isn’t affected by road traffic (often the fastest option at peak); bus and
+              tram times follow the timetable and can run longer in heavy traffic.
             </p>
           ) : null}
           {mode === "car" ? (
             <p data-testid="car-estimate-note" className="mt-2 text-[0.68rem] leading-4 text-[#667269]">
-              Driving times are an estimate from typical road speeds; live traffic isn’t included.
+              Drive-time reach for <span className="text-[#9ca9a0]">{car?.slotLabel ?? "typical"}</span> traffic — an
+              estimate from typical congestion patterns, not live traffic.
             </p>
           ) : null}
         </>

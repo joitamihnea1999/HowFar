@@ -71,14 +71,17 @@ async function reachRenderedCounts(page: Page) {
   // to the viewport — a journey leg can extend off-screen. It returns a feature
   // once per tile it touches, so we dedupe by the unique legIndex/stopIndex.
   return page.evaluate(() => {
-    type F = { geometry: { type: string }; properties: Record<string, number> };
+    type F = { geometry: { type: string }; properties: Record<string, number | string> };
     const m = (window as unknown as { __hfMap?: { querySourceFeatures: (s: string) => F[] } }).__hfMap;
     if (!m) return { lines: -1, stops: -1 };
     const lineIdx = new Set<number>();
     const stopIdx = new Set<number>();
     for (const f of m.querySourceFeatures("reach-path")) {
-      if (f.geometry.type === "LineString") lineIdx.add(f.properties.legIndex);
-      else if (f.geometry.type === "Point") stopIdx.add(f.properties.stopIndex);
+      // The reach-path source also carries the kind:"destination" pin (task 058)
+      // — exclude it; count only journey legs (kind:"leg") + used stops
+      // (kind:"stop"), deduped by their unique index.
+      if (f.geometry.type === "LineString" && f.properties.kind === "leg") lineIdx.add(f.properties.legIndex as number);
+      else if (f.geometry.type === "Point" && f.properties.kind === "stop") stopIdx.add(f.properties.stopIndex as number);
     }
     return { lines: lineIdx.size, stops: stopIdx.size };
   });
@@ -175,7 +178,7 @@ test("transit right-click DRAWS the journey and declutters the amenities", async
   // 3 leg lines drawn (WALK + BUS + WALK), stamped once the source holds features.
   await expect(map).toHaveAttribute("data-reach-journey", "3", { timeout: 5000 });
   await expect(map).toHaveAttribute("data-amenity-declutter", "on");
-  await expect(page.getByTestId("reach-popup")).toContainText("By public transport");
+  await expect(page.getByTestId("reach-panel")).toContainText("By public transport");
 
   // RENDERED-state truth (not the code's own stamps): the map paints 3 leg lines
   // + the 2 used stops (board + alight), and NO amenity marker while the journey
@@ -183,21 +186,20 @@ test("transit right-click DRAWS the journey and declutters the amenities", async
   await expect.poll(() => reachRenderedCounts(page)).toEqual({ lines: 3, stops: 2 });
   await expect.poll(() => renderedAmenityMarkers(page)).toBe(0);
 
-  // task 057 P1: the camera fits the journey (data-reach-framed) and the compact
-  // popup covers only a MINORITY of the drawn path, so the user can see the way.
-  // (Strict zero-overlap isn't guaranteed — the popup is anchored at the clicked
-  // destination, one end of the path — so we bound the covered fraction instead;
-  // the Gate G live screenshot is the visual arbiter.)
+  // task 058: the camera fits the journey (data-reach-framed) and the directions
+  // DOCK (result sheet) covers only a MINORITY of the drawn path, so the user can
+  // see the way beside it. The dock is a fixed side/bottom panel (not a click-
+  // anchored popup), and the frame pads for it, so overlap is bounded low; the
+  // Gate G live screenshot is the visual arbiter for strict clearance.
   await expect(map).toHaveAttribute("data-reach-framed", "true", { timeout: 5000 });
-  const popup = await page.locator(".hf-reach-popup").boundingBox();
+  const panel = await page.getByTestId("reach-panel").boundingBox();
   const jb = await journeyScreenBBox(page);
-  expect(popup).not.toBeNull();
+  expect(panel).not.toBeNull();
   expect(jb).not.toBeNull();
-  expect(popup!.width).toBeLessThanOrEqual(300); // compact card, not a full slab
-  const ix = Math.max(0, Math.min(jb!.maxX, popup!.x + popup!.width) - Math.max(jb!.minX, popup!.x));
-  const iy = Math.max(0, Math.min(jb!.maxY, popup!.y + popup!.height) - Math.max(jb!.minY, popup!.y));
+  const ix = Math.max(0, Math.min(jb!.maxX, panel!.x + panel!.width) - Math.max(jb!.minX, panel!.x));
+  const iy = Math.max(0, Math.min(jb!.maxY, panel!.y + panel!.height) - Math.max(jb!.minY, panel!.y));
   const journeyArea = Math.max(1, (jb!.maxX - jb!.minX) * (jb!.maxY - jb!.minY));
-  expect((ix * iy) / journeyArea).toBeLessThan(0.6); // popup covers < 60% of the path's screen extent
+  expect((ix * iy) / journeyArea).toBeLessThan(0.6); // dock covers < 60% of the path's screen extent
 });
 
 test("supersede: a second right-click draws ONLY the latest plan", async ({ page }) => {
@@ -242,12 +244,12 @@ test("hovering a popup step highlights its leg on the map", async ({ page }) => 
   await rightClickCentre(page);
   await expect(map).toHaveAttribute("data-reach-journey", "3", { timeout: 5000 });
 
-  const steps = page.locator(".hf-reach-popup__step");
+  const steps = page.getByTestId("reach-panel").locator("li[data-step-mode]");
   await expect(steps).toHaveCount(3);
   await steps.nth(1).hover();
   await expect(map).toHaveAttribute("data-reach-hover", "1");
   // Leaving the step clears the highlight.
-  await page.getByTestId("reach-popup").getByText("By public transport").hover();
+  await page.getByTestId("reach-panel").getByText("By public transport").hover();
   await expect(map).not.toHaveAttribute("data-reach-hover", /.*/);
 });
 
@@ -259,7 +261,7 @@ test("closing the popup clears the drawn journey and restores the amenities", as
   await expect(map).toHaveAttribute("data-reach-journey", "3", { timeout: 5000 });
   await expect(map).toHaveAttribute("data-amenity-declutter", "on");
 
-  await page.locator(".maplibregl-popup-close-button").click();
+  await page.getByRole("button", { name: "Back to your area" }).click();
   await expect(map).not.toHaveAttribute("data-reach-journey", /.*/);
   await expect(map).toHaveAttribute("data-amenity-declutter", "off");
   // Rendered truth: reach-path emptied and the amenity markers are back.
@@ -310,7 +312,26 @@ test("a walk-only transit fallback stays text-only (no draw, no declutter)", asy
   await toTransit(page, map);
   await rightClickCentre(page);
 
-  await expect(page.getByTestId("reach-popup")).toContainText("On foot");
+  await expect(page.getByTestId("reach-panel")).toContainText("On foot");
   await expect(map).not.toHaveAttribute("data-reach-journey", /.*/);
   await expect(map).not.toHaveAttribute("data-amenity-declutter", "on");
+});
+
+test("amenity Browse text filter SURVIVES opening + closing directions (task 058, panel grok-3)", async ({ page }) => {
+  const { map } = await setup(page);
+  await search(page, map);
+  await toTransit(page, map);
+  // Open the amenity browser and set a text filter.
+  await page.getByTestId("amenity-browser-trigger").click();
+  const filter = page.getByPlaceholder("Filter places");
+  await filter.fill("Mega");
+  await expect(filter).toHaveValue("Mega");
+  // Open directions — the dock swap hides the AmenityPanel but keeps it MOUNTED
+  // (hidden + inert), so its ephemeral filter state must not be wiped.
+  await rightClickCentre(page);
+  await expect(map).toHaveAttribute("data-reach-state", "transit");
+  await expect(filter).not.toBeVisible(); // hidden while directions active
+  // Back restores the SAME panel with the filter text intact (no remount).
+  await page.getByRole("button", { name: "Back to your area" }).click();
+  await expect(page.getByPlaceholder("Filter places")).toHaveValue("Mega");
 });

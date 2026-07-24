@@ -57,6 +57,11 @@ export default defineConfig({
         // is covered by e2e/pace-time.spec.ts.
         "src/features/map/PaceControl.tsx",
         "src/features/map/TimeContextControl.tsx",
+        // task 058: right-click directions panel — presentation only over the
+        // decided ReachView; its state machine + fetch live in the MEASURED
+        // reach-directions-controller.ts (NOT excluded), and its dock swap /
+        // focus / step-hover / close are covered by e2e (reach + reach-journey).
+        "src/features/map/ReachPanel.tsx",
         // Transaction/advisory-lock and PostGIS SQL orchestration is exercised
         // against the real extension by the required `npm run test:db` suite.
         // Unit-mocking these files would inflate coverage without executing the

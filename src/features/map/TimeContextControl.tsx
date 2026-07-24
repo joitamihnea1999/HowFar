@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import { carTrafficSlotFor } from "@/features/isochrones/car-traffic";
 import {
   quantizeMinute,
   TIME_PRESET_IDS,
@@ -10,17 +11,23 @@ import {
 } from "@/features/isochrones/time-context";
 
 /**
- * Transit departure selector (task 051): 4 one-tap presets + a "Custom…" toggle
- * that reveals an INLINE day + time (30-min slots) editor. No Apply button and
- * no floating popover (impl-panel findings): presets apply on tap; a custom
- * day/time applies the moment either select changes — direct, minimal-click, and
- * it scrolls naturally inside the result sheet (a floating popover would clip in
- * the sheet's overflow box). Rendered only in transit mode by AppMap.
+ * Departure/time selector (tasks 051/058): 4 one-tap presets + a "Custom…"
+ * toggle that reveals an INLINE day + time (30-min slots) editor. No Apply
+ * button and no floating popover (impl-panel findings): presets apply on tap; a
+ * custom day/time applies the moment either select changes — direct, minimal-
+ * click, and it scrolls naturally inside the result sheet (a floating popover
+ * would clip in the sheet's overflow box). Rendered in transit AND car mode
+ * (task 058 — car reach is time-aware for traffic realism); the `mode` prop
+ * only changes the labels/hint (transit = departure service; car = the traffic
+ * the drive estimate assumes). PaceControl stays a SEPARATE walk-only control —
+ * these two are never merged into one non-walk wrapper (plan-panel grok-3).
  */
 
 interface TimeContextControlProps {
   value: TimeContext;
   onSelect: (next: TimeContext) => void;
+  /** Which time-aware mode this instance serves — drives labels + hint only. */
+  mode: "transit" | "car";
 }
 
 // Monday-first ordering for the picker; values are JS `getUTCDay()` numbers.
@@ -41,9 +48,15 @@ const TIME_SLOTS: string[] = Array.from({ length: 48 }, (_, i) => {
   return `${String(h).padStart(2, "0")}:${m}`;
 });
 
-export default function TimeContextControl({ value, onSelect }: TimeContextControlProps) {
+export default function TimeContextControl({ value, onSelect, mode }: TimeContextControlProps) {
   const isCustom = value.kind === "custom";
   const [expanded, setExpanded] = useState(isCustom);
+
+  const heading = mode === "car" ? "When you drive" : "When you travel";
+  const groupLabel = mode === "car" ? "Driving time" : "Public transport departure time";
+  // Car hint names the traffic the estimate assumes; transit keeps the
+  // service-frequency hint. Both are honest about what the time selection means.
+  const hint = mode === "car" ? `Typical ${carTrafficSlotFor(value).label} traffic.` : timeContextHint(value);
 
   // The editor's current day/time: the active custom value, else a sensible
   // default (Saturday 12:00). Selecting a slot commits immediately.
@@ -72,9 +85,9 @@ export default function TimeContextControl({ value, onSelect }: TimeContextContr
   return (
     <div className="min-w-0">
       <span className="mb-1.5 block px-1 text-[0.58rem] font-semibold uppercase tracking-[0.14em] text-[#78857b]">
-        When you travel
+        {heading}
       </span>
-      <div role="group" aria-label="Public transport departure time" className="flex flex-wrap gap-1 rounded-xl border border-white/[.09] bg-[#080b09]/65 p-1">
+      <div role="group" aria-label={groupLabel} className="flex flex-wrap gap-1 rounded-xl border border-white/[.09] bg-[#080b09]/65 p-1">
         {TIME_PRESET_IDS.map((id) => (
           <button
             key={id}
@@ -133,7 +146,7 @@ export default function TimeContextControl({ value, onSelect }: TimeContextContr
       ) : null}
 
       <p aria-live="polite" className="mt-1.5 px-1 text-[0.68rem] leading-4 text-[#78857b]">
-        {timeContextHint(value)}
+        {hint}
       </p>
     </div>
   );

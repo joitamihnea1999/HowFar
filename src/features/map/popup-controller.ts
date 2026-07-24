@@ -10,9 +10,6 @@ import {
 import { normalizeAmenitySelection } from "@/features/amenities/amenity-selection";
 import { mergeStopLines, type StopLine } from "@/features/amenities/stop-lines";
 import { buildStopPopupModel, STOP_POPUP_TEXT, type StopPopupModel } from "@/features/amenities/stop-popup";
-import type { ReachPlan } from "@/features/isochrones/server/transit-plan";
-import { buildReachSteps, carReachText, hasTransitLeg, isWalkOnly, reachSummary, walkReachText, type ReachRequest } from "@/features/map/reach";
-import type { ReachJourneyController } from "@/features/map/reach-journey-controller";
 import type { EdgeInsets } from "@/features/map/route-framing";
 import type { RoutePathController } from "@/features/map/route-path-controller";
 
@@ -20,10 +17,6 @@ import type { RoutePathController } from "@/features/map/route-path-controller";
  * leave the popup on "Finding lines…" for the server's full host budget (task
  * 021 — the "never hang on loading" lesson). */
 const STOP_LINES_TIMEOUT_MS = 9000;
-/** Client deadline on the /api/reach trip plan so a slow MOTIS can't leave the
- * popup on "Planning your trip…" forever (task 052 D). Generous — /plan is
- * ~0.6s server but a cold cache + rate-limit wait can stack. */
-const REACH_TIMEOUT_MS = 12000;
 
 /**
  * The shared popup slot (task 021/024): one MapLibre popup at a time, routing a
@@ -34,34 +27,33 @@ const REACH_TIMEOUT_MS = 12000;
  * A row carrying a relationId becomes a button that asks the route controller to
  * draw the line. `dispose` aborts the in-flight stop-lines fetch and removes the
  * popup. Reads route state only through its exposed getter, never private fields.
+ *
+ * The right-click "how do I get there?" DIRECTIONS moved out of here (task 058)
+ * into `reach-directions-controller` + the result-sheet dock; this controller
+ * keeps only the stop/POI popups. The two are mutually exclusive "active map
+ * surfaces": `closeStopPopup` calls the injected `closeReach` so closing a stop
+ * popup (or any funnel that does) also ends directions (panel opus-1).
  */
 export function createPopupController({
   map,
   el,
   reducedMotion,
   route,
-  journey,
-  reachDeclutter,
   applyCameraPadding,
+  closeReach,
 }: {
   map: maplibregl.Map;
   el: HTMLElement;
   reducedMotion: MediaQueryList;
   route: RoutePathController;
-  /** Draws/clears/highlights the right-click journey (task 054). */
-  journey: ReachJourneyController;
-  /** Toggles amenity declutter while a journey is shown. A holder object so it
-   * can be wired after the amenities controller (created after this one) exists —
-   * breaks the popup↔amenities construction cycle (plan-panel K). */
-  reachDeclutter: { set: (on: boolean) => void };
   applyCameraPadding: (hasResults: boolean) => EdgeInsets;
+  /** Ends the directions view (the other active map surface) — arbiter. */
+  closeReach: () => void;
 }) {
   let currentPopup: maplibregl.Popup | null = null;
   let popupCategory: AmenityCategoryKey | null = null;
   let stopLinesAbort: AbortController | null = null;
   let stopLinesGen = 0;
-  let reachAbort: AbortController | null = null;
-  let reachGen = 0;
 
   // Build the popup DOM from the pure model. A row whose line carries a
   // relationId becomes a BUTTON that draws the line's full path + stops (task
@@ -290,27 +282,17 @@ export function createPopupController({
     focusKeyboardPopup(popup);
   }
 
-  // Clear any drawn right-click journey AND restore amenity markers (task 054).
-  // Idempotent, so it is safe to call from BOTH the universal `closeStopPopup`
-  // chokepoint and the reach popup's own `close` handler — every path that
-  // invalidates the reach (a new popup, a new selection, a mode toggle, dispose,
-  // or the × button) funnels through one of those, so the journey + declutter can
-  // never outlive the popup that owns them (plan-panel J).
-  function teardownReach() {
-    journey.clear();
-    reachDeclutter.set(false);
-  }
-
-  // Tear down the popup AND invalidate its in-flight fetch (bumping the gen so a
-  // late response can't repaint a removed popup). Called on a new stop click and
-  // at the start of any new selection.
+  // Tear down the stop/POI popup AND invalidate its in-flight fetch (bumping the
+  // gen so a late response can't repaint a removed popup). Called on a new stop
+  // click and at the start of any new selection. Also ends any directions view
+  // via the arbiter, so the two active map surfaces never coexist (panel opus-1)
+  // and every selection/mode/dispose funnel that clears the popup also clears the
+  // drawn journey + declutter + destination pin (they live in the directions
+  // controller now, task 058).
   function closeStopPopup() {
     stopLinesAbort?.abort();
     stopLinesGen += 1;
-    reachAbort?.abort();
-    reachGen += 1;
-    delete el.dataset.reachState;
-    teardownReach();
+    closeReach();
     currentPopup?.remove();
     currentPopup = null;
     popupCategory = null;
@@ -391,281 +373,10 @@ export function createPopupController({
       .finally(() => clearTimeout(timer));
   }
 
-  // --- Right-click "how do I get there?" reach popup (task 052 D) ----------
-  // A small heading + detail, plus (for a planned transit trip) an ordered step
-  // list. All text via textContent (OSM stop names / line headsigns are
-  // untrusted). `state` drives an el-level `data-reach-state` stamp for e2e.
-  type ReachStepView = { primary: string; secondary: string; mode: string };
-  type ReachRender =
-    | { state: "hint" | "loading" | "none" | "error" | "outside"; title: string; detail: string }
-    | { state: "walk"; title: string; detail: string }
-    | { state: "car"; title: string; detail: string }
-    | { state: "transit"; title: string; detail: string; steps: ReachStepView[] };
-
-  // A compact glyph per leg mode for the step rail. Walk legs read teal-dashed;
-  // vehicle legs get a mode glyph in the transit violet. Plain unicode keeps the
-  // popup self-contained (no icon font / network) and legible at small size.
-  function stepGlyph(mode: string): string {
-    switch (mode.toUpperCase()) {
-      case "WALK":
-        return "→";
-      case "BUS":
-      case "COACH":
-        return "B";
-      case "TRAM":
-        return "T";
-      case "SUBWAY":
-      case "METRO":
-        return "M";
-      case "RAIL":
-      case "REGIONAL_RAIL":
-        return "R";
-      case "TROLLEYBUS":
-        return "Tb";
-      case "FERRY":
-        return "F";
-      default:
-        return "•";
-    }
-  }
-
-  function renderReachPopup(model: ReachRender): HTMLElement {
-    const root = document.createElement("div");
-    root.className = "hf-stop-popup hf-reach-popup";
-    root.dataset.testid = "reach-popup";
-    root.dataset.state = model.state;
-
-    const title = document.createElement("div");
-    title.className = "hf-stop-popup__title";
-    title.textContent = model.title;
-    root.appendChild(title);
-
-    if (model.detail) {
-      const detail = document.createElement("div");
-      detail.className = "hf-stop-popup__msg";
-      detail.textContent = model.detail;
-      root.appendChild(detail);
-    }
-
-    if (model.state === "transit") {
-      const list = document.createElement("ol");
-      list.className = "hf-reach-popup__steps";
-      model.steps.forEach((step, index) => {
-        const isWalk = step.mode.toUpperCase() === "WALK";
-        const li = document.createElement("li");
-        li.className = "hf-reach-popup__step";
-        li.dataset.stepMode = isWalk ? "walk" : "transit";
-        // Hovering (or focusing) a step highlights its leg + stops on the map,
-        // and clears on leave — the popup↔map tie the owner asked for. The step
-        // index is 1:1 with the journey leg (buildReachSteps maps one per leg).
-        li.tabIndex = 0;
-        const enter = () => journey.highlight(index);
-        const leave = () => journey.highlight(null);
-        li.addEventListener("mouseenter", enter);
-        li.addEventListener("mouseleave", leave);
-        li.addEventListener("focus", enter);
-        li.addEventListener("blur", leave);
-
-        const glyph = document.createElement("span");
-        glyph.className = "hf-reach-popup__glyph";
-        glyph.setAttribute("aria-hidden", "true");
-        glyph.textContent = stepGlyph(step.mode);
-
-        const body = document.createElement("span");
-        body.className = "hf-reach-popup__step-body";
-        const primary = document.createElement("span");
-        primary.className = "hf-reach-popup__step-primary";
-        primary.textContent = step.primary;
-        const secondary = document.createElement("span");
-        secondary.className = "hf-reach-popup__step-secondary";
-        secondary.textContent = step.secondary;
-        body.append(primary, secondary);
-
-        li.append(glyph, body);
-        list.appendChild(li);
-      });
-      root.appendChild(list);
-
-      const attribution = document.createElement("div");
-      attribution.className = "hf-reach-popup__attribution";
-      attribution.textContent = "Routing via transitous.org";
-      root.appendChild(attribution);
-    }
-    return root;
-  }
-
-  function stampReach(state: string) {
-    el.dataset.reachState = state;
-  }
-
-  function showReach(model: ReachRender, coords: [number, number], popup?: maplibregl.Popup) {
-    const content = renderReachPopup(model);
-    stampReach(model.state);
-    if (popup) {
-      popup.setDOMContent(content);
-      return popup;
-    }
-    // Compact (task 057): a narrower card + a capped, scrolling step list (CSS)
-    // so the directions no longer blanket the map; the drawn journey is then
-    // framed into the free space by `journey.frame`.
-    const next = new maplibregl.Popup({ closeButton: true, closeOnClick: false, maxWidth: "252px" })
-      .setLngLat(coords)
-      .setDOMContent(content)
-      .addTo(map);
-    currentPopup = next;
-    next.on("close", () => {
-      // Closing the popup (× / replacement / new selection) must also cancel any
-      // in-flight /api/reach fetch and its deadline, bump the generation so a
-      // late response can't repaint, and clear the e2e stamp (T5 — avoid a stale
-      // data-reach-state after the popup is gone).
-      reachAbort?.abort();
-      reachGen += 1;
-      delete el.dataset.reachState;
-      teardownReach(); // a drawn journey + declutter must not outlive its popup
-      if (currentPopup === next) currentPopup = null;
-    });
-    return next;
-  }
-
-  /**
-   * Open the reach popup for a right-click / long-press. Walk + the no-selection
-   * hint render synchronously (client-side band); a transit request fetches the
-   * planned trip from `/api/reach` under one deadline/abort/generation (mirrors
-   * the stop-lines flow), then paints the steps or a not-reachable message.
-   */
-  function openReachPopup(req: ReachRequest) {
-    closeStopPopup(); // shared slot: replace any open popup + cancel its fetch
-
-    if (req.kind === "hint") {
-      showReach(
-        { state: "hint", title: "How do I get there?", detail: "Pick a starting point first, then right-click anywhere to see the way." },
-        req.coords,
-      );
-      return;
-    }
-    if (req.kind === "walk") {
-      const { title, detail } = walkReachText(req.band);
-      showReach({ state: "walk", title, detail }, req.coords);
-      return;
-    }
-    if (req.kind === "car") {
-      // Car reach is a client-side drive band — no provider call, with the
-      // estimate/no-live-traffic caveat baked into the copy (task 053, C-F).
-      const { title, detail } = carReachText(req.band);
-      showReach({ state: "car", title, detail }, req.coords);
-      return;
-    }
-    if (req.kind === "transit-unreachable") {
-      // Client point-in-ring said this point is outside the painted transit
-      // reach — answer honestly with NO provider call (T1/P2).
-      showReach(
-        { state: "none", title: "Beyond your reach", detail: "This point is outside your public-transport reach for the selected time." },
-        req.coords,
-      );
-      return;
-    }
-
-    // Transit (inside the band): loading → fetch → journey / none / error, under
-    // one generation. `band` frames the trip time against the visible reach (P8).
-    const band = req.band;
-    const gen = ++reachGen;
-    const controller = new AbortController();
-    reachAbort = controller;
-    const popup = showReach({ state: "loading", title: "Planning your trip…", detail: "Finding the best public-transport route." }, req.coords);
-
-    const timer = setTimeout(() => {
-      if (gen === reachGen) {
-        // Invalidate this generation BEFORE aborting: otherwise a `res.json()`
-        // that resolved just before the abort could still pass the gen check and
-        // draw/declutter a journey after we already gave up (review).
-        reachGen += 1;
-        showReach({ state: "error", title: "Couldn’t plan this trip", detail: "The routing service is slow — please try again." }, req.coords, popup);
-      }
-      controller.abort();
-    }, REACH_TIMEOUT_MS);
-
-    fetch(req.url, { signal: controller.signal })
-      .then(async (res) => {
-        if (gen !== reachGen) return;
-        if (res.status === 422) {
-          return void showReach({ state: "outside", title: "Outside the area", detail: "That point is outside the Bucharest area we cover." }, req.coords, popup);
-        }
-        if (!res.ok) {
-          return void showReach({ state: "error", title: "Couldn’t plan this trip", detail: "Please try again in a moment." }, req.coords, popup);
-        }
-        const plan = (await res.json()) as ReachPlan;
-        if (gen !== reachGen) return;
-        if (!plan.reachable) {
-          return void showReach({ state: "none", title: "No public-transport route", detail: "No trip was found for this departure time." }, req.coords, popup);
-        }
-        // A plan with no transit leg is really walking directions (T4) — stay
-        // text-only: NO map draw, NO declutter (the visual treatment is for public
-        // transport; a walking answer would declutter for a bare straight line —
-        // plan-panel A). closeStopPopup already tore down any prior draw.
-        // buildReachSteps is 1:1 with plan.legs; carry each leg's mode so the
-        // popup can glyph the step and map hover→leg highlight by index.
-        const steps = buildReachSteps(plan.legs).map((s, i) => ({ ...s, mode: plan.legs[i].mode }));
-        // No transit leg at all — a `direct` walk-OR-BIKE fallback. Stay TEXT-ONLY:
-        // NO draw, NO declutter (the visual treatment is for public transport, and
-        // decluttering for a bare straight line is worse than the text — impl-panel
-        // A). closeStopPopup already tore down any prior draw.
-        if (!hasTransitLeg(plan.legs)) {
-          const walkOnly = isWalkOnly(plan.legs);
-          return void showReach(
-            {
-              state: "transit",
-              title: walkOnly ? "On foot" : "Directions",
-              detail: walkOnly
-                ? `Within your ~${band}-min reach — about a ${plan.totalMinutes}-min walk.`
-                : `Within your ~${band}-min reach — about ${plan.totalMinutes} min.`,
-              steps,
-            },
-            req.coords,
-            popup,
-          );
-        }
-        // A real public-transport journey: DRAW it and, ONLY if it produced
-        // drawable features, declutter the amenities so the trip is legible (a
-        // transit plan with no drawable coords must not hide markers behind an
-        // empty map — review). The step list stays 1:1 with
-        // plan.legs, so a popup step's index maps straight to a journey leg.
-        const drawn = journey.draw(plan.legs);
-        if (drawn) {
-          reachDeclutter.set(true);
-          // Fit the drawn journey into view (task 057) so the whole path reads
-          // beside the compact popup — the owner couldn't see it under the old
-          // full-size popup. Pad with the shell insets.
-          journey.frame(applyCameraPadding(true));
-        }
-        // Be honest about the band: MOTIS's fastest trip can occasionally exceed
-        // the clicked "~N-min reach" (a different query than the isochrone). Only
-        // claim "within" when it truly is (task 057 band honesty).
-        const withinBand = plan.totalMinutes <= band;
-        showReach(
-          {
-            state: "transit",
-            title: "By public transport",
-            detail: withinBand
-              ? `Within your ~${band}-min reach — journey ${reachSummary(plan)}.`
-              : `Journey ${reachSummary(plan)} — a little beyond your ~${band}-min reach.`,
-            steps,
-          },
-          req.coords,
-          popup,
-        );
-      })
-      .catch((err) => {
-        if ((err as Error)?.name === "AbortError" || gen !== reachGen) return;
-        showReach({ state: "error", title: "Couldn’t plan this trip", detail: "Please try again in a moment." }, req.coords, popup);
-      })
-      .finally(() => clearTimeout(timer));
-  }
-
   return {
     openAmenityPopup,
     inspectAmenity,
     closeStopPopup,
-    openReachPopup,
     /** The category of the currently-open popup, so a hidden-category filter can
      * close it (amenities-controller reads this — never the private field). */
     getPopupCategory: () => popupCategory,

@@ -142,7 +142,8 @@ test("time control is absent in Walk, present in Transit; preset sends &preset a
   // Switch to transit.
   await page.getByTestId("command-surface").getByRole("button", { name: "Public transport", exact: true }).click();
   await expect(page.getByRole("group", { name: "Public transport departure time" })).toBeVisible();
-  await expect(page.getByTestId("transit-departure-note")).toContainText("live delays and road traffic");
+  // Peak-honesty copy (task 058 D1): metro is road-traffic-immune, surface times are timetable-nominal.
+  await expect(page.getByTestId("transit-departure-note")).toContainText("affected by road traffic");
 
   await page.getByRole("button", { name: "Evening" }).click();
   await expect(page.getByRole("button", { name: "Evening" })).toHaveAttribute("aria-pressed", "true");

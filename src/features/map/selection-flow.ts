@@ -35,6 +35,15 @@ export type SelectInput =
   | { kind: "click"; lat: number; lng: number }
   | { kind: "point"; lat: number; lng: number; label: string };
 
+/** Honest car-reach metadata echoed by /api/car (task 058): the basis is always
+ * "estimate" (typical-congestion adjustment, not live traffic), plus the traffic
+ * slot the rings were computed for so the UI can say WHICH traffic it assumed. */
+export interface CarMeta {
+  basis: "estimate";
+  slotId: string;
+  slotLabel: string;
+}
+
 export interface SelectionState {
   /** Monotonic; bumped by `start`, `toggle`, `setPace`, `setTimeContext` so superseded responses are dropped. */
   token: number;
@@ -42,13 +51,15 @@ export interface SelectionState {
   mode: Mode;
   /** Active walking pace — snapshotted per request; drives ORS ranges + amenity radius (both modes). */
   pace: Pace;
-  /** Active transit departure context — snapshotted per request; transit-only. */
+  /** Active departure context — snapshotted per request; used by transit AND car (task 058). */
   timeContext: TimeContext;
   status: SelectionStatus;
   label: string | null;
   message: string | null;
   /** The resolved transit departure (ISO) + a short summary, surfaced so the UI can qualify the claim. */
   departure: { iso: string; summary: string } | null;
+  /** The resolved car-reach basis + traffic slot (task 058) — car-only, else null. */
+  car: CarMeta | null;
   /** The last successfully-resolved origin+label, so a mode/pace/time change recomputes it with no geocode. */
   lastSelection: { lat: number; lng: number; label: string } | null;
 }
@@ -62,12 +73,13 @@ export const initialSelectionState: SelectionState = {
   label: null,
   message: null,
   departure: null,
+  car: null,
   lastSelection: null,
 };
 
 export type SelectionAction =
   | { type: "start"; mode: Mode; preserveLast?: boolean }
-  | { type: "resolved"; token: number; origin: Origin; label: string; departure?: { iso: string; summary: string } | null }
+  | { type: "resolved"; token: number; origin: Origin; label: string; departure?: { iso: string; summary: string } | null; car?: CarMeta | null }
   | { type: "failed"; token: number; stage: Stage; httpStatus: number }
   | { type: "crash"; token: number }
   | { type: "toggle"; next: Mode }
@@ -127,22 +139,25 @@ export function effectivePace(mode: Mode, pace: Pace): Pace {
   return mode === "walk" ? pace : "normal";
 }
 
-/** Build the isochrone request URL for a mode + pace + (transit-only) departure
- * context. Walk carries only `pace`; transit adds `preset` or `weekday`+`time`.
+/** Build the isochrone request URL for a mode + pace + departure context.
+ * Walk carries only `pace`; transit carries `pace` + time; car carries time but
+ * NO pace (task 058 — car is time-aware for traffic realism, but pace is a
+ * walking concept that must never leak into a car request, plan-panel C-E).
  * Pure + exported so the exact query contract is unit-testable. */
 export function isochroneUrl(mode: Mode, origin: Origin, pace: Pace, timeContext: TimeContext): string {
   const coords = `?lat=${origin.lat}&lng=${origin.lng}`;
-  // Car is a fixed profile: no pace and no departure time (those are walk/
-  // transit concepts). It carries lat/lng ONLY, so a pace left over from Walk
-  // can never leak into a car request (plan-panel C-E). /api/car ignores such
-  // params anyway, but not emitting them keeps the contract honest + testable.
-  if (mode === "car") return `${isochronePath(mode)}${coords}`;
+  const withTime = (base: string) => {
+    if (timeContext.kind === "preset") return `${base}&preset=${timeContext.preset}`;
+    const hh = String(timeContext.hour).padStart(2, "0");
+    const mm = String(timeContext.minute).padStart(2, "0");
+    return `${base}&weekday=${timeContext.weekday}&time=${hh}%3A${mm}`;
+  };
+  // Car: time params only, NO pace (a Brisk/Relaxed pace left over from Walk can
+  // never reach /api/car — it doesn't accept pace and we don't emit it).
+  if (mode === "car") return withTime(`${isochronePath(mode)}${coords}`);
   const base = `${isochronePath(mode)}${coords}&pace=${pace}`;
   if (mode !== "transit") return base; // walk: pace only
-  if (timeContext.kind === "preset") return `${base}&preset=${timeContext.preset}`;
-  const hh = String(timeContext.hour).padStart(2, "0");
-  const mm = String(timeContext.minute).padStart(2, "0");
-  return `${base}&weekday=${timeContext.weekday}&time=${hh}%3A${mm}`;
+  return withTime(base); // transit: pace + time
 }
 
 /**
@@ -188,8 +203,10 @@ export function selectionReducer(state: SelectionState, action: SelectionAction)
         // Clear any error banner locally so success is self-contained, not
         // dependent on `start` having run first.
         message: null,
-        // The resolved transit departure (walk selections pass null → cleared).
+        // The resolved transit departure (walk/car selections pass null → cleared).
         departure: action.departure ?? null,
+        // The resolved car basis + slot (walk/transit selections pass null → cleared).
+        car: action.car ?? null,
         // The isochrone's rounded origin, so a toggle recompute agrees with the marker/rings.
         lastSelection: { lat: action.origin.lat, lng: action.origin.lng, label: action.label },
       };

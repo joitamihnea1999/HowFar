@@ -194,13 +194,19 @@ export function addReachPathLayers(map: LayerHost): void {
     layout: round,
     paint: { "line-color": REACH_HIGHLIGHT, "line-width": 6, "line-opacity": 0.9 },
   });
+  // The reach-path source also carries a single `kind:"destination"` pin (task
+  // 058) — the point the user asked "how do I get there?" about. The stop layers
+  // below are scoped to `kind:"stop"` so the pin never renders as a transit stop
+  // or gets a stop label (panel gpt5.5-3/luna-3/terra-3 — atomic source, one
+  // owner, kind-scoped layers).
+  const isStop = ["all", isPoint, ["==", ["get", "kind"], "stop"]] as maplibregl.FilterSpecification;
   // Used stops: board/alight are big filled violet dots; transfers a smaller
   // hollow dot. White stroke gives figure/ground pop on the dark basemap.
   map.addLayer({
     id: "reach-path-stops",
     type: "circle",
     source: "reach-path",
-    filter: isPoint,
+    filter: isStop,
     paint: {
       "circle-radius": ["match", ["get", "stopKind"], "transfer", 5, 6.5],
       "circle-color": ["match", ["get", "stopKind"], "transfer", REACH_CASING, REACH_TRANSIT_COLOR],
@@ -213,7 +219,7 @@ export function addReachPathLayers(map: LayerHost): void {
     id: "reach-path-stops-hl",
     type: "circle",
     source: "reach-path",
-    filter: ["all", isPoint, ["in", ["get", "stopIndex"], ["literal", []]]] as maplibregl.FilterSpecification,
+    filter: ["all", isStop, ["in", ["get", "stopIndex"], ["literal", []]]] as maplibregl.FilterSpecification,
     paint: {
       "circle-radius": 10,
       "circle-color": "rgba(250,250,250,0.14)",
@@ -227,7 +233,7 @@ export function addReachPathLayers(map: LayerHost): void {
     id: "reach-path-labels",
     type: "symbol",
     source: "reach-path",
-    filter: ["all", isPoint, ["!=", ["get", "stopKind"], "transfer"]] as maplibregl.FilterSpecification,
+    filter: ["all", isStop, ["!=", ["get", "stopKind"], "transfer"]] as maplibregl.FilterSpecification,
     layout: {
       "text-field": ["get", "name"],
       "text-font": ["Noto Sans Medium"],
@@ -239,6 +245,23 @@ export function addReachPathLayers(map: LayerHost): void {
       "text-color": REACH_HIGHLIGHT,
       "text-halo-color": REACH_CASING,
       "text-halo-width": 1.5,
+    },
+  });
+  // Destination pin (task 058): the point the user asked about. A near-white
+  // filled dot with a dark halo + a small inner core — deliberately unlike the
+  // violet transit stops, so it reads as "here's the place" for every reach kind
+  // (walk/car band answers too, which draw no journey). One dot per feature.
+  const isDestination = ["all", isPoint, ["==", ["get", "kind"], "destination"]] as maplibregl.FilterSpecification;
+  map.addLayer({
+    id: "reach-path-destination",
+    type: "circle",
+    source: "reach-path",
+    filter: isDestination,
+    paint: {
+      "circle-radius": 7,
+      "circle-color": REACH_HIGHLIGHT,
+      "circle-stroke-color": REACH_CASING,
+      "circle-stroke-width": 3,
     },
   });
 }
