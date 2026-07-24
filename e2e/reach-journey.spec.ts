@@ -89,6 +89,22 @@ async function renderedAmenityMarkers(page: Page) {
     return m ? m.queryRenderedFeatures({ layers: ["amenity-markers"] }).length : -1;
   });
 }
+// The drawn journey's screen-space bbox (project every reach-path coord). Used to
+// prove the directions popup does not blanket the whole path (task 057 P1).
+async function journeyScreenBBox(page: Page) {
+  return page.evaluate(() => {
+    const m = (window as unknown as { __hfMap?: { querySourceFeatures: (s: string) => { geometry: { type: string; coordinates: unknown } }[]; project: (c: [number, number]) => { x: number; y: number } } }).__hfMap;
+    if (!m) return null;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    const add = (c: [number, number]) => { const p = m.project(c); minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); };
+    for (const f of m.querySourceFeatures("reach-path")) {
+      const g = f.geometry;
+      if (g.type === "LineString") for (const c of g.coordinates as [number, number][]) add(c);
+      else if (g.type === "Point") add(g.coordinates as [number, number]);
+    }
+    return Number.isFinite(minX) ? { minX, minY, maxX, maxY } : null;
+  });
+}
 
 async function setup(page: Page) {
   const reachCalls: string[] = [];
@@ -166,6 +182,22 @@ test("transit right-click DRAWS the journey and declutters the amenities", async
   // shows — the check the impl panel required.
   await expect.poll(() => reachRenderedCounts(page)).toEqual({ lines: 3, stops: 2 });
   await expect.poll(() => renderedAmenityMarkers(page)).toBe(0);
+
+  // task 057 P1: the camera fits the journey (data-reach-framed) and the compact
+  // popup covers only a MINORITY of the drawn path, so the user can see the way.
+  // (Strict zero-overlap isn't guaranteed — the popup is anchored at the clicked
+  // destination, one end of the path — so we bound the covered fraction instead;
+  // the Gate G live screenshot is the visual arbiter.)
+  await expect(map).toHaveAttribute("data-reach-framed", "true", { timeout: 5000 });
+  const popup = await page.locator(".hf-reach-popup").boundingBox();
+  const jb = await journeyScreenBBox(page);
+  expect(popup).not.toBeNull();
+  expect(jb).not.toBeNull();
+  expect(popup!.width).toBeLessThanOrEqual(300); // compact card, not a full slab
+  const ix = Math.max(0, Math.min(jb!.maxX, popup!.x + popup!.width) - Math.max(jb!.minX, popup!.x));
+  const iy = Math.max(0, Math.min(jb!.maxY, popup!.y + popup!.height) - Math.max(jb!.minY, popup!.y));
+  const journeyArea = Math.max(1, (jb!.maxX - jb!.minX) * (jb!.maxY - jb!.minY));
+  expect((ix * iy) / journeyArea).toBeLessThan(0.6); // popup covers < 60% of the path's screen extent
 });
 
 test("supersede: a second right-click draws ONLY the latest plan", async ({ page }) => {

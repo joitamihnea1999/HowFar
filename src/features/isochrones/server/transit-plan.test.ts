@@ -18,8 +18,19 @@ vi.mock("@/lib/provider-http", async (importOriginal) => ({
   providerFetch,
 }));
 
-import { bestPlan, parseItinerary, planTrip, type ReachPlan } from "./transit-plan";
+import { bestPlan, parseItinerary, planTrip, TRANSFER_PENALTY_S, type ReachPlan } from "./transit-plan";
 import sample from "./__fixtures__/reach-plan-sample.json";
+import multi from "./__fixtures__/reach-plan-multi.json";
+
+// Build a minimal itinerary (transit legs named by their line) for penalty tests.
+function itin(durationSec: number, transfers: number, lines: string[]) {
+  return {
+    duration: durationSec,
+    transfers,
+    legs: lines.map((l, i) => ({ mode: "BUS", routeShortName: l, duration: Math.round(durationSec / lines.length), from: { name: `S${i}` }, to: { name: `S${i + 1}` } })),
+  };
+}
+const transitLines = (p: Extract<ReachPlan, { reachable: true }>) => p.legs.filter((l) => l.mode !== "WALK").map((l) => l.line);
 
 // Trimmed from the real Transitous /plan probe (Berceni → north): a WALK→BUS→
 // WALK→BUS→WALK itinerary, plus a faster alternative listed AFTER the slow one
@@ -177,6 +188,66 @@ describe("bestPlan", () => {
   });
 });
 
+describe("bestPlan transfer penalty + within-band (task 057)", () => {
+  it("prefers the DIRECT Tram-1 trip over the marginally-faster Tram+Bus, on the real fixture", () => {
+    const plan = bestPlan(multi) as Extract<ReachPlan, { reachable: true }>;
+    // The direct itinerary is Tram 1 only (0 transfers, 1800s); the old pure-fastest
+    // pick was Tram 1 + Bus 116 (1 transfer, 1500s) — a 5-min saving not worth a transfer.
+    expect(plan.transfers).toBe(0);
+    expect(transitLines(plan)).toEqual(["1"]);
+    expect(plan.totalMinutes).toBe(30);
+  });
+
+  it("keeps the direct trip at the exact penalty boundary (Δ === penalty → fewer transfers wins)", () => {
+    const direct = itin(1800, 0, ["1"]);
+    const transfer = itin(1800 - TRANSFER_PENALTY_S, 1, ["1", "116"]); // saves exactly the penalty
+    const plan = bestPlan({ itineraries: [transfer, direct] }) as Extract<ReachPlan, { reachable: true }>;
+    expect(plan.transfers).toBe(0);
+    expect(transitLines(plan)).toEqual(["1"]);
+  });
+
+  it("still takes the transfer when it saves MORE than the penalty", () => {
+    const direct = itin(3600, 0, ["1"]); // 60 min direct
+    const transfer = itin(1800, 1, ["1", "116"]); // 30 min — saves 30 min >> 6 min penalty
+    const plan = bestPlan({ itineraries: [direct, transfer] }) as Extract<ReachPlan, { reachable: true }>;
+    expect(plan.transfers).toBe(1);
+    expect(transitLines(plan)).toEqual(["1", "116"]);
+  });
+
+  it("tolerates malformed/negative/missing transfer counts and still scores correctly against a real multi-transfer trip", () => {
+    // "oops" must normalise to 0 (NOT NaN — a NaN cost would sort unpredictably in
+    // Array.sort and could let the worse trip win). The malformed 0-transfer trip
+    // (cost 1600) must beat the real 2-transfer trip (cost 1500 + 2×360 = 2220).
+    const malformed = { duration: 1600, transfers: "oops", legs: [{ mode: "TRAM", routeShortName: "1", duration: 1600, from: { name: "A" }, to: { name: "B" } }] };
+    const realTwoTransfer = { duration: 1500, transfers: 2, legs: [{ mode: "BUS", routeShortName: "9", duration: 1500, from: { name: "A" }, to: { name: "B" } }] };
+    const plan = bestPlan({ itineraries: [realTwoTransfer as never, malformed as never] }) as Extract<ReachPlan, { reachable: true }>;
+    expect(plan.transfers).toBe(0); // malformed normalised to 0
+    expect(transitLines(plan)).toEqual(["1"]); // the malformed 0-transfer trip won on penalised cost
+    // A negative count also clamps to 0 (no negative reward).
+    const neg = bestPlan({ itineraries: [{ duration: 1500, transfers: -5, legs: [{ mode: "BUS", routeShortName: "7", duration: 1500, from: { name: "A" }, to: { name: "B" } }] } as never] }) as Extract<ReachPlan, { reachable: true }>;
+    expect(neg.transfers).toBe(0);
+  });
+
+  it("within-band pre-filter excludes an over-band faster/simpler trip so the reach claim holds", () => {
+    const withinTransfer = itin(1500, 1, ["1", "116"]); // 25 min, within a 30-min band
+    const overBandDirect = itin(1700, 0, ["4"]); // 28.3 min, 0 transfers — would WIN on penalty…
+    // …but it is over a 26-min (1560s) band. With the band it must be excluded.
+    const body = { itineraries: [withinTransfer, overBandDirect] };
+    // No band: the over-band direct wins on the penalty (1700 < 1500+360=1860).
+    expect(transitLines(bestPlan(body) as Extract<ReachPlan, { reachable: true }>)).toEqual(["4"]);
+    // With a 1560s band: the over-band direct is filtered out → the within-band trip wins.
+    expect(transitLines(bestPlan(body, { maxSeconds: 1560 }) as Extract<ReachPlan, { reachable: true }>)).toEqual(["1", "116"]);
+  });
+
+  it("keeps all candidates when NONE fit the band (never returns unreachable just because the band is tight)", () => {
+    const a = itin(2000, 0, ["1"]);
+    const b = itin(2200, 1, ["1", "116"]);
+    const plan = bestPlan({ itineraries: [a, b] }, { maxSeconds: 600 }) as Extract<ReachPlan, { reachable: true }>;
+    expect(plan.reachable).toBe(true);
+    expect(transitLines(plan)).toEqual(["1"]); // cheapest overall, band ignored since none qualify
+  });
+});
+
 describe("planTrip", () => {
   const FROM = { lat: 44.376, lng: 26.125 };
   const TO = { lat: 44.478, lng: 26.128 };
@@ -190,7 +261,17 @@ describe("planTrip", () => {
     const second = await planTrip(FROM, TO, DEP);
     expect(second).toEqual(first);
     expect(providerFetch).toHaveBeenCalledTimes(1);
-    expect([...store.keys()][0]).toMatch(/^reach:plan:v2:44\.37600,26\.12500:44\.47800,26\.12800:/);
+    expect([...store.keys()][0]).toMatch(/^reach:plan:v3:44\.37600,26\.12500:44\.47800,26\.12800:/);
+  });
+
+  it("keys distinctly by maxMinutes (band) so a different band can't reuse another band's pick", async () => {
+    providerFetch.mockResolvedValue(planResponse([SLOW, FAST]));
+    await planTrip(FROM, TO, DEP, 30);
+    await planTrip(FROM, TO, DEP, 45);
+    // Two distinct provider calls + two cache rows (different band suffix).
+    expect(providerFetch).toHaveBeenCalledTimes(2);
+    expect([...store.keys()].every((k) => k.startsWith("reach:plan:v3:"))).toBe(true);
+    expect(new Set([...store.keys()]).size).toBe(2);
   });
 
   it("passes fromPlace/toPlace/time to the plan endpoint", async () => {

@@ -1,0 +1,586 @@
+{
+  "_source": "Transitous MOTIS /api/v1/plan, Bucharest Vitan-Barzesti -> Cutitul de Argint, captured 2026-07-24 weekday-morning. Real durations: a direct Tram 1 (1800s, 0 transfers) AND a Tram 1 + Bus 116 (1500s, 1 transfer) both exist — the selector must prefer the direct one (transfer saving is only 5 min).",
+  "itineraries": [
+    {
+      "duration": 1800,
+      "transfers": 0,
+      "legs": [
+        {
+          "mode": "WALK",
+          "duration": 720,
+          "from": {
+            "name": "START",
+            "lat": 44.39163,
+            "lon": 26.14124
+          },
+          "to": {
+            "name": "Soseaua Vitan Barzesti",
+            "lat": 44.386272,
+            "lon": 26.138890000000004
+          }
+        },
+        {
+          "mode": "TRAM",
+          "duration": 180,
+          "from": {
+            "name": "Soseaua Vitan Barzesti",
+            "lat": 44.386272,
+            "lon": 26.138890000000004
+          },
+          "to": {
+            "name": "Cimitirul Serban Voda",
+            "lat": 44.401768,
+            "lon": 26.098886
+          },
+          "routeShortName": "1",
+          "headsign": "Romprim"
+        },
+        {
+          "mode": "WALK",
+          "duration": 900,
+          "from": {
+            "name": "Cimitirul Serban Voda",
+            "lat": 44.401768,
+            "lon": 26.098886
+          },
+          "to": {
+            "name": "END",
+            "lat": 44.40889,
+            "lon": 26.09705
+          }
+        }
+      ]
+    },
+    {
+      "duration": 1500,
+      "transfers": 1,
+      "legs": [
+        {
+          "mode": "WALK",
+          "duration": 720,
+          "from": {
+            "name": "START",
+            "lat": 44.39163,
+            "lon": 26.14124
+          },
+          "to": {
+            "name": "Soseaua Vitan Barzesti",
+            "lat": 44.386272,
+            "lon": 26.138890000000004
+          }
+        },
+        {
+          "mode": "TRAM",
+          "duration": 180,
+          "from": {
+            "name": "Soseaua Vitan Barzesti",
+            "lat": 44.386272,
+            "lon": 26.138890000000004
+          },
+          "to": {
+            "name": "Cimitirul Serban Voda",
+            "lat": 44.401768,
+            "lon": 26.098886
+          },
+          "routeShortName": "1",
+          "headsign": "Romprim"
+        },
+        {
+          "mode": "WALK",
+          "duration": 120,
+          "from": {
+            "name": "Cimitirul Serban Voda",
+            "lat": 44.401768,
+            "lon": 26.098886
+          },
+          "to": {
+            "name": "Cimitirul Serban Voda",
+            "lat": 44.401239999999994,
+            "lon": 26.100115000000002
+          }
+        },
+        {
+          "mode": "BUS",
+          "duration": 240,
+          "from": {
+            "name": "Cimitirul Serban Voda",
+            "lat": 44.401239999999994,
+            "lon": 26.100115000000002
+          },
+          "to": {
+            "name": "Cutitul de Argint",
+            "lat": 44.409225,
+            "lon": 26.097652
+          },
+          "routeShortName": "116",
+          "headsign": "Piata Sf. Vineri"
+        },
+        {
+          "mode": "WALK",
+          "duration": 120,
+          "from": {
+            "name": "Cutitul de Argint",
+            "lat": 44.409225,
+            "lon": 26.097652
+          },
+          "to": {
+            "name": "END",
+            "lat": 44.40889,
+            "lon": 26.09705
+          }
+        }
+      ]
+    },
+    {
+      "duration": 1860,
+      "transfers": 0,
+      "legs": [
+        {
+          "mode": "WALK",
+          "duration": 720,
+          "from": {
+            "name": "START",
+            "lat": 44.39163,
+            "lon": 26.14124
+          },
+          "to": {
+            "name": "Soseaua Vitan Barzesti",
+            "lat": 44.386272,
+            "lon": 26.138890000000004
+          }
+        },
+        {
+          "mode": "TRAM",
+          "duration": 240,
+          "from": {
+            "name": "Soseaua Vitan Barzesti",
+            "lat": 44.386272,
+            "lon": 26.138890000000004
+          },
+          "to": {
+            "name": "Cimitirul Serban Voda",
+            "lat": 44.401768,
+            "lon": 26.098886
+          },
+          "routeShortName": "1",
+          "headsign": "Romprim"
+        },
+        {
+          "mode": "WALK",
+          "duration": 900,
+          "from": {
+            "name": "Cimitirul Serban Voda",
+            "lat": 44.401768,
+            "lon": 26.098886
+          },
+          "to": {
+            "name": "END",
+            "lat": 44.40889,
+            "lon": 26.09705
+          }
+        }
+      ]
+    },
+    {
+      "duration": 1800,
+      "transfers": 1,
+      "legs": [
+        {
+          "mode": "WALK",
+          "duration": 180,
+          "from": {
+            "name": "START",
+            "lat": 44.39163,
+            "lon": 26.14124
+          },
+          "to": {
+            "name": "Spitalul Sf. Ioan",
+            "lat": 44.391212,
+            "lon": 26.142508
+          }
+        },
+        {
+          "mode": "BUS",
+          "duration": 120,
+          "from": {
+            "name": "Spitalul Sf. Ioan",
+            "lat": 44.391212,
+            "lon": 26.142508
+          },
+          "to": {
+            "name": "Soseaua Oltenitei",
+            "lat": 44.385403,
+            "lon": 26.138950000000005
+          },
+          "routeShortName": "102",
+          "headsign": "C.F.R. Progresul"
+        },
+        {
+          "mode": "WALK",
+          "duration": 120,
+          "from": {
+            "name": "Soseaua Oltenitei",
+            "lat": 44.385403,
+            "lon": 26.138950000000005
+          },
+          "to": {
+            "name": "Soseaua Vitan Barzesti",
+            "lat": 44.386272,
+            "lon": 26.138890000000004
+          }
+        },
+        {
+          "mode": "TRAM",
+          "duration": 240,
+          "from": {
+            "name": "Soseaua Vitan Barzesti",
+            "lat": 44.386272,
+            "lon": 26.138890000000004
+          },
+          "to": {
+            "name": "Cimitirul Serban Voda",
+            "lat": 44.401768,
+            "lon": 26.098886
+          },
+          "routeShortName": "1",
+          "headsign": "Romprim"
+        },
+        {
+          "mode": "WALK",
+          "duration": 900,
+          "from": {
+            "name": "Cimitirul Serban Voda",
+            "lat": 44.401768,
+            "lon": 26.098886
+          },
+          "to": {
+            "name": "END",
+            "lat": 44.40889,
+            "lon": 26.09705
+          }
+        }
+      ]
+    },
+    {
+      "duration": 1860,
+      "transfers": 0,
+      "legs": [
+        {
+          "mode": "WALK",
+          "duration": 720,
+          "from": {
+            "name": "START",
+            "lat": 44.39163,
+            "lon": 26.14124
+          },
+          "to": {
+            "name": "Soseaua Vitan Barzesti",
+            "lat": 44.386272,
+            "lon": 26.138890000000004
+          }
+        },
+        {
+          "mode": "TRAM",
+          "duration": 240,
+          "from": {
+            "name": "Soseaua Vitan Barzesti",
+            "lat": 44.386272,
+            "lon": 26.138890000000004
+          },
+          "to": {
+            "name": "Cimitirul Serban Voda",
+            "lat": 44.401768,
+            "lon": 26.098886
+          },
+          "routeShortName": "1",
+          "headsign": "Romprim"
+        },
+        {
+          "mode": "WALK",
+          "duration": 900,
+          "from": {
+            "name": "Cimitirul Serban Voda",
+            "lat": 44.401768,
+            "lon": 26.098886
+          },
+          "to": {
+            "name": "END",
+            "lat": 44.40889,
+            "lon": 26.09705
+          }
+        }
+      ]
+    },
+    {
+      "duration": 1560,
+      "transfers": 1,
+      "legs": [
+        {
+          "mode": "WALK",
+          "duration": 720,
+          "from": {
+            "name": "START",
+            "lat": 44.39163,
+            "lon": 26.14124
+          },
+          "to": {
+            "name": "Soseaua Vitan Barzesti",
+            "lat": 44.386272,
+            "lon": 26.138890000000004
+          }
+        },
+        {
+          "mode": "TRAM",
+          "duration": 240,
+          "from": {
+            "name": "Soseaua Vitan Barzesti",
+            "lat": 44.386272,
+            "lon": 26.138890000000004
+          },
+          "to": {
+            "name": "Cimitirul Serban Voda",
+            "lat": 44.401768,
+            "lon": 26.098886
+          },
+          "routeShortName": "1",
+          "headsign": "Romprim"
+        },
+        {
+          "mode": "WALK",
+          "duration": 120,
+          "from": {
+            "name": "Cimitirul Serban Voda",
+            "lat": 44.401768,
+            "lon": 26.098886
+          },
+          "to": {
+            "name": "Cimitirul Serban Voda",
+            "lat": 44.401239999999994,
+            "lon": 26.100115000000002
+          }
+        },
+        {
+          "mode": "BUS",
+          "duration": 240,
+          "from": {
+            "name": "Cimitirul Serban Voda",
+            "lat": 44.401239999999994,
+            "lon": 26.100115000000002
+          },
+          "to": {
+            "name": "Cutitul de Argint",
+            "lat": 44.409225,
+            "lon": 26.097652
+          },
+          "routeShortName": "116",
+          "headsign": "Piata Sf. Vineri"
+        },
+        {
+          "mode": "WALK",
+          "duration": 120,
+          "from": {
+            "name": "Cutitul de Argint",
+            "lat": 44.409225,
+            "lon": 26.097652
+          },
+          "to": {
+            "name": "END",
+            "lat": 44.40889,
+            "lon": 26.09705
+          }
+        }
+      ]
+    },
+    {
+      "duration": 1800,
+      "transfers": 1,
+      "legs": [
+        {
+          "mode": "WALK",
+          "duration": 180,
+          "from": {
+            "name": "START",
+            "lat": 44.39163,
+            "lon": 26.14124
+          },
+          "to": {
+            "name": "Spitalul Sf. Ioan",
+            "lat": 44.391212,
+            "lon": 26.142508
+          }
+        },
+        {
+          "mode": "BUS",
+          "duration": 120,
+          "from": {
+            "name": "Spitalul Sf. Ioan",
+            "lat": 44.391212,
+            "lon": 26.142508
+          },
+          "to": {
+            "name": "Soseaua Oltenitei",
+            "lat": 44.385403,
+            "lon": 26.138950000000005
+          },
+          "routeShortName": "102",
+          "headsign": "C.F.R. Progresul"
+        },
+        {
+          "mode": "WALK",
+          "duration": 120,
+          "from": {
+            "name": "Soseaua Oltenitei",
+            "lat": 44.385403,
+            "lon": 26.138950000000005
+          },
+          "to": {
+            "name": "Soseaua Vitan Barzesti",
+            "lat": 44.386272,
+            "lon": 26.138890000000004
+          }
+        },
+        {
+          "mode": "TRAM",
+          "duration": 240,
+          "from": {
+            "name": "Soseaua Vitan Barzesti",
+            "lat": 44.386272,
+            "lon": 26.138890000000004
+          },
+          "to": {
+            "name": "Cimitirul Serban Voda",
+            "lat": 44.401768,
+            "lon": 26.098886
+          },
+          "routeShortName": "1",
+          "headsign": "Romprim"
+        },
+        {
+          "mode": "WALK",
+          "duration": 900,
+          "from": {
+            "name": "Cimitirul Serban Voda",
+            "lat": 44.401768,
+            "lon": 26.098886
+          },
+          "to": {
+            "name": "END",
+            "lat": 44.40889,
+            "lon": 26.09705
+          }
+        }
+      ]
+    },
+    {
+      "duration": 1500,
+      "transfers": 2,
+      "legs": [
+        {
+          "mode": "WALK",
+          "duration": 180,
+          "from": {
+            "name": "START",
+            "lat": 44.39163,
+            "lon": 26.14124
+          },
+          "to": {
+            "name": "Spitalul Sf. Ioan",
+            "lat": 44.391212,
+            "lon": 26.142508
+          }
+        },
+        {
+          "mode": "BUS",
+          "duration": 120,
+          "from": {
+            "name": "Spitalul Sf. Ioan",
+            "lat": 44.391212,
+            "lon": 26.142508
+          },
+          "to": {
+            "name": "Soseaua Oltenitei",
+            "lat": 44.385403,
+            "lon": 26.138950000000005
+          },
+          "routeShortName": "102",
+          "headsign": "C.F.R. Progresul"
+        },
+        {
+          "mode": "WALK",
+          "duration": 120,
+          "from": {
+            "name": "Soseaua Oltenitei",
+            "lat": 44.385403,
+            "lon": 26.138950000000005
+          },
+          "to": {
+            "name": "Soseaua Vitan Barzesti",
+            "lat": 44.386272,
+            "lon": 26.138890000000004
+          }
+        },
+        {
+          "mode": "TRAM",
+          "duration": 240,
+          "from": {
+            "name": "Soseaua Vitan Barzesti",
+            "lat": 44.386272,
+            "lon": 26.138890000000004
+          },
+          "to": {
+            "name": "Cimitirul Serban Voda",
+            "lat": 44.401768,
+            "lon": 26.098886
+          },
+          "routeShortName": "1",
+          "headsign": "Romprim"
+        },
+        {
+          "mode": "WALK",
+          "duration": 120,
+          "from": {
+            "name": "Cimitirul Serban Voda",
+            "lat": 44.401768,
+            "lon": 26.098886
+          },
+          "to": {
+            "name": "Cimitirul Serban Voda",
+            "lat": 44.401239999999994,
+            "lon": 26.100115000000002
+          }
+        },
+        {
+          "mode": "BUS",
+          "duration": 240,
+          "from": {
+            "name": "Cimitirul Serban Voda",
+            "lat": 44.401239999999994,
+            "lon": 26.100115000000002
+          },
+          "to": {
+            "name": "Cutitul de Argint",
+            "lat": 44.409225,
+            "lon": 26.097652
+          },
+          "routeShortName": "116",
+          "headsign": "Piata Sf. Vineri"
+        },
+        {
+          "mode": "WALK",
+          "duration": 120,
+          "from": {
+            "name": "Cutitul de Argint",
+            "lat": 44.409225,
+            "lon": 26.097652
+          },
+          "to": {
+            "name": "END",
+            "lat": 44.40889,
+            "lon": 26.09705
+          }
+        }
+      ]
+    }
+  ],
+  "direct": []
+}

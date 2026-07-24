@@ -119,6 +119,31 @@ function minutesOf(seconds: unknown): number {
   const s = Number(seconds);
   return Number.isFinite(s) && s > 0 ? Math.round(s / 60) : 0;
 }
+/** Raw trip duration in seconds (0 for missing/non-positive) — used for RANKING,
+ * so a sub-minute difference is not lost to rounding (task 057). `minutesOf` is
+ * for DISPLAY only. */
+function durationSeconds(seconds: unknown): number {
+  const s = Number(seconds);
+  return Number.isFinite(s) && s > 0 ? s : 0;
+}
+/** A finite, non-negative integer transfer count from untrusted MOTIS input —
+ * one source for both parsing and scoring, so the comparator can't see NaN or a
+ * negative reward (task 057). */
+function normTransfers(v: unknown): number {
+  const t = Number(v);
+  return Number.isFinite(t) && t > 0 ? Math.trunc(t) : 0;
+}
+
+/**
+ * Per-transfer penalty (seconds) applied when RANKING itineraries: an extra
+ * transfer must save MORE than this to be recommended (task 057). Real riders —
+ * and the owner's feedback — prefer a simpler, more-direct trip over shaving a
+ * few minutes with an extra vehicle. Calibrated against a real MOTIS capture
+ * where a direct Tram-1 trip (1800s) and a Tram+Bus trip (1500s) differ by
+ * exactly 300s: at 360s the direct trip wins STRICTLY (not via a fragile tie),
+ * while a transfer that genuinely saves >6 min still wins.
+ */
+export const TRANSFER_PENALTY_S = 360;
 function str(v: unknown): string | undefined {
   return typeof v === "string" && v.trim() ? v.trim() : undefined;
 }
@@ -163,34 +188,56 @@ export function parseItinerary(it: MotisItinerary): ReachPlan {
     legs.push(leg);
   }
   if (legs.length === 0) return { reachable: false };
-  const transfers = Number(it.transfers);
   return {
     reachable: true,
     totalMinutes: minutesOf(it.duration),
-    transfers: Number.isFinite(transfers) && transfers > 0 ? Math.trunc(transfers) : 0,
+    transfers: normTransfers(it.transfers),
     legs,
   };
 }
 
 /**
- * Pick the best itinerary (fastest, then fewest transfers) and trim it. MOTIS
- * does NOT return itineraries sorted by duration (observed: 83, 57, 57, 58, 77),
- * so choosing index 0 would show a slower trip than exists. Transit options
- * (`itineraries`) win; if there are none, fall back to `direct` (walk/bike) so a
- * very-close destination still gets an answer (T4). Itineraries without a finite
- * positive duration are dropped, never sorted to the front (T2). Pure + exported.
+ * Pick the best itinerary and trim it. MOTIS does NOT return itineraries sorted
+ * usefully, so we rank ourselves. Transit options (`itineraries`) win; if there
+ * are none, fall back to `direct` (walk/bike) so a very-close destination still
+ * gets an answer (T4). Itineraries without a finite positive duration are dropped
+ * (T2).
+ *
+ * Ranking (task 057) is a TRANSFER-PENALISED total order on RAW seconds — an
+ * extra transfer must save more than `TRANSFER_PENALTY_S` to be chosen, so we
+ * recommend the direct/simpler trip the owner expects rather than an uglier
+ * transfer that shaves a couple of minutes. Locked total order (no rounding):
+ *   1. `durationSec + TRANSFER_PENALTY_S × transfers` ascending (the penalised cost)
+ *   2. `transfers` ascending (at equal cost, fewer transfers wins)
+ *   3. `durationSec` ascending (final deterministic tie-break)
+ *
+ * `maxSeconds` (the clicked reach band) pre-filters to trips within the painted
+ * "~N-min reach" WHEN ANY QUALIFY, so the penalty can never surface a trip that
+ * exceeds the reach the user is looking at. Pure + exported.
  */
-export function bestPlan(body: MotisPlanBody): ReachPlan {
+export function bestPlan(body: MotisPlanBody, opts?: { maxSeconds?: number }): ReachPlan {
   const usable = (list: MotisItinerary[] | undefined): MotisItinerary[] =>
-    (Array.isArray(list) ? list : []).filter((it) => it && minutesOf(it.duration) > 0);
+    (Array.isArray(list) ? list : []).filter((it) => it && durationSeconds(it.duration) > 0);
   const transit = usable(body.itineraries);
-  const candidates = transit.length > 0 ? transit : usable(body.direct);
+  let candidates = transit.length > 0 ? transit : usable(body.direct);
   if (candidates.length === 0) return { reachable: false };
+
+  const maxSeconds = opts?.maxSeconds;
+  if (typeof maxSeconds === "number" && maxSeconds > 0) {
+    const within = candidates.filter((it) => durationSeconds(it.duration) <= maxSeconds);
+    if (within.length > 0) candidates = within; // prefer within-band; keep all if none qualify
+  }
+
+  const cost = (it: MotisItinerary): number =>
+    durationSeconds(it.duration) + TRANSFER_PENALTY_S * normTransfers(it.transfers);
   const best = [...candidates].sort((a, b) => {
-    const da = minutesOf(a.duration);
-    const db = minutesOf(b.duration);
-    if (da !== db) return da - db;
-    return (Number(a.transfers) || 0) - (Number(b.transfers) || 0);
+    const ca = cost(a);
+    const cb = cost(b);
+    if (ca !== cb) return ca - cb;
+    const ta = normTransfers(a.transfers);
+    const tb = normTransfers(b.transfers);
+    if (ta !== tb) return ta - tb;
+    return durationSeconds(a.duration) - durationSeconds(b.duration);
   })[0];
   return parseItinerary(best);
 }
@@ -207,15 +254,18 @@ export async function planTrip(
   from: { lat: number; lng: number },
   to: { lat: number; lng: number },
   departureIso: string,
+  maxMinutes?: number,
 ): Promise<ReachPlan> {
-  // v2: the cached ReachPlan now carries per-leg coords + decoded geometry
-  // (task 054) — a v1 entry would deserialize without them.
-  const key = `reach:plan:v2:${roundCoord(from.lat)},${roundCoord(from.lng)}:${roundCoord(to.lat)},${roundCoord(to.lng)}:${departureIso}`;
+  // v3: the ranking policy changed (transfer penalty + within-band, task 057), so
+  // a cached v2 plan would keep serving the old transfer-heavy pick for the TTL.
+  // maxMinutes is in the key because it changes the selected itinerary.
+  const band = typeof maxMinutes === "number" && maxMinutes > 0 ? Math.round(maxMinutes) : 0;
+  const key = `reach:plan:v3:${roundCoord(from.lat)},${roundCoord(from.lng)}:${roundCoord(to.lat)},${roundCoord(to.lng)}:${departureIso}:${band}`;
   const hit = await getCachedSafe<ReachPlan>(key);
   if (hit) return hit;
   const existing = inFlight.get(key);
   if (existing) return existing;
-  const promise = fetchAndParse(from, to, departureIso, key);
+  const promise = fetchAndParse(from, to, departureIso, key, band > 0 ? band * 60 : undefined);
   inFlight.set(key, promise);
   try {
     return await promise;
@@ -229,6 +279,7 @@ async function fetchAndParse(
   to: { lat: number; lng: number },
   departureIso: string,
   key: string,
+  maxSeconds?: number,
 ): Promise<ReachPlan> {
   const url =
     `${URL}?fromPlace=${roundCoord(from.lat)},${roundCoord(from.lng)}` +
@@ -253,7 +304,7 @@ async function fetchAndParse(
     throw new ProviderError("transitous plan returned a malformed response (no itineraries array)");
   }
 
-  const plan = bestPlan(body);
+  const plan = bestPlan(body, { maxSeconds });
   await setCachedSafe(key, plan, new Date(Date.now() + TTL_MS));
   return plan;
 }

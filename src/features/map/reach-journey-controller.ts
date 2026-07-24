@@ -2,10 +2,11 @@ import type maplibregl from "maplibre-gl";
 
 import type { ReachLeg } from "@/features/isochrones/server/transit-plan";
 import { journeyLegs, journeyStops } from "@/features/map/reach";
+import type { EdgeInsets } from "@/features/map/route-framing";
 import type { LoadState } from "@/features/map/load-state";
 import { EMPTY_FC } from "@/features/map/map-setup";
 import { MARKER_PICK_PAD_PX } from "@/features/map/marker-pick";
-import { runRoutePathStampPoll } from "@/features/map/route-framing";
+import { routeFitBreathingRoom, runRoutePathStampPoll } from "@/features/map/route-framing";
 
 /**
  * The drawn right-click journey (task 054): paints a reachable public-transport
@@ -16,21 +17,29 @@ import { runRoutePathStampPoll } from "@/features/map/route-framing";
  * MapLibre glue (setData, the e2e stamp, hover highlight, hit-testing, teardown),
  * so it is coverage-excluded and proven by the Playwright suite.
  *
- * No camera fit: the journey is inside the already-framed reach rings, and a
- * second fit would fight the origin/ring framing + the destination-anchored popup
- * (plan-panel I). The stamp uses the same rAF+wall-clock poll as the route path —
- * NOT `map.once("idle")`, which after the permanent setPadding settles fires once
- * and never re-fires (mind-map [16] gotcha).
+ * Camera fit (task 057): after drawing, `frame()` fits the journey bounds with
+ * the shell padding so the whole path is visible beside the compact directions
+ * popup — the owner couldn't see the path under the old full-size popup. This
+ * SUPERSEDES the task-054 "no fit" note: that objection was to fitting while a
+ * large click-anchored popup fought the origin/ring framing; here the popup is
+ * compact and the fit's explicit job is to reveal the drawn journey. The stamp
+ * uses the same rAF+wall-clock poll as the route path — NOT `map.once("idle")`,
+ * which after the permanent setPadding settles fires once and never re-fires
+ * (mind-map [16] gotcha).
  */
 export function createReachJourneyController({
   map,
   el,
   loadState,
+  reducedMotion,
 }: {
   map: maplibregl.Map;
   el: HTMLElement;
   loadState: LoadState;
+  reducedMotion: MediaQueryList;
 }) {
+  // The drawn journey's bounds [[minLng,minLat],[maxLng,maxLat]], for `frame()`.
+  let activeBounds: [[number, number], [number, number]] | null = null;
   // Per-leg stop-feature ids, so hovering a popup step highlights its stops.
   let stopIdsByLeg: Record<number, number[]> = {};
   // Generation guard: a clear/replace bumps this so a late stamp poll can't
@@ -53,6 +62,7 @@ export function createReachJourneyController({
   function clear() {
     gen += 1;
     active = false;
+    activeBounds = null;
     stopIdsByLeg = {};
     loadState.pendingJourney = null;
     if (loadState.styleLoaded) {
@@ -61,6 +71,7 @@ export function createReachJourneyController({
     }
     delete el.dataset.reachJourney;
     delete el.dataset.reachHover;
+    delete el.dataset.reachFramed;
   }
 
   function resetHighlightFilters() {
@@ -121,9 +132,30 @@ export function createReachJourneyController({
       if (ids.length) stopIdsByLeg[index] = ids;
     });
 
+    // Bounds over every drawn coordinate (leg lines + stops), for `frame()`.
+    let minLng = Infinity;
+    let minLat = Infinity;
+    let maxLng = -Infinity;
+    let maxLat = -Infinity;
+    const grow = (lng: number, lat: number) => {
+      if (lng < minLng) minLng = lng;
+      if (lat < minLat) minLat = lat;
+      if (lng > maxLng) maxLng = lng;
+      if (lat > maxLat) maxLat = lat;
+    };
+    for (const l of legFeatures) for (const [lng, lat] of l.coords) grow(lng, lat);
+    for (const s of stops) grow(s.lng, s.lat);
+    activeBounds = Number.isFinite(minLng)
+      ? [
+          [minLng, minLat],
+          [maxLng, maxLat],
+        ]
+      : null;
+
     resetHighlightFilters();
     reachSource()?.setData({ type: "FeatureCollection", features: [...lineFeatures, ...stopFeatures] });
     delete el.dataset.reachHover;
+    delete el.dataset.reachFramed;
 
     // Stamp once the source actually holds queryable features (e2e contract:
     // "the journey is on the map"). Self-terminates if a clear/replace bumped gen.
@@ -170,6 +202,43 @@ export function createReachJourneyController({
     return map.queryRenderedFeatures(bbox, { layers }).length > 0;
   }
 
+  /** Fit the camera to the drawn journey so the whole path is visible beside the
+   * compact directions popup (task 057). No-op if nothing is drawn.
+   *
+   * `dock` is the shell's four-edge inset — but MapLibre's `cameraForBounds`
+   * ALREADY includes the map's committed `setPadding`, so passing the absolute
+   * dock would DOUBLE-COUNT it and, on a phone, make the journey impossible to
+   * frame. We pass only bounded ADDITIONAL breathing room
+   * (`routeFitBreathingRoom`, the exact pattern route-path uses) and guard the
+   * null-camera case rather than hanging. Stamp is race-safe: instant for
+   * reduced-motion; else register the settle listener AFTER the camera call (so a
+   * prior in-flight animation's moveend can't stamp early) with a wall-clock
+   * fallback (so a zero-delta fit that never emits moveend can't strand it). */
+  function frame(dock: EdgeInsets, instant = false) {
+    if (!active || !activeBounds || !loadState.styleLoaded) return;
+    const padding = routeFitBreathingRoom(dock, el.clientWidth, el.clientHeight);
+    const camera = map.cameraForBounds(activeBounds, { padding, maxZoom: 15 });
+    if (!camera) {
+      el.dataset.reachFramed = "false"; // cannot fit (tiny viewport) — don't hang
+      return;
+    }
+    const frameGen = gen;
+    const stamp = () => {
+      if (frameGen === gen) el.dataset.reachFramed = "true";
+    };
+    if (instant || reducedMotion.matches) {
+      map.easeTo({ ...camera, duration: 0, essential: false });
+      stamp();
+      return;
+    }
+    const fallback = setTimeout(stamp, 1200);
+    map.once("moveend", () => {
+      clearTimeout(fallback);
+      stamp();
+    });
+    map.easeTo({ ...camera, duration: 700, essential: false });
+  }
+
   /** Replay a buffered pre-load draw (called from AppMap's `load`). */
   function flushPending() {
     const pending = loadState.pendingJourney;
@@ -183,6 +252,7 @@ export function createReachJourneyController({
     draw,
     clear,
     highlight,
+    frame,
     hitsActiveJourney,
     flushPending,
     dispose() {

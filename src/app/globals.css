@@ -377,14 +377,22 @@ button,
    board/alight-emphasised body. Hovering a step highlights its leg + stops on
    the map. Root-specificity on .hf-reach-popup so these win over base popup
    styles ([16] gotcha). */
+/* Compact (task 057): cap the WHOLE card height (not just the step list) so a
+   long header + many legs + attribution can never grow into a full-screen slab
+   over the map — the owner's P1 complaint. The card scrolls as a whole; the
+   step list also scrolls for very long trips. */
+.hf-reach-popup {
+  max-height: min(70vh, 460px);
+  overflow-y: auto;
+}
 .hf-reach-popup .hf-reach-popup__steps {
   display: flex;
   flex-direction: column;
   gap: 0.1rem;
-  margin: 0.6rem 0 0;
+  margin: 0.55rem 0 0;
   padding: 0;
   list-style: none;
-  max-height: 260px;
+  max-height: min(38vh, 220px);
   overflow-y: auto;
 }
 .hf-reach-popup .hf-reach-popup__step {

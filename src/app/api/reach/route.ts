@@ -78,8 +78,14 @@ export async function GET(request: Request) {
     departureIso = representativeDeparture(new Date(), departureFields(timeContext));
   }
 
+  // The clicked reach band (minutes) so the planner prefers a trip within the
+  // painted "~N-min reach" (task 057). Bounded; ignored if absent/invalid.
+  const maxRaw = url.searchParams.get("maxMinutes");
+  const maxNum = maxRaw === null ? NaN : Number(maxRaw);
+  const maxMinutes = Number.isFinite(maxNum) && maxNum > 0 && maxNum <= 120 ? maxNum : undefined;
+
   try {
-    const plan = await planTrip(from, to, departureIso);
+    const plan = await planTrip(from, to, departureIso, maxMinutes);
     return NextResponse.json(plan);
   } catch (err) {
     return errorResponse(err, "reach");

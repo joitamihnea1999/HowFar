@@ -273,7 +273,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
     // dep); the popup drives it. Amenity declutter is wired via a holder AFTER the
     // amenities controller exists (it is created after the popup), breaking the
     // popup↔amenities construction cycle (plan-panel K).
-    const reachJourney = createReachJourneyController({ map, el, loadState });
+    const reachJourney = createReachJourneyController({ map, el, loadState, reducedMotion });
     const reachDeclutter: { set: (on: boolean) => void } = { set: () => {} };
     const popup = createPopupController({ map, el, reducedMotion, route, journey: reachJourney, reachDeclutter, applyCameraPadding });
     const { openAmenityPopup, inspectAmenity, closeStopPopup } = popup;
@@ -380,6 +380,9 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       // A route is a user-selected subject, not disposable camera state. Refit
       // it after every responsive shell change so orientation never clips it.
       if (route.hasActiveBounds()) requestAnimationFrame(() => route.refit(0));
+      // Same for a drawn right-click journey (task 057): reframe it (instant) so a
+      // rotation / responsive change never clips the path. No-op when none is drawn.
+      requestAnimationFrame(() => reachJourney.frame(applyCameraPadding(true), true));
     };
     window.addEventListener("resize", onResize);
 
@@ -417,6 +420,9 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
             fromLng: String(stash.origin.lng),
             toLat: String(lngLat.lat),
             toLng: String(lngLat.lng),
+            // The band the point fell in, so the planner prefers a trip within the
+            // painted "~N-min reach" rather than a faster over-band detour (task 057).
+            maxMinutes: String(action.band),
           });
           // Prefer the selection's resolved departure so the trip matches the
           // rings on screen; else pass the time-context params for the server.

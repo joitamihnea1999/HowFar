@@ -54,7 +54,8 @@ function make(rendered?: unknown[]) {
   const loadState = createLoadState();
   loadState.styleLoaded = true;
   const fm = fakeMap({ rendered });
-  const ctrl = createReachJourneyController({ map: fm.map as never, el, loadState });
+  const reducedMotion = { matches: false } as MediaQueryList;
+  const ctrl = createReachJourneyController({ map: fm.map as never, el, loadState, reducedMotion });
   return { ctrl, el, fm };
 }
 

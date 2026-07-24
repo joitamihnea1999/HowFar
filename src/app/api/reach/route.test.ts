@@ -43,7 +43,18 @@ describe("GET /api/reach", () => {
     const res = await call(`${FROM}&${TO}&departure=${encodeURIComponent(iso)}`);
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({ reachable: true, totalMinutes: 57 });
-    expect(planTrip).toHaveBeenCalledWith({ lat: 44.376, lng: 26.125 }, { lat: 44.478, lng: 26.128 }, iso);
+    // 4th arg is maxMinutes — undefined here since the URL carried no band.
+    expect(planTrip).toHaveBeenCalledWith({ lat: 44.376, lng: 26.125 }, { lat: 44.478, lng: 26.128 }, iso, undefined);
+  });
+
+  it("passes a valid maxMinutes (reach band) through to planTrip, and ignores an out-of-range one", async () => {
+    planTrip.mockResolvedValue({ reachable: true, totalMinutes: 30, transfers: 0, legs: [] });
+    const iso = new Date(Math.round((Date.now() + 3_600_000) / 60000) * 60000).toISOString();
+    await call(`${FROM}&${TO}&departure=${encodeURIComponent(iso)}&maxMinutes=30`);
+    expect(planTrip.mock.calls[0][3]).toBe(30);
+    planTrip.mockClear();
+    await call(`${FROM}&${TO}&departure=${encodeURIComponent(iso)}&maxMinutes=999`); // out of range → undefined
+    expect(planTrip.mock.calls[0][3]).toBeUndefined();
   });
 
   it("ignores an out-of-horizon departure and derives from the time context instead (T6)", async () => {

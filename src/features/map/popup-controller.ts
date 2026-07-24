@@ -505,7 +505,10 @@ export function createPopupController({
       popup.setDOMContent(content);
       return popup;
     }
-    const next = new maplibregl.Popup({ closeButton: true, closeOnClick: false, maxWidth: "300px" })
+    // Compact (task 057): a narrower card + a capped, scrolling step list (CSS)
+    // so the directions no longer blanket the map; the drawn journey is then
+    // framed into the free space by `journey.frame`.
+    const next = new maplibregl.Popup({ closeButton: true, closeOnClick: false, maxWidth: "252px" })
       .setLngLat(coords)
       .setDOMContent(content)
       .addTo(map);
@@ -627,9 +630,26 @@ export function createPopupController({
         // empty map — review). The step list stays 1:1 with
         // plan.legs, so a popup step's index maps straight to a journey leg.
         const drawn = journey.draw(plan.legs);
-        if (drawn) reachDeclutter.set(true);
+        if (drawn) {
+          reachDeclutter.set(true);
+          // Fit the drawn journey into view (task 057) so the whole path reads
+          // beside the compact popup — the owner couldn't see it under the old
+          // full-size popup. Pad with the shell insets.
+          journey.frame(applyCameraPadding(true));
+        }
+        // Be honest about the band: MOTIS's fastest trip can occasionally exceed
+        // the clicked "~N-min reach" (a different query than the isochrone). Only
+        // claim "within" when it truly is (task 057 band honesty).
+        const withinBand = plan.totalMinutes <= band;
         showReach(
-          { state: "transit", title: "By public transport", detail: `Within your ~${band}-min reach — journey ${reachSummary(plan)}.`, steps },
+          {
+            state: "transit",
+            title: "By public transport",
+            detail: withinBand
+              ? `Within your ~${band}-min reach — journey ${reachSummary(plan)}.`
+              : `Journey ${reachSummary(plan)} — a little beyond your ~${band}-min reach.`,
+            steps,
+          },
           req.coords,
           popup,
         );
