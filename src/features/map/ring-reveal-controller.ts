@@ -54,16 +54,16 @@ export function createRingRevealController({
   }
 
   function setRingTransition(duration: number) {
-    for (const minutes of RING_BANDS) {
-      map.setPaintProperty(`iso-fill-${minutes}`, "fill-opacity-transition", { duration, delay: 0 });
-      map.setPaintProperty(`iso-line-${minutes}`, "line-opacity-transition", { duration, delay: 0 });
+    for (const band of RING_BANDS) {
+      map.setPaintProperty(`iso-fill-${band}`, "fill-opacity-transition", { duration, delay: 0 });
+      map.setPaintProperty(`iso-line-${band}`, "line-opacity-transition", { duration, delay: 0 });
     }
   }
 
   function stampRingPaintReadbacks() {
-    for (const minutes of RING_BANDS) {
-      el.dataset[`ringPaint${minutes}`] = String(
-        map.getPaintProperty(`iso-fill-${minutes}`, "fill-opacity"),
+    for (const band of RING_BANDS) {
+      el.dataset[`ringPaint${band}`] = String(
+        map.getPaintProperty(`iso-fill-${band}`, "fill-opacity"),
       );
     }
   }
@@ -72,17 +72,17 @@ export function createRingRevealController({
    * RING_BANDS order (45,30,15). Tests assert the settled attribute instead
    * of racing a sub-poll-interval intermediate. */
   function appendRingPaintTrace(stage: string) {
-    const paints = RING_BANDS.map((minutes) =>
-      String(map.getPaintProperty(`iso-fill-${minutes}`, "fill-opacity")),
+    const paints = RING_BANDS.map((band) =>
+      String(map.getPaintProperty(`iso-fill-${band}`, "fill-opacity")),
     ).join(",");
     const entry = `${stage}:${paints}`;
     const prev = el.dataset.ringPaintTrace;
     el.dataset.ringPaintTrace = prev ? `${prev}|${entry}` : entry;
   }
 
-  function setRingRevealed(minutes: (typeof RING_BANDS)[number], revealed: boolean) {
-    map.setPaintProperty(`iso-fill-${minutes}`, "fill-opacity", revealed ? ISOCHRONE_FILL_OPACITY : 0);
-    map.setPaintProperty(`iso-line-${minutes}`, "line-opacity", revealed ? ISOCHRONE_LINE_OPACITY : 0);
+  function setRingRevealed(band: (typeof RING_BANDS)[number], revealed: boolean) {
+    map.setPaintProperty(`iso-fill-${band}`, "fill-opacity", revealed ? ISOCHRONE_FILL_OPACITY : 0);
+    map.setPaintProperty(`iso-line-${band}`, "line-opacity", revealed ? ISOCHRONE_LINE_OPACITY : 0);
     // Paint-property READ-BACK (not requested-state echo): keeps the signature
     // transition objectively testable through MapLibre's live style.
     stampRingPaintReadbacks();
@@ -96,7 +96,7 @@ export function createRingRevealController({
     delete el.dataset.ringPaintTrace;
     if (reducedMotion.matches) {
       setRingTransition(0); // no inherited 320ms fade under reduced motion
-      for (const minutes of RING_BANDS) setRingRevealed(minutes, true);
+      for (const band of RING_BANDS) setRingRevealed(band, true);
       el.dataset.ringReveal = "settled";
       el.dataset.ringRevealSequence = "instant";
       appendRingPaintTrace("instant");
@@ -110,20 +110,20 @@ export function createRingRevealController({
     // before the reveal transition begins.
     const stages = ringRevealStages(ringFilterRef.current);
     setRingTransition(0);
-    for (const minutes of stages) setRingRevealed(minutes, false);
+    for (const band of stages) setRingRevealed(band, false);
     setRingTransition(320);
     el.dataset.ringReveal = "starting";
     el.dataset.ringRevealSequence = "";
     appendRingPaintTrace("start");
     const sequence: number[] = [];
-    for (const [index, minutes] of stages.entries()) {
+    for (const [index, band] of stages.entries()) {
       ringRevealTimers.push(
         setTimeout(() => {
-          setRingRevealed(minutes, true);
-          sequence.push(minutes);
-          el.dataset.ringReveal = String(minutes);
+          setRingRevealed(band, true);
+          sequence.push(band);
+          el.dataset.ringReveal = String(band);
           el.dataset.ringRevealSequence = sequence.join(",");
-          appendRingPaintTrace(String(minutes));
+          appendRingPaintTrace(String(band));
         }, RING_REVEAL_START_MS + index * RING_REVEAL_STAGE_MS),
       );
     }
@@ -136,14 +136,14 @@ export function createRingRevealController({
     );
   }
 
-  // Flip the per-minute layers' visibility to match a ring filter. Cancels any
+  // Flip the per-band layers' visibility to match a ring filter. Cancels any
   // in-flight staged reveal and snaps every band to full opacity so a mid-reveal
   // switch (e.g. All → 15) never exposes a layout-visible band stuck at 0.
   function applyRingFilter(filter: RingFilter) {
     if (!loadState.styleLoaded) return; // load applies the current filter itself
     cancelRingReveal(false);
     setRingTransition(0);
-    for (const minutes of RING_BANDS) setRingRevealed(minutes, true);
+    for (const band of RING_BANDS) setRingRevealed(band, true);
     el.dataset.ringReveal = "settled";
     if (!el.dataset.ringRevealSequence) el.dataset.ringRevealSequence = "filter";
     for (const [layerId, visibility] of Object.entries(ringLayerVisibility(filter))) {
