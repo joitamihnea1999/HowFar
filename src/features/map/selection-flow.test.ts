@@ -307,6 +307,22 @@ describe("selectionReducer — setPace / setTimeContext (task 051)", () => {
     const walk = selectionReducer(start("walk"), { type: "resolved", token: 1, origin: ORIGIN, label: "X" });
     expect(walk.departure).toBeNull();
   });
+
+  it("start clears a previously-resolved departure so a recompute-window right-click can't plan a stale ISO (task 060)", () => {
+    const resolved = selectionReducer(start("transit"), {
+      type: "resolved",
+      token: 1,
+      origin: ORIGIN,
+      label: "X",
+      departure: { iso: "2026-07-29T05:30:00.000Z", summary: "a weekday rush hour" },
+    });
+    expect(resolved.departure).not.toBeNull();
+    // A time-context change recompute (preserveLast) must drop the stale departure
+    // — until the fresh transit response re-sets it, reach falls back to the preset.
+    const recomputing = selectionReducer(resolved, { type: "start", mode: "transit", preserveLast: true });
+    expect(recomputing.departure).toBeNull();
+    expect(recomputing.lastSelection).not.toBeNull(); // origin preserved for the recompute
+  });
 });
 
 describe("sameTimeContext", () => {

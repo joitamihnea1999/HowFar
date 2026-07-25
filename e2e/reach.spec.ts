@@ -91,8 +91,8 @@ test("right-click with no selection shows the hint", async ({ page }) => {
 test("Escape closes the directions even after focus has left the panel (panel fable-1)", async ({ page }) => {
   const { map } = await setup(page);
   await search(page, map);
-  await rightClickCentre(page);
-  await expect(map).toHaveAttribute("data-reach-state", "walk");
+  await rightClickCentre(page); // task 060: any-mode right-click → transit directions
+  await expect(map).toHaveAttribute("data-reach-state", "transit");
   // Move focus off the panel to the map container (tabIndex=-1) — a panel-scoped
   // Escape handler would go dead here; the document-level one must still close.
   await page.getByTestId("app-map").focus();
@@ -101,15 +101,17 @@ test("Escape closes the directions even after focus has left the panel (panel fa
   await expect(map).not.toHaveAttribute("data-reach-state", /.+/);
 });
 
-test("walk mode: right-click answers client-side with no /api/reach call", async ({ page }) => {
+test("walk mode: right-click auto-switches to Public transport and plans the trip (task 060)", async ({ page }) => {
   const { map, reachCalls } = await setup(page);
-  await search(page, map);
+  await search(page, map); // walk mode
   await rightClickCentre(page);
-  await expect(map).toHaveAttribute("data-reach-state", "walk");
+  // No more walk-band answer — right-click always means "get me there by PT".
+  await expect(map).toHaveAttribute("data-mode", "transit");
+  await expect(map).toHaveAttribute("data-reach-state", "transit");
   const popup = page.getByTestId("reach-panel");
   await expect(popup).toBeVisible();
-  await expect(popup).toContainText("On foot"); // inside the (large) walk ring → deterministic band
-  expect(reachCalls).toHaveLength(0); // walk is fully client-side
+  await expect(popup).toContainText("By public transport");
+  expect(reachCalls).toHaveLength(1); // now a real MOTIS plan fetch
 });
 
 test("public-transport mode: right-click shows the planned trip with a specific line", async ({ page }) => {
@@ -161,7 +163,7 @@ test("directions DOCK in the result sheet — selection/filters block hidden, no
   await expect(sheet).toHaveAttribute("aria-label", "Location result");
 });
 
-test("public-transport mode: a point outside the rings is unreachable with NO /api/reach call (T1 gate)", async ({ page }) => {
+test("public-transport mode: a point outside the drawn rings STILL plans the trip (task 060 — the no-fetch T1 gate is gone)", async ({ page }) => {
   const reachCalls: string[] = [];
   await page.route("**/api/amenities**", (route) =>
     route.fulfill({ json: { origin: { lat: 44.4268, lng: 26.1025 }, walkMinutes: 15, amenities: [] } }),
@@ -169,7 +171,7 @@ test("public-transport mode: a point outside the rings is unreachable with NO /a
   await page.route("**/api/geocode**", (route) => route.fulfill({ json: { lat: 44.4268, lng: 26.1025, label: "Piața Unirii" } }));
   await page.route("**/api/suggest**", (route) => route.fulfill({ json: { suggestions: [] } }));
   await page.route("**/api/isochrone**", (route) => route.fulfill({ json: WALK }));
-  await page.route("**/api/transit**", (route) => route.fulfill({ json: TRANSIT_EMPTY })); // no reachable area
+  await page.route("**/api/transit**", (route) => route.fulfill({ json: TRANSIT_EMPTY })); // no drawn reach area
   await page.route("**/api/reach**", (route) => {
     reachCalls.push(route.request().url());
     route.fulfill({ json: PLAN });
@@ -181,10 +183,14 @@ test("public-transport mode: a point outside the rings is unreachable with NO /a
   await page.getByRole("button", { name: "Public transport", exact: true }).click();
   await expect(map).toHaveAttribute("data-mode", "transit");
 
+  // Owner's new intent: right-click ALWAYS shows the PT way. With no ring to fall
+  // inside, the band defaults to the 45-min transit max and the planner IS called
+  // (honesty comes from the drawn path + band-honesty copy, not a silent no-fetch).
   await rightClickCentre(page);
-  await expect(map).toHaveAttribute("data-reach-state", "none");
-  await expect(page.getByTestId("reach-panel")).toContainText("Beyond your reach");
-  expect(reachCalls).toHaveLength(0); // outside the painted reach → never hits the planner
+  await expect(map).toHaveAttribute("data-reach-state", "transit");
+  await expect(page.getByTestId("reach-panel")).toContainText("By public transport");
+  expect(reachCalls).toHaveLength(1);
+  expect(decodeURIComponent(reachCalls[0])).toContain("maxMinutes=45");
 });
 
 test("public-transport mode: no route found is reported", async ({ page }) => {

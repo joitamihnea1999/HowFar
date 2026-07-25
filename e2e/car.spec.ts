@@ -29,9 +29,6 @@ function polyRing(minutes: number, d: number) {
 // honesty-note slot label + right-click carMeta threading are exercised e2e.
 const CAR_META = { basis: "estimate", slotId: "am-peak", slotLabel: "weekday morning rush" };
 const CAR = { origin: { lat: 44.4268, lng: 26.1025 }, rings: [polyRing(10, 0.28), polyRing(20, 0.3), polyRing(30, 0.32)], car: CAR_META };
-// Empty rings ⇒ point-in-ring is always null ⇒ "Beyond your driving reach".
-const emptyRing = (minutes: number) => ({ minutes, geometry: { type: "MultiPolygon", coordinates: [] } });
-const CAR_EMPTY = { origin: { lat: 44.4268, lng: 26.1025 }, rings: [emptyRing(10), emptyRing(20), emptyRing(30)], car: CAR_META };
 const WALK = { origin: { lat: 44.4268, lng: 26.1025 }, rings: [polyRing(15, 0.28), polyRing(30, 0.3), polyRing(45, 0.32)] };
 
 async function setup(page: Page, carBody: unknown = CAR) {
@@ -69,12 +66,6 @@ async function selectCar(page: Page, map: ReturnType<Page["getByTestId"]>) {
   await expect(map).toHaveAttribute("data-camera-settled", "true", { timeout: 10_000 });
 }
 
-async function rightClickCentre(page: Page) {
-  const canvas = page.locator(".maplibregl-canvas");
-  const box = await canvas.boundingBox();
-  if (!box) throw new Error("no canvas");
-  await canvas.click({ button: "right", position: { x: Math.round(box.width / 2), y: Math.round(box.height / 2) } });
-}
 
 test("Car mode fetches /api/car (time context, NO pace) and labels the legend 10/20/30", async ({ page }) => {
   const { map, carCalls } = await setup(page);
@@ -181,32 +172,8 @@ test("Car mode shows the driving-estimate honesty note naming the assumed traffi
   await expect(note).toContainText("weekday morning rush");
 });
 
-test("Car right-click reports the drive band client-side with ZERO /api/reach calls", async ({ page }) => {
-  const { map, reachCalls } = await setup(page);
-  await selectCar(page, map);
-  await rightClickCentre(page);
-  await expect(map).toHaveAttribute("data-reach-state", "car");
-  const popup = page.getByTestId("reach-panel");
-  await expect(popup).toContainText("By car");
-  await expect(popup).toContainText("drive"); // "...minutes' drive..."
-  await expect(popup).toContainText("traffic"); // the estimate caveat is in the popup itself (C-F)
-  // Assert the actual DISPLAYED band number: the centre is inside the inner
-  // (10-min) car ring, so the popup must say "10 minutes" — proving reachBand
-  // reports the car display minute (10/20/30), NOT the positional band id
-  // 15/30/45 (impl F2, and empirically refutes the "band-id lie" concern).
-  await expect(popup).toContainText("10 minutes");
-  // And it must NOT show walk copy — this right-click came after a Walk→Car
-  // switch, so a stale walk band would say "On foot" (stash-race fence, impl F5).
-  await expect(popup).not.toContainText("On foot");
-  // Car reach is fully client-side — the transit planner is NEVER called.
-  expect(reachCalls).toHaveLength(0);
-});
-
-test("Car right-click outside the drive area answers 'Beyond your driving reach' (no fetch)", async ({ page }) => {
-  const { map, reachCalls } = await setup(page, CAR_EMPTY);
-  await selectCar(page, map);
-  await rightClickCentre(page);
-  await expect(map).toHaveAttribute("data-reach-state", "car");
-  await expect(page.getByTestId("reach-panel")).toContainText("Beyond your driving reach");
-  expect(reachCalls).toHaveLength(0);
-});
+// Task 060: right-click no longer produces a car drive-band answer — in EVERY
+// mode it auto-switches to Public transport and draws the journey. That unified
+// behavior (incl. from car mode) is covered end-to-end in reach-journey.spec.ts
+// ("car-mode right-click AUTO-SWITCHES…"), which has the transit + plan fixtures
+// this car-only setup deliberately omits. No car-specific right-click spec remains.

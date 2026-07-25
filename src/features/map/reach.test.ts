@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ReachLeg, ReachPlan } from "@/features/isochrones/server/transit-plan";
-import { buildReachSteps, carReachText, decideReach, hasTransitLeg, isWalkOnly, journeyLegs, journeyStops, reachBand, reachSummary, transitModeLabel, walkReachText } from "@/features/map/reach";
+import { buildReachSteps, hasTransitLeg, journeyLegs, journeyStops, reachBand, reachSummary, transitModeLabel } from "@/features/map/reach";
 
 // A square Polygon centred at (clng, clat), half-width halfDeg, as a ring's geometry.
 function square(clat: number, clng: number, halfDeg: number) {
@@ -50,33 +50,7 @@ describe("reachBand", () => {
   });
 });
 
-describe("decideReach (band → action policy, impl T1)", () => {
-  it("walk always yields a walk answer, including a null band (outside walk reach)", () => {
-    expect(decideReach("walk", 15)).toEqual({ kind: "walk", band: 15 });
-    expect(decideReach("walk", null)).toEqual({ kind: "walk", band: null });
-  });
-  it("transit OUTSIDE every ring is unreachable — no provider call", () => {
-    expect(decideReach("transit", null)).toEqual({ kind: "transit-unreachable" });
-  });
-  it("transit inside a band plans the trip, carrying the band for honest framing", () => {
-    expect(decideReach("transit", 30)).toEqual({ kind: "transit", band: 30 });
-  });
-  it("car yields a car answer (band-only, NO transit fetch) for both a band and a null band (task 053)", () => {
-    // Car must be matched BEFORE the non-transit → walk fallthrough — a regression
-    // to `{kind:"walk"}` here would ship the wrong copy and (via handleReach)
-    // risk a transit fetch. This is the tripwire for plan-panel C-A/F3.
-    expect(decideReach("car", 20)).toEqual({ kind: "car", band: 20 });
-    expect(decideReach("car", null)).toEqual({ kind: "car", band: null });
-  });
-});
 
-describe("isWalkOnly", () => {
-  it("true only when every leg is a WALK leg", () => {
-    expect(isWalkOnly([{ mode: "WALK", fromName: "A", toName: "B", minutes: 5 }])).toBe(true);
-    expect(isWalkOnly([{ mode: "WALK", fromName: "A", toName: "B", minutes: 5 }, { mode: "BUS", fromName: "B", toName: "C", minutes: 10 }])).toBe(false);
-    expect(isWalkOnly([])).toBe(false);
-  });
-});
 
 describe("transitModeLabel", () => {
   it("maps known MOTIS modes and title-cases unknown ones", () => {
@@ -179,6 +153,28 @@ describe("journeyStops (drawable board/transfer/alight model)", () => {
     expect(journeyStops(legs)[1].name).toBe("Real Interchange");
   });
 
+  it("when BOTH sides of a coincident merge are sentinels, keeps the first (betterName both-bad branch)", () => {
+    const legs: ReachLeg[] = [
+      { mode: "BUS", fromName: "A", toName: "END", minutes: 10, from: P(44.4, 26.1), to: P(44.42, 26.1) },
+      { mode: "TRAM", fromName: "START", toName: "B", minutes: 10, from: P(44.42, 26.1), to: P(44.44, 26.1) },
+    ];
+    // alight "END" (bad) merges with board "START" (bad) → betterName returns the
+    // first ("END"), not a swap to the equally-bad second.
+    expect(journeyStops(legs)[1].name).toBe("END");
+  });
+
+  it("skips a vehicle leg's missing from/to endpoint (guards on leg.from / leg.to)", () => {
+    const legs: ReachLeg[] = [
+      { mode: "BUS", fromName: "A", toName: "B", minutes: 10, to: P(44.42, 26.1) }, // no `from`
+      { mode: "TRAM", fromName: "B", toName: "C", minutes: 10, from: P(44.42, 26.1) }, // no `to`
+    ];
+    // Only the present endpoints contribute: leg0's `to` (B) + leg1's `from` (B),
+    // which coincide → one merged stop. No throw on the absent endpoints.
+    const stops = journeyStops(legs);
+    expect(stops).toHaveLength(1);
+    expect(stops[0].name).toBe("B");
+  });
+
   it("returns [] for a walk-only itinerary (no vehicle legs)", () => {
     expect(journeyStops([{ mode: "WALK", fromName: "START", toName: "END", minutes: 8, from: P(44.4, 26.1), to: P(44.41, 26.1) }])).toEqual([]);
   });
@@ -201,36 +197,11 @@ describe("journeyLegs (drawable leg lines)", () => {
   });
 });
 
-describe("reachSummary + walkReachText", () => {
+describe("reachSummary", () => {
   it("pluralises transfers", () => {
     const base = { reachable: true as const, totalMinutes: 57, legs: [] };
     expect(reachSummary({ ...base, transfers: 0 })).toBe("~57 min · no transfers");
     expect(reachSummary({ ...base, transfers: 1 })).toBe("~57 min · 1 transfer");
     expect(reachSummary({ ...base, transfers: 2 } as Extract<ReachPlan, { reachable: true }>)).toBe("~57 min · 2 transfers");
-  });
-
-  it("walk copy reflects the band or 'outside'", () => {
-    expect(walkReachText(15).title).toBe("On foot");
-    expect(walkReachText(15).detail).toContain("15");
-    expect(walkReachText(null).title).toBe("Outside your walking reach");
-  });
-
-  it("car copy reflects the drive band with the estimate caveat, or 'beyond' (task 053, C-F)", () => {
-    expect(carReachText(20).title).toBe("By car");
-    expect(carReachText(20).detail).toContain("20");
-    // The no-live-traffic honesty caveat must be in the popup copy itself.
-    expect(carReachText(20).detail).toMatch(/estimate/i);
-    expect(carReachText(20).detail).toMatch(/traffic/i);
-    expect(carReachText(null).title).toBe("Beyond your driving reach");
-  });
-
-  it("car copy names the assumed traffic slot when carMeta is present (task 058 honesty)", () => {
-    const withMeta = carReachText(20, { basis: "estimate", slotId: "am-peak", slotLabel: "weekday morning rush" });
-    expect(withMeta.detail).toContain("weekday morning rush");
-    expect(withMeta.detail).toMatch(/not live traffic/i);
-    // Null band ignores meta and stays the "beyond" message.
-    expect(carReachText(null, { basis: "estimate", slotId: "am-peak", slotLabel: "weekday morning rush" }).title).toBe(
-      "Beyond your driving reach",
-    );
   });
 });

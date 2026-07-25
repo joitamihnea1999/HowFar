@@ -1,11 +1,12 @@
 import { expect, test, type Page } from "@playwright/test";
 
-// Visual right-click journey (task 054): a transit-reachable right-click DRAWS
-// the trip on the map (`data-reach-journey`), DECLUTTERS the amenity markers
-// (`data-amenity-declutter=on`), and ties popup-step hover to on-map highlight
-// (`data-reach-hover`); closing / a new selection / a mode change restores the
-// markers and clears the draw. Walk + car answers stay text-only (no draw, no
-// declutter, and — for walk/car — no /api/reach call). Provider calls stubbed by
+// Visual right-click journey (task 054; unified to public-transport-only in
+// task 060): a right-click in ANY mode auto-switches to Public transport and
+// DRAWS the trip on the map (`data-reach-journey`), DECLUTTERS the amenity
+// markers (`data-amenity-declutter=on`), and ties popup-step hover to on-map
+// highlight (`data-reach-hover`); closing / a new selection / a mode change
+// restores the markers and clears the draw. A plan with no transit leg is
+// reported as "No public-transport route" (no draw). Provider calls stubbed by
 // exact path; the right-click is a native right-button click → contextmenu.
 
 function polyRing(minutes: number, d: number) {
@@ -108,6 +109,29 @@ async function journeyScreenBBox(page: Page) {
     return Number.isFinite(minX) ? { minX, minY, maxX, maxY } : null;
   });
 }
+
+// True when every given [lng,lat] projects INSIDE the map viewport. We pass the
+// KNOWN journey extremes (PLAN's origin + far endpoint) rather than reading
+// querySourceFeatures — the latter only returns loaded tiles, so a clipped far
+// leg could go unchecked and pass vacuously (impl-panel fable-1). project()
+// works on any coord regardless of tiling, so this is tile-independent.
+async function coordsInView(page: Page, coords: [number, number][]) {
+  return page.evaluate((cs) => {
+    const m = (window as unknown as {
+      __hfMap?: { project: (c: [number, number]) => { x: number; y: number }; getContainer: () => HTMLElement };
+    }).__hfMap;
+    if (!m) return false;
+    const el = m.getContainer();
+    const W = el.clientWidth, H = el.clientHeight;
+    return cs.every((c) => {
+      const p = m.project(c);
+      return p.x >= -2 && p.y >= -2 && p.x <= W + 2 && p.y <= H + 2;
+    });
+  }, coords);
+}
+// PLAN's farthest-apart coords (origin ↔ final alight) — if BOTH are framed, the
+// whole trip between them is in view.
+const PLAN_EXTENT: [number, number][] = [[26.1025, 44.4268], [26.087, 44.47]];
 
 async function setup(page: Page) {
   const reachCalls: string[] = [];
@@ -282,29 +306,62 @@ test("switching mode mid-journey restores the amenities and clears the draw", as
   await expect(map).toHaveAttribute("data-amenity-declutter", "off");
 });
 
-test("walk mode right-click draws NOTHING and makes no /api/reach call", async ({ page }) => {
+test("walk-mode right-click AUTO-SWITCHES to Public transport and draws the journey (task 060)", async ({ page }) => {
   const { map, reachCalls } = await setup(page);
-  await search(page, map);
-  await rightClickCentre(page); // still in walk mode
-  await expect(map).toHaveAttribute("data-reach-state", "walk");
-  await expect(map).not.toHaveAttribute("data-reach-journey", /.*/);
-  await expect(map).not.toHaveAttribute("data-amenity-declutter", "on");
-  expect(reachCalls).toHaveLength(0);
+  await search(page, map); // still in walk mode
+  await rightClickCentre(page);
+  // The single owner-asked action: flip to Public transport + draw the trip.
+  await expect(map).toHaveAttribute("data-mode", "transit");
+  await expect(map).toHaveAttribute("data-reach-state", "transit");
+  await expect(map).toHaveAttribute("data-reach-journey", "3", { timeout: 5000 });
+  await expect(map).toHaveAttribute("data-amenity-declutter", "on");
+  expect(reachCalls).toHaveLength(1); // exactly one plan fetch
+  // Rendered truth: the journey is actually drawn AND fully framed in view (the
+  // cross-mode flyTo must not clip it — plan-panel F1).
+  await expect.poll(() => reachRenderedCounts(page)).toEqual({ lines: 3, stops: 2 });
+  await expect(map).toHaveAttribute("data-camera-settled", "true");
+  // Polled (the frame is animated) + tile-independent: the whole trip is framed,
+  // not clipped by the cross-mode flyTo (plan-panel F1).
+  await expect.poll(() => coordsInView(page, PLAN_EXTENT)).toBe(true);
 });
 
-test("car mode right-click draws NOTHING and makes no /api/reach call", async ({ page }) => {
+test("car-mode right-click AUTO-SWITCHES to Public transport and draws the journey (task 060)", async ({ page }) => {
   const { map, reachCalls } = await setup(page);
   await search(page, map);
   await page.getByRole("button", { name: "Car", exact: true }).click();
   await expect(map).toHaveAttribute("data-mode", "car");
   await rightClickCentre(page);
-  await expect(map).toHaveAttribute("data-reach-state", "car");
-  await expect(map).not.toHaveAttribute("data-reach-journey", /.*/);
-  await expect(map).not.toHaveAttribute("data-amenity-declutter", "on");
-  expect(reachCalls).toHaveLength(0);
+  await expect(map).toHaveAttribute("data-mode", "transit");
+  await expect(map).toHaveAttribute("data-reach-journey", "3", { timeout: 5000 });
+  await expect(map).toHaveAttribute("data-amenity-declutter", "on");
+  expect(reachCalls).toHaveLength(1);
+  await expect.poll(() => reachRenderedCounts(page)).toEqual({ lines: 3, stops: 2 });
+  // Car→transit runs the identical flyTo-vs-frame race as walk — assert it too (opus-2).
+  await expect(map).toHaveAttribute("data-camera-settled", "true");
+  await expect.poll(() => coordsInView(page, PLAN_EXTENT)).toBe(true);
 });
 
-test("a walk-only transit fallback stays text-only (no draw, no declutter)", async ({ page }) => {
+test("camera race: a transit recompute that lands AFTER the plan does not clip the journey (plan-panel F1)", async ({ page }) => {
+  const { map } = await setup(page);
+  // Delay ONLY /api/transit so the mode-switch recompute resolves well after the
+  // /api/reach plan has drawn+framed the journey — the worst-case ordering for the
+  // flyTo-vs-frame race. The reframe-after-render guard must keep the path in view.
+  await page.unroute("**/api/transit**");
+  await page.route("**/api/transit**", async (route) => {
+    await new Promise((r) => setTimeout(r, 900));
+    await route.fulfill({ json: TRANSIT });
+  });
+  await search(page, map); // walk
+  await rightClickCentre(page);
+  await expect(map).toHaveAttribute("data-reach-journey", "3", { timeout: 5000 });
+  // Now let the delayed transit recompute land + settle its camera, THEN assert
+  // the journey is still fully framed (a regression would fly to the origin last).
+  await expect(map).toHaveAttribute("data-mode", "transit");
+  await expect(map).toHaveAttribute("data-camera-settled", "true");
+  await expect.poll(() => coordsInView(page, PLAN_EXTENT)).toBe(true);
+});
+
+test("a walk-only plan → 'No public-transport route' (task 060: no walk-band answer), no draw", async ({ page }) => {
   const { map } = await setup(page);
   // Override /api/reach to return a direct walk-only plan for this test.
   await page.route("**/api/reach**", (route) => route.fulfill({ json: WALK_ONLY_PLAN }));
@@ -312,7 +369,7 @@ test("a walk-only transit fallback stays text-only (no draw, no declutter)", asy
   await toTransit(page, map);
   await rightClickCentre(page);
 
-  await expect(page.getByTestId("reach-panel")).toContainText("On foot");
+  await expect(page.getByTestId("reach-panel")).toContainText("No public-transport route");
   await expect(map).not.toHaveAttribute("data-reach-journey", /.*/);
   await expect(map).not.toHaveAttribute("data-amenity-declutter", "on");
 });

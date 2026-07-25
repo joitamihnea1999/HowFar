@@ -2,13 +2,13 @@ import { booleanPointInPolygon } from "@turf/boolean-point-in-polygon";
 import type { Feature, MultiPolygon, Polygon } from "geojson";
 
 import type { ReachLeg, ReachPlan, ReachPoint } from "@/features/isochrones/server/transit-plan";
-import type { CarMeta, Mode } from "@/features/map/selection-flow";
 
 /**
- * Pure helpers for the right-click "how do I get there?" popup (task 052 D):
- * client-side reachability banding (point-in-polygon on the SAME rings the map
- * drew) and the display formatting of a MOTIS trip into human steps. Kept pure
- * and unit-tested so the popup controller only does DOM + fetch.
+ * Pure helpers for the right-click "how do I get there?" directions (task 052 D;
+ * unified to public-transport-only in task 060): client-side reachability banding
+ * (point-in-polygon on the SAME transit rings the map drew) and the display
+ * formatting of a MOTIS trip into human steps. Kept pure + unit-tested so the
+ * directions controller only does DOM + fetch.
  */
 
 interface RingLike {
@@ -37,34 +37,6 @@ export function reachBand(point: [number, number], rings: RingLike[]): number | 
     }
   }
   return null;
-}
-
-/** What a right-click should do, decided purely from the mode + the point's
- * band (impl T1/P2). Transit outside every ring is answered WITHOUT a provider
- * call; walk always shows a band answer (a null band = "outside walk reach").
- * Pure + unit-tested so the gate can't silently regress to always-fetch. */
-export type ReachAction =
-  | { kind: "walk"; band: number | null }
-  | { kind: "car"; band: number | null }
-  | { kind: "transit-unreachable" }
-  | { kind: "transit"; band: number };
-
-export function decideReach(mode: Mode, band: number | null): ReachAction {
-  // Exhaustive over Mode (not a `string` fallthrough): a future 4th mode without
-  // a case here is a compile error, not a silent walk-band regression — the same
-  // exhaustiveness guarantee the task gave `isochronePath`/`modeWord` (impl F1).
-  switch (mode) {
-    case "car":
-      return { kind: "car", band };
-    case "walk":
-      return { kind: "walk", band };
-    case "transit":
-      return band === null ? { kind: "transit-unreachable" } : { kind: "transit", band };
-    default: {
-      const _exhaustive: never = mode;
-      return _exhaustive;
-    }
-  }
 }
 
 const MODE_LABELS: Record<string, string> = {
@@ -96,24 +68,15 @@ function stopLabel(name: string): string {
 }
 
 /**
- * What a right-click asks the popup controller to render. Built in AppMap (which
- * holds the selection + stashed rings) and consumed by the popup controller
- * (which does the DOM + the transit fetch). Walk reach is resolved client-side to
- * a band here; transit carries a ready-built `/api/reach` URL to fetch.
+ * What a right-click asks the directions controller to render (task 060: always
+ * public transport). Built in AppMap (which holds the selection + stashed rings)
+ * and consumed by the controller (DOM + the `/api/reach` fetch). `transit`
+ * carries a ready-built URL; `band` is the transit reach ceiling the trip time is
+ * framed against (the point's ring band when known, else the 45-min transit max —
+ * always a number, so the honesty copy never renders "undefined").
  */
 export type ReachRequest =
   | { kind: "hint"; coords: [number, number] }
-  | { kind: "walk"; coords: [number, number]; band: number | null }
-  // Car reach is resolved fully client-side to a drive band (no provider call),
-  // like walk but with driving copy + the traffic-estimate caveat (tasks 053/
-  // 058). `carMeta` carries the traffic slot the rings were computed for so the
-  // popup names WHICH traffic it assumed (honest copy).
-  | { kind: "car"; coords: [number, number]; band: number | null; carMeta: CarMeta | null }
-  // The clicked point is outside every drawn transit ring — answer WITHOUT a
-  // provider call, so the popup never contradicts the painted reach (T1/P2).
-  | { kind: "transit-unreachable"; coords: [number, number] }
-  // Inside the `band`-minute ring: fetch the actual journey; `band` is shown so
-  // the trip time is framed against the reach the user sees (P8).
   | { kind: "transit"; coords: [number, number]; band: number; url: string };
 
 /** A popup step: two lines of already-safe text (rendered via textContent). */
@@ -258,40 +221,3 @@ export function reachSummary(plan: Extract<ReachPlan, { reachable: true }>): str
   return `~${plan.totalMinutes} min · ${transfers}`;
 }
 
-/** A planned trip with no transit leg is really walking directions — label it
- * "On foot", not "By public transport" (impl-panel T4). */
-export function isWalkOnly(legs: ReachLeg[]): boolean {
-  return legs.length > 0 && legs.every((l) => l.mode === "WALK");
-}
-
-/** Walk-mode reach copy from a band (or null = outside the walk area). */
-export function walkReachText(band: number | null): { title: string; detail: string } {
-  if (band === null) {
-    return { title: "Outside your walking reach", detail: "This point is beyond your mapped walk area." };
-  }
-  return { title: "On foot", detail: `Within about ${band} minutes' walk of your start.` };
-}
-
-/** Car-mode reach copy from a drive band (or null = outside the drive area).
- * Names the traffic slot the reach was computed for and carries the
- * estimate/typical-congestion caveat (the rings are ORS free-flow adjusted by a
- * per-time-of-day congestion factor, NOT live traffic — tasks 053/058). The
- * reach popup renders this copy directly (not just SelectionCard) — plan-panel
- * C-F. */
-export function carReachText(band: number | null, carMeta?: CarMeta | null): { title: string; detail: string } {
-  if (band === null) {
-    // Keep the traffic/estimate context even on a negative result — trust
-    // matters most here (panel terra-2), and the dock hides the SelectionCard
-    // note while directions are shown.
-    const forTraffic = carMeta ? ` for typical ${carMeta.slotLabel} traffic` : "";
-    return {
-      title: "Beyond your driving reach",
-      detail: `This point is outside your mapped drive area${forTraffic} — an estimate from typical congestion, not live traffic.`,
-    };
-  }
-  const traffic = carMeta ? ` in typical ${carMeta.slotLabel} traffic` : "";
-  return {
-    title: "By car",
-    detail: `Within about ${band} minutes' drive of your start${traffic} — an estimate from typical congestion, not live traffic.`,
-  };
-}

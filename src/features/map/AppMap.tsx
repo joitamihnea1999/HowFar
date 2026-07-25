@@ -47,7 +47,7 @@ import { createRoutePathController } from "@/features/map/route-path-controller"
 import { createSelectFlowController } from "@/features/map/select-flow-controller";
 import { createSelectionRender } from "@/features/map/selection-render";
 import { createLongPress } from "@/features/map/long-press";
-import { decideReach, reachBand } from "@/features/map/reach";
+import { reachBand } from "@/features/map/reach";
 import { teardownInOrder } from "@/features/map/teardown";
 import ModeToggle from "@/features/map/ModeToggle";
 import PaceControl from "@/features/map/PaceControl";
@@ -363,6 +363,14 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       // stash so a right-click car band names the traffic it was computed for.
       reachRef.current = { rings, mode, origin, car: selRef.current.car };
       renderSelection(origin, label, rings, mode);
+      // Camera-race guard (task 060, plan-panel F1): a cross-mode right-click
+      // fires switchMode("transit"), whose recompute lands here and flyTo's the
+      // origin — which could clip an already-drawn right-click journey if the
+      // isochrone resolves AFTER the MOTIS plan. Re-fit the journey so its frame
+      // stays authoritative. No-op when nothing is drawn. (If that transit
+      // recompute instead FAILS, the drawn journey stays and Back reveals the
+      // standard error card — accepted low-likelihood degradation, plan-panel F-parked.)
+      reachDirections.reframe();
     };
     const clearSelectionReach = () => {
       reachRef.current = null;
@@ -439,57 +447,51 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
     };
     window.addEventListener("resize", onResize);
 
-    // Right-click / long-press "how do I get there?" (task 052 D). Answers for
-    // the ACTIVE mode against the SAME rings the map drew: walk = client-side
-    // band; transit = a MOTIS trip plan via /api/reach. Only computes on demand.
+    // Right-click / long-press "how do I get there?" — task 060: ONE action in
+    // every mode. Right-clicking anywhere means "get me there by public
+    // transport": auto-switch to transit (from walk/car) and draw the journey +
+    // path in the directions dock (owner ask). The walk/car band answers are
+    // gone. Deliberately does NOT defer to pickAmenity (unlike the left-click):
+    // the reach question is "how do I get to THIS point", answerable anywhere —
+    // including over a marker.
     const handleReach = (lngLat: { lng: number; lat: number }) => {
       const sel = selRef.current;
-      const stash = reachRef.current;
       const coords: [number, number] = [lngLat.lng, lngLat.lat];
-      // Deliberately does NOT defer to pickAmenity (unlike the left-click, which
-      // opens a marker's popup): the reach question is "how do I get to THIS
-      // point", answerable anywhere on the map — including over a marker.
-      // No resolved selection yet (or one still loading): explain what to do.
-      if (!sel.lastSelection || sel.status === "loading" || !stash) {
+      // No resolved origin yet (true first-load): explain what to do. Guard on
+      // lastSelection ONLY — a right-click DURING a transit recompute still has a
+      // stable origin and must open directions, not fall to the hint (plan-panel F5).
+      if (!sel.lastSelection) {
         return void reachDirections.open({ kind: "hint", coords });
       }
-      // Classify the point against the SAME rings the map drew (all modes) so
-      // the answer can never contradict the painted reach (task 052 P2 / impl T1).
-      // Exhaustive switch: only the `transit` arm fetches /api/reach, so car (and
-      // walk) can NEVER fall through to a public-transport plan (plan-panel C-A).
-      const action = decideReach(stash.mode, reachBand(coords, stash.rings));
-      switch (action.kind) {
-        case "walk":
-          return void reachDirections.open({ kind: "walk", coords, band: action.band });
-        case "car":
-          // Car reach is band-only, resolved client-side — no provider call.
-          // Carry the stashed car basis/slot so the copy names the traffic.
-          return void reachDirections.open({ kind: "car", coords, band: action.band, carMeta: stash.car });
-        case "transit-unreachable":
-          // Outside every transit ring → answer honestly with NO provider call.
-          return void reachDirections.open({ kind: "transit-unreachable", coords });
-        case "transit": {
-          const params = new URLSearchParams({
-            fromLat: String(stash.origin.lat),
-            fromLng: String(stash.origin.lng),
-            toLat: String(lngLat.lat),
-            toLng: String(lngLat.lng),
-            // The band the point fell in, so the planner prefers a trip within the
-            // painted "~N-min reach" rather than a faster over-band detour (task 057).
-            maxMinutes: String(action.band),
-          });
-          // Prefer the selection's resolved departure so the trip matches the
-          // rings on screen; else pass the preset for the server. (Preset-only
-          // since task 059 removed Custom; task 060 rewrites this handler.)
-          if (sel.departure?.iso) params.set("departure", sel.departure.iso);
-          else params.set("preset", sel.timeContext.preset);
-          return void reachDirections.open({ kind: "transit", coords, band: action.band, url: `/api/reach?${params.toString()}` });
-        }
-        default: {
-          const _exhaustive: never = action;
-          return _exhaustive;
-        }
-      }
+      // Snapshot everything the request needs BEFORE switchMode (which nulls the
+      // ring stash + starts an async recompute) so the URL is built from stable
+      // values (plan-panel F6). The band is the point's transit ring band when the
+      // stash already holds transit rings, else the 45-min transit max — ALWAYS a
+      // number so the honesty copy never renders "undefined", and it bounds the
+      // planner's within-band ranking cross-mode (plan-panel F2/F3).
+      const origin = sel.lastSelection;
+      const departureIso = sel.departure?.iso;
+      const preset = sel.timeContext.preset;
+      const stash = reachRef.current;
+      const band = stash && stash.mode === "transit" ? reachBand(coords, stash.rings) ?? 45 : 45;
+      const params = new URLSearchParams({
+        fromLat: String(origin.lat),
+        fromLng: String(origin.lng),
+        toLat: String(lngLat.lat),
+        toLng: String(lngLat.lng),
+        // Prefer a within-band trip over a faster over-band detour (task 057).
+        maxMinutes: String(band),
+      });
+      // Prefer the selection's resolved departure (exact match to the rings on
+      // screen once transit resolves); else the preset (preset-only since 059).
+      if (departureIso) params.set("departure", departureIso);
+      else params.set("preset", preset);
+      // Switch to transit FIRST: select({recompute}) runs clearSelection →
+      // closeStopPopup → closeReach synchronously, tearing down any prior
+      // directions BEFORE we open the new ones (teardown-race-safe). No-ops when
+      // already in transit (no redundant recompute).
+      if (sel.mode !== "transit") switchMode("transit");
+      reachDirections.open({ kind: "transit", coords, band, url: `/api/reach?${params.toString()}` });
     };
 
     // Touch long-press for iOS Safari (which never emits contextmenu). A fired

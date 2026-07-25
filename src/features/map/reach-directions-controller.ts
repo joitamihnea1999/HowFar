@@ -1,11 +1,8 @@
 import type { ReachPlan } from "@/features/isochrones/server/transit-plan";
 import {
   buildReachSteps,
-  carReachText,
   hasTransitLeg,
-  isWalkOnly,
   reachSummary,
-  walkReachText,
   type ReachRequest,
 } from "@/features/map/reach";
 import type { ReachJourneyController } from "@/features/map/reach-journey-controller";
@@ -21,8 +18,8 @@ import type { EdgeInsets } from "@/features/map/route-framing";
  *
  * Responsibilities (ported verbatim from the popup version — the race handling
  * below was panel-caught and must not regress):
- *   - the reach view state machine (hint / walk / car / outside / none /
- *     loading / error / transit-with-steps);
+ *   - the reach view state machine (hint / outside / none / loading / error /
+ *     transit-with-steps) — public-transport only since task 060;
  *   - the `/api/reach` fetch under ONE generation + abort + 12s deadline, with
  *     the "invalidate gen BEFORE abort" and "late-json guard" fixes;
  *   - orchestrating the drawn journey, amenity declutter, destination pin, and
@@ -47,7 +44,7 @@ export interface ReachStepView {
 /** What `ReachPanel` renders. `state` drives the `data-reach-state` stamp and
  * the panel's test hooks; `steps` is present only for a drawn transit journey. */
 export interface ReachView {
-  state: "hint" | "walk" | "car" | "outside" | "none" | "loading" | "error" | "transit";
+  state: "hint" | "outside" | "none" | "loading" | "error" | "transit";
   title: string;
   detail: string;
   steps?: ReachStepView[];
@@ -103,9 +100,9 @@ export function createReachDirectionsController({
   function open(req: ReachRequest) {
     // Self-contained invalidation (panel opus-1/grok-5): abort any in-flight
     // fetch, bump the gen so a late response can't draw, and tear down the prior
-    // journey/pin/declutter — WITHOUT relying on the arbiter callback. A non-
-    // transit open (walk/car/hint) otherwise leaves an in-flight transit fetch
-    // able to draw over the new answer if `closeStopPopup` were ever mis-wired.
+    // journey/pin/declutter — WITHOUT relying on the arbiter callback. A `hint`
+    // open (or a re-open) otherwise leaves an in-flight transit fetch able to
+    // draw over the new answer if `closeStopPopup` were ever mis-wired.
     reachAbort?.abort();
     reachGen += 1;
     teardown();
@@ -126,27 +123,11 @@ export function createReachDirectionsController({
       });
       return;
     }
-    if (req.kind === "walk") {
-      const { title, detail } = walkReachText(req.band);
-      setView({ state: "walk", title, detail });
-      return;
-    }
-    if (req.kind === "car") {
-      const { title, detail } = carReachText(req.band, req.carMeta);
-      setView({ state: "car", title, detail });
-      return;
-    }
-    if (req.kind === "transit-unreachable") {
-      setView({
-        state: "none",
-        title: "Beyond your reach",
-        detail: "This point is outside your public-transport reach for the selected time.",
-      });
-      return;
-    }
 
-    // Transit inside the band: loading → fetch → journey / none / error, under
-    // one generation. `band` frames the trip time against the visible reach.
+    // Task 060: every right-click is a public-transport directions request (any
+    // mode auto-switches to transit in AppMap first). loading → fetch → journey /
+    // none / error, under one generation. `band` frames the trip time against the
+    // visible reach (the point's ring band, or the 45-min transit max cross-mode).
     const band = req.band;
     const gen = ++reachGen;
     const controller = new AbortController();
@@ -178,23 +159,20 @@ export function createReachDirectionsController({
         if (!plan.reachable) {
           return void setView({ state: "none", title: "No public-transport route", detail: "No trip was found for this departure time." });
         }
-        const steps = buildReachSteps(plan.legs).map((s, i) => ({ ...s, mode: plan.legs[i].mode }));
-        // A plan with no transit leg is really walking (or a bike direct
-        // fallback) — stay text-only: NO draw, NO declutter (the visual
-        // treatment is for public transport; decluttering for a bare straight
-        // line is worse than the text — plan-panel A). The prior draw was torn
-        // down by the arbiter above.
+        // A plan with no transit leg is a walk-only (or bike-direct) fallback —
+        // task 060: the owner rejected the walk/car band answers as useless, so a
+        // right-click that yields no public-transport leg is reported as "no
+        // public-transport route" (same as an unreachable result), NOT an "On
+        // foot" walk-band. No draw, no declutter. The prior draw was torn down by
+        // the arbiter above.
         if (!hasTransitLeg(plan.legs)) {
-          const walkOnly = isWalkOnly(plan.legs);
           return void setView({
-            state: "transit",
-            title: walkOnly ? "On foot" : "Directions",
-            detail: walkOnly
-              ? `Within your ~${band}-min reach — about a ${plan.totalMinutes}-min walk.`
-              : `Within your ~${band}-min reach — about ${plan.totalMinutes} min.`,
-            steps,
+            state: "none",
+            title: "No public-transport route",
+            detail: "No public-transport trip was found for this point.",
           });
         }
+        const steps = buildReachSteps(plan.legs).map((s, i) => ({ ...s, mode: plan.legs[i].mode }));
         // A real public-transport journey: DRAW it and, only if it produced
         // drawable features, declutter + frame so the trip is legible beside the
         // dock (a transit plan with no drawable coords must not hide markers

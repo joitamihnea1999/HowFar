@@ -346,3 +346,64 @@ test("mobile: long-press transit directions show a compact card and draw the jou
   // No horizontal overflow introduced by the card.
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });
+
+// task 060: the long-press half of "right-click = get me there by public
+// transport" — a long-press from WALK mode must auto-switch to transit, plan the
+// trip (exactly one /api/reach), draw the journey, and NOT leave a trailing
+// synthetic-click that reselects a new origin.
+test("mobile: long-press from Walk auto-switches to Public transport and draws the journey (task 060)", async ({ page }) => {
+  const rings = [ring(15, 0.28), ring(30, 0.3), ring(45, 0.32)];
+  const reachCalls: string[] = [];
+  await page.route("**/api/geocode**", (route) => route.fulfill({ json: { lat: 44.4268, lng: 26.1025, label: "Piața Unirii, București" } }));
+  await page.route("**/api/suggest**", (route) =>
+    route.fulfill({ json: { suggestions: [{ label: "Piața Unirii, București", lat: 44.4268, lng: 26.1025 }] } }),
+  );
+  await page.route("**/api/isochrone**", (route) => route.fulfill({ json: { origin: { lat: 44.4268, lng: 26.1025 }, rings } }));
+  await page.route("**/api/transit**", (route) => route.fulfill({ json: { origin: { lat: 44.4268, lng: 26.1025 }, rings, departure: "2026-07-29T05:30:00.000Z" } }));
+  await page.route("**/api/amenities**", (route) => route.fulfill({ json: AMENITIES }));
+  await page.route("**/api/reach**", (route) => {
+    reachCalls.push(route.request().url());
+    route.fulfill({
+      json: {
+        reachable: true,
+        totalMinutes: 20,
+        transfers: 0,
+        legs: [
+          { mode: "WALK", fromName: "START", toName: "Board", minutes: 4, from: { lat: 44.4268, lng: 26.1025 }, to: { lat: 44.435, lng: 26.105 }, path: [[26.1025, 44.4268], [26.105, 44.435]] },
+          { mode: "TRAM", line: "1", headsign: "Nord", fromName: "Board", toName: "Alight", minutes: 16, from: { lat: 44.435, lng: 26.105 }, to: { lat: 44.45, lng: 26.07 }, path: [[26.105, 44.435], [26.07, 44.45]] },
+        ],
+      },
+    });
+  });
+
+  await page.goto("/");
+  const map = page.getByTestId("app-map");
+  await expect(map).toHaveAttribute("data-map-loaded", "true", { timeout: 30_000 });
+  await page.getByRole("combobox").fill("Piata Unirii");
+  await page.getByRole("button", { name: "Go" }).click();
+  await expect(map).toHaveAttribute("data-isochrone-rings", "3");
+  await expect(map).toHaveAttribute("data-mode", "walk"); // start in WALK — do NOT switch manually
+
+  const canvas = page.locator(".maplibregl-canvas");
+  const box = await canvas.boundingBox();
+  if (!box) throw new Error("no canvas");
+  const cx = box.x + box.width / 2;
+  const cy = box.y + box.height / 2;
+  const session = await page.context().newCDPSession(page);
+  const pt = (x: number, y: number) => [{ x, y, radiusX: 3, radiusY: 3, force: 1, id: 1 }];
+
+  await expect(async () => {
+    await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: pt(cx, cy) });
+    await page.waitForTimeout(650); // > long-press hold threshold, no move
+    await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    // The long-press flips Walk → Public transport (the owner's unified action).
+    await expect(map).toHaveAttribute("data-mode", "transit", { timeout: 2000 });
+  }).toPass({ timeout: 20_000 });
+
+  await expect(map).toHaveAttribute("data-reach-state", "transit");
+  await expect(map).toHaveAttribute("data-reach-journey", "2", { timeout: 5000 });
+  // Exactly one plan fetch, and the trailing synthetic click was suppressed — a
+  // reselection would have geocoded a new origin (the label stays Piața Unirii).
+  expect(reachCalls).toHaveLength(1);
+  await expect(map).toHaveAttribute("data-selection", "Piața Unirii, București");
+});

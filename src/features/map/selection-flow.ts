@@ -188,6 +188,13 @@ export function selectionReducer(state: SelectionState, action: SelectionAction)
         status: "loading",
         label: null,
         message: null,
+        // Clear the previously-resolved departure the moment a (re)compute
+        // starts: a right-click DURING the recompute must not plan against a
+        // stale ISO (e.g. Crowded→Not-crowded then right-click before the new
+        // transit rings land). `handleReach` falls back to the CURRENT preset
+        // until the fresh transit response re-sets `departure` (task 060 impl
+        // panel: stale-departure race, codex×3).
+        departure: null,
         lastSelection: action.preserveLast ? state.lastSelection : null,
       };
     case "resolved":

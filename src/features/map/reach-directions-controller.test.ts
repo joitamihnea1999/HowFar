@@ -68,35 +68,18 @@ describe("reach-directions-controller — synchronous views + destination pin", 
     expect(controller.isActive()).toBe(false);
   });
 
-  it("walk: drops a destination pin and shows the band copy", () => {
-    const { controller, journey, views } = makeController();
-    controller.open({ kind: "walk", coords: [26.1, 44.4], band: 15 });
+  it("transit: drops a destination pin for the clicked point (task 060)", () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(reachablePlan) })) as never);
+    const { controller, journey } = makeController({ drawReturns: true });
+    controller.open({ kind: "transit", coords: [26.1, 44.4], band: 30, url: "/api/reach?x=1" });
     expect(journey.setDestination).toHaveBeenCalledWith([26.1, 44.4]);
-    expect(views.at(-1)?.state).toBe("walk");
-    expect(views.at(-1)?.title).toBe("On foot");
-  });
-
-  it("car: names the assumed traffic slot from carMeta", () => {
-    const { controller, views } = makeController();
-    controller.open({ kind: "car", coords: [26.1, 44.4], band: 20, carMeta: { basis: "estimate", slotId: "am-peak", slotLabel: "weekday morning rush" } });
-    expect(views.at(-1)?.state).toBe("car");
-    expect(views.at(-1)?.detail).toContain("weekday morning rush");
-  });
-
-  it("transit-unreachable: 'Beyond your reach', NO fetch", () => {
-    const fetchSpy = vi.fn();
-    vi.stubGlobal("fetch", fetchSpy);
-    const { controller, views } = makeController();
-    controller.open({ kind: "transit-unreachable", coords: [26.1, 44.4] });
-    expect(views.at(-1)?.state).toBe("none");
-    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
 
 describe("reach-directions-controller — mutual exclusivity", () => {
   it("open() always closes the stop/POI popup first (arbiter)", () => {
     const { controller, closeStopPopup } = makeController();
-    controller.open({ kind: "walk", coords: [26.1, 44.4], band: 15 });
+    controller.open({ kind: "hint", coords: [26.1, 44.4] });
     expect(closeStopPopup).toHaveBeenCalledTimes(1);
     controller.open({ kind: "hint", coords: [26.1, 44.4] });
     expect(closeStopPopup).toHaveBeenCalledTimes(2);
@@ -111,13 +94,13 @@ describe("reach-directions-controller — mutual exclusivity", () => {
     // The injected closeStopPopup is a bare no-op spy (does NOT call close()), so
     // the only thing that can tear down the previous drawn journey is open()'s
     // own invalidation — proves it no longer relies on the arbiter side-effect.
-    controller.open({ kind: "walk", coords: [26.2, 44.5], band: 15 });
+    controller.open({ kind: "hint", coords: [26.2, 44.5] });
     expect(journey.clear).toHaveBeenCalled();
   });
 
   it("close() tears down journey + declutter + view, does NOT touch the popup", () => {
     const { controller, journey, reachDeclutter, closeStopPopup, el, views } = makeController();
-    controller.open({ kind: "walk", coords: [26.1, 44.4], band: 15 });
+    controller.open({ kind: "hint", coords: [26.1, 44.4] });
     closeStopPopup.mockClear();
     controller.close();
     expect(journey.clear).toHaveBeenCalled();
@@ -147,15 +130,15 @@ describe("reach-directions-controller — transit fetch", () => {
     expect(v.steps).toHaveLength(2);
   });
 
-  it("a bike/walk-only direct plan stays text-only — NO draw, NO declutter", async () => {
+  it("a walk-only direct plan → 'No public-transport route' (task 060: no walk-band answer), NO draw", async () => {
     const walkOnly = { reachable: true, totalMinutes: 12, transfers: 0, legs: [{ mode: "WALK", line: "", headsign: "", fromName: "START", toName: "END", minutes: 12 }] };
     vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(walkOnly) })) as never);
     const { controller, journey, reachDeclutter, views } = makeController();
     controller.open({ kind: "transit", coords: [26.1, 44.4], band: 30, url: "/api/reach?x=1" });
-    await vi.waitFor(() => expect(views.at(-1)?.state).toBe("transit"));
+    await vi.waitFor(() => expect(views.at(-1)?.state).toBe("none"));
     expect(journey.draw).not.toHaveBeenCalled();
     expect(reachDeclutter.set).not.toHaveBeenCalledWith(true);
-    expect(views.at(-1)?.title).toBe("On foot");
+    expect(views.at(-1)?.title).toBe("No public-transport route");
   });
 
   it("a late json resolving after the deadline fired cannot draw (gen guard)", async () => {
@@ -206,28 +189,22 @@ describe("reach-directions-controller — transit fetch", () => {
     expect(views.at(-1)?.detail).toContain("a little beyond");
   });
 
-  it("a bike-direct fallback (no transit leg, not walk-only) is titled 'Directions', text-only", async () => {
+  it("a bike-direct fallback (no transit leg) → 'No public-transport route', text-only (task 060)", async () => {
     const bikeDirect = { reachable: true, totalMinutes: 14, transfers: 0, legs: [{ mode: "BIKE", line: "", headsign: "", fromName: "START", toName: "END", minutes: 14 }] };
     vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(bikeDirect) })) as never);
     const { controller, journey, views } = makeController();
     controller.open({ kind: "transit", coords: [26.1, 44.4], band: 30, url: "/api/reach?x=1" });
-    await vi.waitFor(() => expect(views.at(-1)?.state).toBe("transit"));
-    expect(views.at(-1)?.title).toBe("Directions"); // not "On foot", not "By public transport"
+    await vi.waitFor(() => expect(views.at(-1)?.state).toBe("none"));
+    expect(views.at(-1)?.title).toBe("No public-transport route"); // no draw, no walk-band answer
     expect(journey.draw).not.toHaveBeenCalled();
   });
 
-  it("highlight / reframe delegate to the journey; walk-band answer sets NO declutter", () => {
+  it("highlight / reframe delegate to the journey", () => {
     const { controller, journey } = makeController();
-    controller.open({ kind: "walk", coords: [26.1, 44.4], band: 15 });
+    controller.open({ kind: "hint", coords: [26.1, 44.4] });
     controller.highlight(2);
     expect(journey.highlight).toHaveBeenCalledWith(2);
     controller.reframe();
     expect(journey.frame).toHaveBeenLastCalledWith(expect.anything(), true);
-  });
-
-  it("car band=null answer shows the 'beyond' copy", () => {
-    const { controller, views } = makeController();
-    controller.open({ kind: "car", coords: [26.1, 44.4], band: null, carMeta: null });
-    expect(views.at(-1)?.title).toBe("Beyond your driving reach");
   });
 });

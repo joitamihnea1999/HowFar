@@ -51,12 +51,12 @@ export function createReachJourneyController({
   // one-frame window falls through to a new selection (review).
   let active = false;
   // The destination pin (task 058): the point the user asked "how do I get
-  // there?" about, drawn for EVERY reach kind (walk/car band answers too, which
-  // have no journey). This controller atomically owns BOTH the journey features
-  // and the pin in the one `reach-path` source (panel gpt5.5-3/luna-3/terra-3 —
-  // no split writer can clobber the other). `pinActive` is INDEPENDENT of
-  // `active`: a walk/car pin must guard its own clicks WITHOUT enabling journey
-  // framing/reframe.
+  // there?" about, drawn for every reach open — including a "No public-transport
+  // route" answer that has no journey (task 060). This controller atomically owns
+  // BOTH the journey features and the pin in the one `reach-path` source (panel
+  // gpt5.5-3/luna-3/terra-3 — no split writer can clobber the other). `pinActive`
+  // is INDEPENDENT of `active`: a lone pin must guard its own clicks WITHOUT
+  // enabling journey framing/reframe.
   let destination: [number, number] | null = null;
   let pinActive = false;
   // Cache of the last drawn journey line+stop features, so writing the pin can
