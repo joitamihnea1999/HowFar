@@ -202,10 +202,12 @@ no stacks, no upstream payloads. The response body stays generic.
   own rings); an ORS failure or an over-slow walk fetch (bounded wait) takes
   the same radial path. The transit response never fails because of
   walk-geometry polish.
-- Transit departure time is pinned to a representative weekday morning so
-  reachability is comparable and cacheable (`representativeDeparture`); the
-  response's `departure` field carries that instant so the UI can qualify the
-  claim (a weekend/night visitor is seeing weekday-08:30 reach).
+- Transit/car time context is a two-option choice — **Crowded** (weekday
+  rush, the default) or **Not crowded** (off-peak midday) — pinned to a
+  representative upcoming instant so reachability is comparable and cacheable
+  (`representativeDeparture`); the response's `departure` field carries that
+  instant so the UI can qualify the claim (an off-hours visitor is seeing the
+  Crowded reach by default).
 - Negative geocode results are cached under a sentinel so repeat misses cost
   zero upstream calls.
 - The tile route caps Range slices (DoS guard) and never buffers the whole

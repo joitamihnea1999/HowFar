@@ -48,7 +48,7 @@ export const AMENITY_RESULT_TTL_MS = 24 * 60 * 60 * 1_000;
 /** Bump when the cached JSON shape changes. Includes datasetId so a publish
  * invalidates. v2 (task 047): merged-transit `members`. v3 (task 051): the walk
  * ring used for the clip is PACE-dependent, so the pace is part of the key —
- * Relaxed and Brisk must never share a cache entry (or counts would be wrong). */
+ * Slow and Normal must never share a cache entry (or counts would be wrong). */
 const AMENITY_RESULT_CACHE_PREFIX = "amenity:local:v3:";
 
 export function amenityResultCacheKey(
@@ -100,7 +100,7 @@ const inFlight = new Map<string, Promise<NearbyAmenitiesResult>>();
 /** Runtime discovery uses only ORS for the walking ring (at the active `pace`)
  * and local PostGIS. The `pace` widens the counting radius, so it is part of the
  * cache key AND the single-flight key — otherwise a concurrent Brisk request
- * could coalesce onto an in-flight Relaxed promise and render wrong counts. */
+ * could coalesce onto an in-flight Normal promise and render wrong counts. */
 export async function nearbyAmenities(
   latRaw: number,
   lngRaw: number,

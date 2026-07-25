@@ -55,9 +55,20 @@ export async function GET(request: Request) {
   const toOutside = outOfAreaGuard(to.lat, to.lng);
   if (toOutside) return toOutside;
 
+  // Validate the time-context params UP FRONT so a retired preset id or the
+  // removed `weekday`/`time` params fail loud (400) even when a `departure` ISO is
+  // ALSO supplied — the same fail-loud contract /api/transit + /api/car honor
+  // (task 059 impl panel: the departure branch must not be a validation bypass).
+  // Absent params → default context (harmless; a valid departure ISO wins below).
+  const timeContext = parseTimeContext({
+    preset: url.searchParams.get("preset"),
+    weekday: url.searchParams.get("weekday"),
+    time: url.searchParams.get("time"),
+  });
+  if (timeContext === null) return jsonError(400, "Invalid departure time");
+
   // Prefer the selection's resolved departure ISO (exact match to the rings the
-  // user is looking at); otherwise derive it from the time-context params, the
-  // same way /api/transit does.
+  // user is looking at); otherwise derive it from the validated time context.
   const departureRaw = url.searchParams.get("departure");
   let departureIso: string;
   const parsedDeparture = departureRaw ? Date.parse(departureRaw) : NaN;
@@ -69,12 +80,6 @@ export async function GET(request: Request) {
   if (Number.isFinite(parsedDeparture) && Math.abs(parsedDeparture - Date.now()) <= HORIZON_MS) {
     departureIso = new Date(Math.round(parsedDeparture / 60000) * 60000).toISOString();
   } else {
-    const timeContext = parseTimeContext({
-      preset: url.searchParams.get("preset"),
-      weekday: url.searchParams.get("weekday"),
-      time: url.searchParams.get("time"),
-    });
-    if (timeContext === null) return jsonError(400, "Invalid departure time");
     departureIso = representativeDeparture(new Date(), departureFields(timeContext));
   }
 

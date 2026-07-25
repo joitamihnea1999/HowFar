@@ -325,38 +325,17 @@ describe("representativeDeparture", () => {
     }
   });
 
-  it("custom same weekday, slot still AHEAD of now → TODAY (allowToday)", () => {
-    const now = new Date("2026-07-22T04:00:00Z"); // Wed 07:00 EEST
-    // custom Wednesday 18:00 → same day, later
-    const d = new Date(representativeDeparture(now, departureFields({ kind: "custom", weekday: 3, hour: 18, minute: 0 })));
-    expect(d.getUTCDay()).toBe(3);
-    expect((d.getUTCHours() + 3) % 24).toBe(18);
-    expect(d.getUTCDate()).toBe(22); // same calendar day
-  });
-
-  it("custom same weekday, slot already PAST today → next week", () => {
-    const now = new Date("2026-07-22T16:00:00Z"); // Wed 19:00 EEST
-    const d = new Date(representativeDeparture(now, departureFields({ kind: "custom", weekday: 3, hour: 8, minute: 30 })));
-    expect(d.getUTCDay()).toBe(3);
-    expect(d.getTime() - now.getTime()).toBeGreaterThan(6 * 24 * 3600 * 1000); // rolled a week
-  });
-
-  it("custom time on a DST fall-back weekend resolves to the requested wall time (offset fixpoint)", () => {
-    // now: Fri 2026-10-23 (EEST +03). Bucharest falls back Sun 2026-10-25 03:00.
-    // Custom Sunday 10:00 is post-transition ⇒ EET (+02) ⇒ 10:00 local = 08:00Z.
+  it("is DST-correct across a fall-back weekend (offset fixpoint) — raw upcoming fields", () => {
+    // The resolver takes DepartureFields directly, so DST correctness is still
+    // proven without the removed Custom mode (task 059). now: Fri 2026-10-23
+    // (EEST +03). Bucharest falls back Sun 2026-10-25 03:00, so the upcoming
+    // Sunday 10:00 is post-transition ⇒ EET (+02) ⇒ 10:00 local = 08:00Z.
     // (Naively applying now's +03 offset would give the wrong instant.)
     const now = new Date("2026-10-23T09:00:00Z");
-    const d = new Date(representativeDeparture(now, departureFields({ kind: "custom", weekday: 0, hour: 10, minute: 0 })));
+    const d = new Date(representativeDeparture(now, { weekday: 0, hour: 10, minute: 0 }));
     expect(d.getUTCDay()).toBe(0); // Sunday
     expect(d.getUTCDate()).toBe(25);
     expect([d.getUTCHours(), d.getUTCMinutes()]).toEqual([8, 0]); // 10:00 EET(+2) = 08:00Z
-  });
-
-  it("custom minute is quantised to :00/:30 slots", () => {
-    const now = new Date("2026-07-20T09:00:00Z");
-    const d = new Date(representativeDeparture(now, departureFields({ kind: "custom", weekday: 5, hour: 14, minute: 47 })));
-    expect(d.getUTCMinutes()).toBe(30); // 47 → 30
-    expect(d.getUTCDay()).toBe(5); // Friday
   });
 
   it("PROPERTY: always strictly future & the requested weekday, across a week of `now`s and every preset", () => {

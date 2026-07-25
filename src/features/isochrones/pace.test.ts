@@ -5,7 +5,6 @@ import {
   NORMAL_ORS_RANGES_S,
   PACE_MODEL,
   PACES,
-  parsePace,
   parsePaceStrict,
   STREET_DETOUR,
 } from "@/features/isochrones/pace";
@@ -20,21 +19,28 @@ describe("PACE_MODEL", () => {
     expect(n.egressMPerMin).toBeCloseTo(80 / STREET_DETOUR, 10);
   });
 
-  it("scales non-normal ORS ranges linearly by speed/80, integer-rounded", () => {
-    expect(PACE_MODEL.relaxed.orsRangesS).toEqual([682, 1381, 2086]); // ×66/80
-    expect(PACE_MODEL.brisk.orsRangesS).toEqual([951, 1925, 2907]); // ×92/80
+  it("BYTE-IDENTITY: slow reuses the pre-059 'relaxed' constants exactly", () => {
+    // Task 059 cut the set to slow+normal; `slow` MUST be the old relaxed object
+    // (only id/label/copy changed) so its G6-bounded calibration is preserved.
+    const s = PACE_MODEL.slow;
+    expect(s.orsRangesS).toEqual([682, 1381, 2086]); // ×66/80, unchanged from relaxed
+    expect(s.pedestrianSpeedMs).toBe("1.100");
+    expect(s.speedMPerMin).toBe(66);
+    expect(s.egressMPerMin).toBeCloseTo(66 / STREET_DETOUR, 10);
   });
 
-  it("is monotonic relaxed < normal < brisk for range, speed and egress", () => {
-    const [r, n, b] = [PACE_MODEL.relaxed, PACE_MODEL.normal, PACE_MODEL.brisk];
+  it("is exactly the two ids slow, normal (brisk dropped)", () => {
+    expect([...PACES]).toEqual(["slow", "normal"]);
+    expect(Object.keys(PACE_MODEL).sort()).toEqual(["normal", "slow"]);
+  });
+
+  it("is monotonic slow < normal for range, speed and egress", () => {
+    const [s, n] = [PACE_MODEL.slow, PACE_MODEL.normal];
     for (let i = 0; i < 3; i++) {
-      expect(r.orsRangesS[i]).toBeLessThan(n.orsRangesS[i]!);
-      expect(n.orsRangesS[i]!).toBeLessThan(b.orsRangesS[i]!);
+      expect(s.orsRangesS[i]).toBeLessThan(n.orsRangesS[i]!);
     }
-    expect(r.speedMPerMin).toBeLessThan(n.speedMPerMin);
-    expect(n.speedMPerMin).toBeLessThan(b.speedMPerMin);
-    expect(r.egressMPerMin).toBeLessThan(n.egressMPerMin);
-    expect(n.egressMPerMin).toBeLessThan(b.egressMPerMin);
+    expect(s.speedMPerMin).toBeLessThan(n.speedMPerMin);
+    expect(s.egressMPerMin).toBeLessThan(n.egressMPerMin);
   });
 
   it("egress = speed / detour for every pace", () => {
@@ -55,34 +61,31 @@ describe("PACE_MODEL", () => {
     }
   });
 
-  it("carries UI copy (label/emoji/hint) for the control", () => {
+  it("carries UI copy (label/emoji/blurb/hint) for the control", () => {
     for (const p of PACES) {
       expect(PACE_MODEL[p].label.length).toBeGreaterThan(0);
       expect(PACE_MODEL[p].emoji.length).toBeGreaterThan(0);
+      // Per-option meaning shown under BOTH buttons (task 059 owner ask).
+      expect(PACE_MODEL[p].blurb.length).toBeGreaterThan(0);
       expect(PACE_MODEL[p].hint.length).toBeGreaterThan(0);
     }
   });
 });
 
-describe("parsePace", () => {
-  it("passes through the three valid ids", () => {
-    for (const p of PACES) expect(parsePace(p)).toBe(p);
+describe("parsePaceStrict (the single fail-loud parser used by every route)", () => {
+  it("passes through the two valid ids", () => {
+    for (const p of PACES) expect(parsePaceStrict(p)).toBe(p);
   });
-  it("defaults junk / null / empty to normal", () => {
-    expect(parsePace("fast")).toBe(DEFAULT_PACE);
-    expect(parsePace(null)).toBe(DEFAULT_PACE);
-    expect(parsePace(undefined)).toBe(DEFAULT_PACE);
-    expect(parsePace("")).toBe(DEFAULT_PACE);
-    expect(DEFAULT_PACE).toBe("normal");
-  });
-});
-
-describe("parsePaceStrict", () => {
-  it("treats absent/empty as the default but junk as invalid (null)", () => {
+  it("treats absent/empty as the default but junk (incl. retired ids) as invalid (null)", () => {
     expect(parsePaceStrict(undefined)).toBe("normal");
     expect(parsePaceStrict(null)).toBe("normal");
     expect(parsePaceStrict("")).toBe("normal");
-    expect(parsePaceStrict("brisk")).toBe("brisk");
+    expect(DEFAULT_PACE).toBe("normal");
+    expect(parsePaceStrict("slow")).toBe("slow");
+    // Retired ids are NOT aliased (no live users, task 059): they 400, never
+    // silently become Normal (the over-claiming direction).
+    expect(parsePaceStrict("brisk")).toBeNull();
+    expect(parsePaceStrict("relaxed")).toBeNull();
     expect(parsePaceStrict("sprint")).toBeNull();
   });
 });

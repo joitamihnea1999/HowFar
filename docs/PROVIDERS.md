@@ -171,7 +171,7 @@ ranges `[600,1200,1800]s` are **divided by a per-time-of-day congestion factor**
 paints the area actually reachable in 20 real minutes. Implementation: pure `features/isochrones/
 car-traffic.ts` (`carTrafficSlot` → `{slotId,label,factor}`; `scaledCarRangesS`), consumed by
 `ors.ts` `drivingIsochrone(lat,lng,slot)` and the `/api/car` route (which parses the same
-`preset`/`weekday`+`time` time-context as transit). The response carries `car:{basis:"estimate",…}`;
+two-option `preset` time-context as transit — Crowded / Not crowded). The response carries `car:{basis:"estimate",…}`;
 the UI labels it typical-congestion, **not live traffic**.
 
 **Provider decision matrix (why a calibrated factor, not a live-traffic API):**
@@ -206,9 +206,11 @@ the UI labels it typical-congestion, **not live traffic**.
 | **PM peak** | 16–20 | **×2.20** | | | |
 | evening | 20–23 | ×1.25 | | | |
 
-Presets map through `departureFields`: weekday-morning→AM peak, midday→midday, evening→PM peak,
-weekend→weekend daytime; custom weekday+hour buckets through the same table. Factors clamp to
-[1.0, 4.0]; scaled ranges are guaranteed strictly ascending/distinct/≥60s.
+The two user-facing time presets map through `departureFields`: **Crowded** (weekday 08:30) → AM
+peak ×2.10; **Not crowded** (weekday 12:30) → midday ×1.50. The full wall-clock factor table above
+still resolves *any* instant, but only those two presets are exposed in the UI (a free-form
+day/time picker was removed for a least-necessary UI). Factors clamp to [1.0, 4.0]; scaled ranges
+are guaranteed strictly ascending/distinct/≥60s.
 
 **Provenance + re-run methodology:** the shipped factors are grounded in the **public TomTom Traffic
 Index** (citable published statistics) plus peak/off-peak congestion literature, and are set

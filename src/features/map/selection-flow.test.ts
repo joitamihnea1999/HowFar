@@ -254,15 +254,15 @@ describe("pure helpers", () => {
 });
 
 describe("selectionReducer — setPace / setTimeContext (task 051)", () => {
-  it("defaults are normal pace + weekday-morning preset (byte-identical baseline)", () => {
+  it("defaults are normal pace + crowded preset (byte-identical baseline)", () => {
     expect(initialSelectionState.pace).toBe("normal");
-    expect(initialSelectionState.timeContext).toEqual({ kind: "preset", preset: "weekday-morning" });
+    expect(initialSelectionState.timeContext).toEqual({ kind: "preset", preset: "crowded" });
   });
 
   it("setPace bumps the token (drops in-flight) and snapshots the pace", () => {
     const resolved = selectionReducer(start(), { type: "resolved", token: 1, origin: ORIGIN, label: "X" });
-    const next = selectionReducer(resolved, { type: "setPace", pace: "brisk" });
-    expect(next.pace).toBe("brisk");
+    const next = selectionReducer(resolved, { type: "setPace", pace: "slow" });
+    expect(next.pace).toBe("slow");
     expect(next.token).toBe(resolved.token + 1);
     // a pre-change response is now stale
     expect(selectionReducer(next, { type: "resolved", token: resolved.token, origin: ORIGIN, label: "stale" })).toBe(next);
@@ -275,24 +275,24 @@ describe("selectionReducer — setPace / setTimeContext (task 051)", () => {
 
   it("a pace change mid-first-load (loading, no lastSelection) stays loading and is NOT lost", () => {
     const loading = start(); // status loading, lastSelection null
-    const next = selectionReducer(loading, { type: "setPace", pace: "relaxed" });
-    expect(next.pace).toBe("relaxed");
+    const next = selectionReducer(loading, { type: "setPace", pace: "slow" });
+    expect(next.pace).toBe("slow");
     expect(next.token).toBe(loading.token + 1); // controller re-issues pending input
     expect(next.status).toBe("loading");
   });
 
   it("a pace change while idle with no selection goes idle (nothing to recompute)", () => {
-    const next = selectionReducer(initialSelectionState, { type: "setPace", pace: "brisk" });
+    const next = selectionReducer(initialSelectionState, { type: "setPace", pace: "slow" });
     expect(next.status).toBe("idle");
   });
 
   it("setTimeContext bumps the token and stores the context; same context is a no-op", () => {
     const resolved = selectionReducer(start("transit"), { type: "resolved", token: 1, origin: ORIGIN, label: "X" });
-    const custom = { kind: "custom" as const, weekday: 6, hour: 9, minute: 30 };
-    const next = selectionReducer(resolved, { type: "setTimeContext", timeContext: custom });
-    expect(next.timeContext).toEqual(custom);
+    const quiet = { kind: "preset" as const, preset: "quiet" as const };
+    const next = selectionReducer(resolved, { type: "setTimeContext", timeContext: quiet });
+    expect(next.timeContext).toEqual(quiet);
     expect(next.token).toBe(resolved.token + 1);
-    expect(selectionReducer(next, { type: "setTimeContext", timeContext: custom })).toBe(next); // no-op
+    expect(selectionReducer(next, { type: "setTimeContext", timeContext: quiet })).toBe(next); // no-op
   });
 
   it("resolved carries the transit departure; a walk resolve clears it", () => {
@@ -310,17 +310,15 @@ describe("selectionReducer — setPace / setTimeContext (task 051)", () => {
 });
 
 describe("sameTimeContext", () => {
-  it("compares presets and custom fields", () => {
-    expect(sameTimeContext({ kind: "preset", preset: "midday" }, { kind: "preset", preset: "midday" })).toBe(true);
-    expect(sameTimeContext({ kind: "preset", preset: "midday" }, { kind: "preset", preset: "evening" })).toBe(false);
-    expect(sameTimeContext({ kind: "custom", weekday: 6, hour: 9, minute: 30 }, { kind: "custom", weekday: 6, hour: 9, minute: 30 })).toBe(true);
-    expect(sameTimeContext({ kind: "custom", weekday: 6, hour: 9, minute: 30 }, { kind: "custom", weekday: 6, hour: 9, minute: 0 })).toBe(false);
-    expect(sameTimeContext({ kind: "preset", preset: "weekend" }, { kind: "custom", weekday: 6, hour: 12, minute: 0 })).toBe(false);
+  it("compares the two presets (custom removed, task 059)", () => {
+    expect(sameTimeContext({ kind: "preset", preset: "crowded" }, { kind: "preset", preset: "crowded" })).toBe(true);
+    expect(sameTimeContext({ kind: "preset", preset: "quiet" }, { kind: "preset", preset: "quiet" })).toBe(true);
+    expect(sameTimeContext({ kind: "preset", preset: "crowded" }, { kind: "preset", preset: "quiet" })).toBe(false);
   });
 });
 
 describe("effectivePace (task 052 — pace is walk-only)", () => {
-  const PACES: Pace[] = ["relaxed", "normal", "brisk"];
+  const PACES: Pace[] = ["slow", "normal"];
 
   it("walk keeps the chosen pace", () => {
     for (const p of PACES) expect(effectivePace("walk", p)).toBe(p);
@@ -343,46 +341,44 @@ describe("effectivePace (task 052 — pace is walk-only)", () => {
     );
   });
 
-  it("the transit request URL and any amenity fetch built from effectivePace carry pace=normal even after a Brisk walk pick", () => {
-    // Brisk was chosen in Walk; switching to transit must request Normal.
-    const req = effectivePace("transit", "brisk");
-    expect(isochroneUrl("transit", ORIGIN, req, { kind: "preset", preset: "evening" })).toBe(
-      "/api/transit?lat=44.4268&lng=26.1025&pace=normal&preset=evening",
+  it("the transit request URL and any amenity fetch built from effectivePace carry pace=normal even after a Slow walk pick", () => {
+    // Slow was chosen in Walk; switching to transit must request Normal.
+    const req = effectivePace("transit", "slow");
+    expect(isochroneUrl("transit", ORIGIN, req, { kind: "preset", preset: "quiet" })).toBe(
+      "/api/transit?lat=44.4268&lng=26.1025&pace=normal&preset=quiet",
     );
     expect(`/api/amenities?lat=${ORIGIN.lat}&lng=${ORIGIN.lng}&pace=${req}`).toBe(
       "/api/amenities?lat=44.4268&lng=26.1025&pace=normal",
     );
-    // And back in Walk, Brisk is honored.
-    expect(effectivePace("walk", "brisk")).toBe("brisk");
+    // And back in Walk, Slow is honored.
+    expect(effectivePace("walk", "slow")).toBe("slow");
   });
 });
 
 describe("isochroneUrl (task 051 query contract)", () => {
   it("walk carries only pace", () => {
-    expect(isochroneUrl("walk", ORIGIN, "brisk", { kind: "preset", preset: "weekday-morning" })).toBe(
-      "/api/isochrone?lat=44.4268&lng=26.1025&pace=brisk",
+    expect(isochroneUrl("walk", ORIGIN, "slow", { kind: "preset", preset: "crowded" })).toBe(
+      "/api/isochrone?lat=44.4268&lng=26.1025&pace=slow",
     );
   });
-  it("transit preset adds &preset", () => {
-    expect(isochroneUrl("transit", ORIGIN, "normal", { kind: "preset", preset: "evening" })).toBe(
-      "/api/transit?lat=44.4268&lng=26.1025&pace=normal&preset=evening",
+  it("transit preset adds &preset (both options)", () => {
+    expect(isochroneUrl("transit", ORIGIN, "normal", { kind: "preset", preset: "crowded" })).toBe(
+      "/api/transit?lat=44.4268&lng=26.1025&pace=normal&preset=crowded",
+    );
+    expect(isochroneUrl("transit", ORIGIN, "normal", { kind: "preset", preset: "quiet" })).toBe(
+      "/api/transit?lat=44.4268&lng=26.1025&pace=normal&preset=quiet",
     );
   });
-  it("transit custom adds &weekday&time (URL-encoded colon, zero-padded)", () => {
-    expect(isochroneUrl("transit", ORIGIN, "relaxed", { kind: "custom", weekday: 6, hour: 9, minute: 0 })).toBe(
-      "/api/transit?lat=44.4268&lng=26.1025&pace=relaxed&weekday=6&time=09%3A00",
-    );
-  });
-  it("car carries TIME but NEVER pace (task 058: time-aware for traffic, pace stays a walk concept)", () => {
-    // Even with a Brisk pace left over from Walk, the car URL must not emit pace
-    // (a walk concept /api/car doesn't accept) — but it now DOES carry the time
-    // context so the traffic slot can be resolved (task 058).
-    const preset = isochroneUrl("car", ORIGIN, "brisk", { kind: "preset", preset: "evening" });
-    expect(preset).toBe("/api/car?lat=44.4268&lng=26.1025&preset=evening");
-    expect(preset).not.toMatch(/pace/);
+  it("car carries the preset TIME but NEVER pace (task 058: time-aware for traffic, pace stays a walk concept)", () => {
+    // Even with a Slow pace left over from Walk, the car URL must not emit pace
+    // (a walk concept /api/car doesn't accept) — but it DOES carry the preset so
+    // the traffic slot can be resolved (task 058).
+    const crowded = isochroneUrl("car", ORIGIN, "slow", { kind: "preset", preset: "crowded" });
+    expect(crowded).toBe("/api/car?lat=44.4268&lng=26.1025&preset=crowded");
+    expect(crowded).not.toMatch(/pace/);
 
-    const custom = isochroneUrl("car", ORIGIN, "brisk", { kind: "custom", weekday: 6, hour: 9, minute: 0 });
-    expect(custom).toBe("/api/car?lat=44.4268&lng=26.1025&weekday=6&time=09%3A00");
-    expect(custom).not.toMatch(/pace/);
+    const quiet = isochroneUrl("car", ORIGIN, "slow", { kind: "preset", preset: "quiet" });
+    expect(quiet).toBe("/api/car?lat=44.4268&lng=26.1025&preset=quiet");
+    expect(quiet).not.toMatch(/pace/);
   });
 });

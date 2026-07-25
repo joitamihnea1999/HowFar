@@ -86,7 +86,7 @@ test("Car mode fetches /api/car (time context, NO pace) and labels the legend 10
   const carUrl = carCalls[carCalls.length - 1]!;
   expect(carUrl).toMatch(/lat=.*&lng=/);
   expect(carUrl).not.toMatch(/pace/);
-  expect(carUrl).toContain("preset=weekday-morning"); // default time context
+  expect(carUrl).toContain("preset=crowded"); // default time context (Crowded)
 
   // Legend reads the CAR labels + the "Driving" mode word (default = inner band).
   const legend = page.getByTestId("ring-legend");
@@ -131,14 +131,14 @@ async function isoSourceSpan(page: Page): Promise<number> {
   });
 }
 
-test("Car time-of-day actually changes reach: weekday-morning rings are strictly smaller than weekend (owner item 1/3)", async ({ page }) => {
-  // Distinct geometry per traffic slot — small at am-peak, large at weekend — so
-  // this proves the RENDERED reach shrinks at peak, not just that a request fired
-  // (panel gpt5.5-3/luna-4/terra-3/grok-1). A regression that ignored time and
-  // painted one fixed size would fail the span comparison below.
+test("Car time-of-day actually changes reach: Crowded rings are strictly smaller than Not crowded (owner item 1/3)", async ({ page }) => {
+  // Distinct geometry per traffic slot — small at am-peak (Crowded), large at
+  // midday (Not crowded) — so this proves the RENDERED reach shrinks at peak, not
+  // just that a request fired (panel gpt5.5-3/luna-4/terra-3/grok-1). A regression
+  // that ignored time and painted one fixed size would fail the span comparison.
   const carCalls: string[] = [];
   const small = { origin: { lat: 44.4268, lng: 26.1025 }, rings: [polyRing(10, 0.03), polyRing(20, 0.05), polyRing(30, 0.07)], car: { basis: "estimate", slotId: "am-peak", slotLabel: "weekday morning rush" } };
-  const large = { origin: { lat: 44.4268, lng: 26.1025 }, rings: [polyRing(10, 0.12), polyRing(20, 0.18), polyRing(30, 0.24)], car: { basis: "estimate", slotId: "weekend-day", slotLabel: "weekend daytime" } };
+  const large = { origin: { lat: 44.4268, lng: 26.1025 }, rings: [polyRing(10, 0.12), polyRing(20, 0.18), polyRing(30, 0.24)], car: { basis: "estimate", slotId: "midday", slotLabel: "weekday midday" } };
   await page.route("**/api/amenities**", (route) => route.fulfill({ json: { origin: { lat: 44.4268, lng: 26.1025 }, walkMinutes: 15, amenities: [] } }));
   await page.route("**/api/geocode**", (route) => route.fulfill({ json: { lat: 44.4268, lng: 26.1025, label: "Piața Unirii" } }));
   await page.route("**/api/suggest**", (route) => route.fulfill({ json: { suggestions: [] } }));
@@ -146,26 +146,26 @@ test("Car time-of-day actually changes reach: weekday-morning rings are strictly
   await page.route("**/api/car**", (route) => {
     const url = route.request().url();
     carCalls.push(url);
-    route.fulfill({ json: /preset=weekend/.test(url) ? large : small });
+    route.fulfill({ json: /preset=quiet/.test(url) ? large : small });
   });
   await page.goto("/");
   const map = page.getByTestId("app-map");
   await expect(map).toHaveAttribute("data-map-loaded", "true", { timeout: 30_000 });
   await selectCar(page, map);
 
-  // Default weekday-morning → small (am-peak) rings + slot label in the note.
+  // Default Crowded → small (am-peak) rings + slot label in the note.
   await expect(page.getByTestId("car-estimate-note")).toContainText("weekday morning rush");
   const peakSpan = await isoSourceSpan(page);
   expect(peakSpan).toBeGreaterThan(0);
 
-  // Switch to Weekend → larger rings + the note now names weekend traffic.
+  // Switch to Not crowded → larger rings + the note now names midday traffic.
   const before = carCalls.length;
-  await page.getByRole("button", { name: "Weekend", exact: true }).click();
+  await page.getByRole("button", { name: "Not crowded", exact: true }).click();
   await expect.poll(() => carCalls.length).toBeGreaterThan(before);
-  expect(carCalls[carCalls.length - 1]!).toContain("preset=weekend");
-  await expect(page.getByTestId("car-estimate-note")).toContainText("weekend daytime");
+  expect(carCalls[carCalls.length - 1]!).toContain("preset=quiet");
+  await expect(page.getByTestId("car-estimate-note")).toContainText("weekday midday");
   await expect(map).toHaveAttribute("data-isochrone-rings", "3");
-  // The rendered reach GREW going peak → weekend (i.e. peak reach is smaller).
+  // The rendered reach GREW going Crowded → Not crowded (i.e. peak reach is smaller).
   await expect.poll(() => isoSourceSpan(page)).toBeGreaterThan(peakSpan * 2);
 });
 

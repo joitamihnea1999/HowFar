@@ -243,7 +243,7 @@ describe("nearbyAmenities local catalogue flow", () => {
     expect(withActiveDataset).toHaveBeenCalledTimes(1);
   });
 
-  it("does NOT coalesce different paces for the same origin (task 051 — a Brisk request must not get Relaxed counts)", async () => {
+  it("does NOT coalesce different paces for the same origin (task 051 — a Slow request must not get Normal counts)", async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => {
       release = r;
@@ -255,16 +255,16 @@ describe("nearbyAmenities local catalogue flow", () => {
         "dataset-1",
       );
     });
-    const relaxed = nearbyAmenities(44.4268, 26.1025, "relaxed");
-    const brisk = nearbyAmenities(44.4268, 26.1025, "brisk");
+    const slow = nearbyAmenities(44.4268, 26.1025, "slow");
+    const normal = nearbyAmenities(44.4268, 26.1025, "normal");
     release();
-    await Promise.all([relaxed, brisk]);
+    await Promise.all([slow, normal]);
     // Distinct flight keys ⇒ two independent computations, each with its OWN pace
     // threaded into the ORS walk-ring call (no coalescing onto a wrong-pace ring).
     expect(walkingIsochrone).toHaveBeenCalledTimes(2);
     const paces = (walkingIsochrone as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => c[2]);
-    expect(paces).toContain("relaxed");
-    expect(paces).toContain("brisk");
+    expect(paces).toContain("slow");
+    expect(paces).toContain("normal");
   });
 });
 

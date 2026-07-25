@@ -37,25 +37,32 @@ describe("GET /api/car", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.rings).toHaveLength(1);
-    // Default (no params) resolves weekday-morning → am-peak, basis estimate.
+    // Default (no params) resolves the Crowded preset → am-peak, basis estimate.
     expect(body.car).toEqual({ basis: "estimate", slotId: "am-peak", slotLabel: "weekday morning rush", factor: 2.1 });
   });
 
-  it("resolves the traffic slot from a preset and passes it to the isochrone", async () => {
-    await call("?lat=44.4268&lng=26.1025&preset=weekend");
-    expect(drivingIsochrone).toHaveBeenCalledTimes(1);
+  it("Crowded vs Not-crowded resolve to distinct traffic slots (am-peak 2.1 vs midday 1.5)", async () => {
+    await call("?lat=44.4268&lng=26.1025&preset=crowded");
+    expect(drivingIsochrone.mock.calls[0][2]).toMatchObject({ slotId: "am-peak", factor: 2.1 });
+    drivingIsochrone.mockClear();
+    await call("?lat=44.4268&lng=26.1025&preset=quiet");
     const slot = drivingIsochrone.mock.calls[0][2];
-    expect(slot.slotId).toBe("weekend-day");
+    expect(slot).toMatchObject({ slotId: "midday", factor: 1.5 });
     expect(drivingIsochrone.mock.calls[0].slice(0, 2)).toEqual([44.4268, 26.1025]);
   });
 
-  it("resolves the traffic slot from a custom weekday+time", async () => {
-    await call("?lat=44.4268&lng=26.1025&weekday=2&time=18:00");
-    expect(drivingIsochrone.mock.calls[0][2].slotId).toBe("pm-peak");
+  it("400 on retired custom weekday+time params (fail-loud, never silent default)", async () => {
+    expect((await call("?lat=44.4268&lng=26.1025&weekday=2&time=18:00")).status).toBe(400);
+    expect(drivingIsochrone).not.toHaveBeenCalled();
+  });
+
+  it("400 on a retired preset id (weekend/midday/evening no longer exist)", async () => {
+    expect((await call("?lat=44.4268&lng=26.1025&preset=weekend")).status).toBe(400);
+    expect(drivingIsochrone).not.toHaveBeenCalled();
   });
 
   it("ignores a leftover pace param — car has no pace", async () => {
-    const res = await call("?lat=44.4268&lng=26.1025&pace=brisk");
+    const res = await call("?lat=44.4268&lng=26.1025&pace=slow");
     expect(res.status).toBe(200);
     expect(drivingIsochrone.mock.calls[0][2].slotId).toBe("am-peak");
   });

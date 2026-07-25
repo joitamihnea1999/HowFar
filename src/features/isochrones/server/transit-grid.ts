@@ -78,7 +78,7 @@ export interface Ring {
  *
  * `egressMPerMin` (default the normal-pace `EGRESS_M_PER_MIN`): the radial
  * egress/origin-walk speed. Task 051 threads the active pace here so stop
- * egress (and the radial-fallback origin stamp) scale with Relaxed/Brisk in
+ * egress (and the radial-fallback origin stamp) scale with Slow/Normal in
  * lockstep with the MOTIS access speed and the unioned ORS ring — otherwise a
  * paced request would show internally inconsistent rings.
  */

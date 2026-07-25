@@ -55,7 +55,7 @@ export interface TransitIsochroneResult {
   rings: { minutes: number; geometry: { type: "Polygon" | "MultiPolygon"; coordinates: unknown } }[];
   /** The pinned representative departure (ISO instant) the reachability models
    * — upcoming Wednesday 08:30 Europe/Bucharest, NOT "now". Surfaced so the UI
-   * can qualify the claim (a weekend/night visitor sees weekday-morning reach). */
+   * can qualify the claim (a weekend/night visitor sees the Crowded reach). */
   departure: string;
 }
 
@@ -94,13 +94,12 @@ function bucharestOffsetMinutes(date: Date): number {
 /**
  * A stable, representative departure so transit reach doesn't swing with the
  * moment the user happens to visit (a night-time "now" would show near-empty
- * rings). Resolves `fields` (weekday/hour/minute + allowToday) to the nearest
- * UPCOMING Europe/Bucharest instant, DST-correct. Default (no `fields`) ==
+ * rings). Resolves `fields` (weekday/hour/minute) to the nearest UPCOMING
+ * Europe/Bucharest instant, DST-correct. Default (no `fields`) ==
  * upcoming Wednesday 08:30, never-today — the pre-051 behaviour, byte-identical.
  *
- * `allowToday=false` (presets): strictly-future, never today → ~6-day cache
- * reuse, rolls forward weekly. `allowToday=true` (custom): same-day if the
- * chosen slot is still ahead of now, else next week. Exported for tests.
+ * Presets are strictly-future, never today → ~6-day cache reuse, rolls forward
+ * weekly (task 059 removed the Custom same-day mode). Exported for tests.
  *
  * DST: the offset is recomputed AT the target instant (`offAtTarget`), so
  * spring-forward/fall-back are handled; a wall time in a fold resolves to the
@@ -110,21 +109,17 @@ export function representativeDeparture(
   now: Date = new Date(),
   fields: DepartureFields = departureFields(DEFAULT_TIME_CONTEXT),
 ): string {
-  const { weekday, hour, minute, allowToday } = fields;
+  const { weekday, hour, minute } = fields;
   const off = bucharestOffsetMinutes(now);
   // Shift into Bucharest wall time so getUTC* read local calendar fields.
   const wall = new Date(now.getTime() + off * 60000);
   const dow = wall.getUTCDay();
   let add = (weekday - dow + 7) % 7;
-  if (add === 0 && !allowToday) add = 7; // presets: strictly upcoming, never "today"
+  if (add === 0) add = 7; // strictly upcoming, never "today" (both presets)
   // Wall-clock target as if UTC, then convert back to the real UTC instant.
   const buildWall = (daysAhead: number) =>
     Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth(), wall.getUTCDate() + daysAhead, hour, minute, 0);
-  let wallTarget = buildWall(add);
-  // Same-day custom whose slot already passed today → roll a full week forward.
-  if (add === 0 && allowToday && wallTarget <= wall.getTime()) {
-    wallTarget = buildWall(7);
-  }
+  const wallTarget = buildWall(add);
   // Convert the wall target to a real UTC instant, iterating the offset to a
   // FIXPOINT. A single `off`-based estimate is wrong when a DST transition falls
   // between `now` and the target (the offset there differs): the estimated
@@ -178,7 +173,7 @@ const inFlight = new Map<string, Promise<TransitIsochroneResult>>();
 
 /** Transit isochrone (15/30/45 min) from a point, via Transitous one-to-all, at
  * a walking `pace` and departure `timeContext`. Defaults reproduce the pre-051
- * request exactly (normal pace, weekday-morning preset). */
+ * request exactly (normal pace, Crowded preset = the old weekday-morning fields). */
 export async function transitIsochrone(
   latRaw: number,
   lngRaw: number,

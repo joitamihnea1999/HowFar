@@ -75,24 +75,23 @@ describe("carTrafficSlot — input hygiene", () => {
   });
 });
 
-describe("carTrafficSlotFor — preset mapping matches the plan", () => {
-  it("weekday-morning → am-peak, midday → midday, evening → pm-peak, weekend → weekend-day", () => {
-    expect(carTrafficSlotFor({ kind: "preset", preset: "weekday-morning" }).slotId).toBe("am-peak");
-    expect(carTrafficSlotFor({ kind: "preset", preset: "midday" }).slotId).toBe("midday");
-    expect(carTrafficSlotFor({ kind: "preset", preset: "evening" }).slotId).toBe("pm-peak");
-    expect(carTrafficSlotFor({ kind: "preset", preset: "weekend" }).slotId).toBe("weekend-day");
+describe("carTrafficSlotFor — Crowded / Not-crowded mapping (task 059)", () => {
+  it("crowded → am-peak (2.1), quiet → midday (1.5) — a visible, honest contrast", () => {
+    const crowded = carTrafficSlotFor({ kind: "preset", preset: "crowded" });
+    const quiet = carTrafficSlotFor({ kind: "preset", preset: "quiet" });
+    expect(crowded.slotId).toBe("am-peak");
+    expect(crowded.factor).toBe(2.1);
+    expect(quiet.slotId).toBe("midday");
+    expect(quiet.factor).toBe(1.5);
+    expect(crowded.factor).toBeGreaterThan(quiet.factor); // Crowded really is busier
   });
   it("preset canonical instants line up with TIME_PRESETS", () => {
-    const wm = carTrafficSlotFor({ kind: "preset", preset: "weekday-morning" });
-    expect(wm.canonical).toEqual({
-      weekday: TIME_PRESETS["weekday-morning"].weekday,
-      hour: TIME_PRESETS["weekday-morning"].hour,
-      minute: TIME_PRESETS["weekday-morning"].minute,
+    const c = carTrafficSlotFor({ kind: "preset", preset: "crowded" });
+    expect(c.canonical).toEqual({
+      weekday: TIME_PRESETS.crowded.weekday,
+      hour: TIME_PRESETS.crowded.hour,
+      minute: TIME_PRESETS.crowded.minute,
     });
-  });
-  it("custom buckets through the same table", () => {
-    expect(carTrafficSlotFor({ kind: "custom", weekday: 2, hour: 8, minute: 30 }).slotId).toBe("am-peak");
-    expect(carTrafficSlotFor({ kind: "custom", weekday: 6, hour: 13, minute: 0 }).slotId).toBe("weekend-day");
   });
 });
 

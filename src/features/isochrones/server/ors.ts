@@ -164,7 +164,7 @@ export async function walkingIsochrone(
   lngRaw: number,
   pace: Pace = DEFAULT_PACE,
 ): Promise<IsochroneResult> {
-  // v3: cache key includes pace so a Relaxed/Brisk request never serves the
+  // v3: cache key includes pace so a Slow request never serves the
   // Normal ring (and concurrent different-pace callers don't share one flight).
   // The version bump also retires all pre-051 (v2) cached rings.
   const key = `iso:foot:v3:${pace}:${roundCoord(latRaw)},${roundCoord(lngRaw)}`;

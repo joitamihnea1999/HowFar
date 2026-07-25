@@ -25,7 +25,7 @@ export async function GET(request: Request) {
   if (parsed instanceof NextResponse) return parsed;
   const outside = outOfAreaGuard(parsed.lat, parsed.lng);
   if (outside) return outside;
-  // Absent params → default (weekday morning); malformed → 400 (never a silent
+  // Absent params → default (Crowded); retired/malformed → 400 (never a silent
   // fallback that would hide a broken client contract).
   const timeContext = parseTimeContext({
     preset: url.searchParams.get("preset"),

@@ -24,9 +24,9 @@ describe("GET /api/reach", () => {
 
   it("area-guards BOTH points with 422 before any provider call (P9)", async () => {
     // Out-of-area origin (Paris) → 422, no plan.
-    expect((await call(`fromLat=48.85&fromLng=2.35&${TO}&preset=weekday-morning`)).status).toBe(422);
+    expect((await call(`fromLat=48.85&fromLng=2.35&${TO}&preset=crowded`)).status).toBe(422);
     // Out-of-area destination → 422, no plan.
-    expect((await call(`${FROM}&toLat=48.85&toLng=2.35&preset=weekday-morning`)).status).toBe(422);
+    expect((await call(`${FROM}&toLat=48.85&toLng=2.35&preset=crowded`)).status).toBe(422);
     expect(planTrip).not.toHaveBeenCalled();
   });
 
@@ -60,7 +60,7 @@ describe("GET /api/reach", () => {
   it("ignores an out-of-horizon departure and derives from the time context instead (T6)", async () => {
     planTrip.mockResolvedValue({ reachable: false });
     const farFuture = new Date(Date.now() + 200 * 24 * 3600 * 1000).toISOString();
-    const res = await call(`${FROM}&${TO}&departure=${encodeURIComponent(farFuture)}&preset=evening`);
+    const res = await call(`${FROM}&${TO}&departure=${encodeURIComponent(farFuture)}&preset=quiet`);
     expect(res.status).toBe(200);
     // The far ISO was NOT passed through; a derived (different) ISO was used.
     expect(planTrip.mock.calls[0][2]).not.toBe(farFuture);
@@ -69,17 +69,30 @@ describe("GET /api/reach", () => {
 
   it("derives the departure from a preset when no ISO is supplied", async () => {
     planTrip.mockResolvedValue({ reachable: false });
-    const res = await call(`${FROM}&${TO}&preset=evening`);
+    const res = await call(`${FROM}&${TO}&preset=quiet`);
     expect(res.status).toBe(200);
     // Derived a concrete ISO (3rd arg) rather than passing the preset through.
     const dep = planTrip.mock.calls[0][2] as string;
     expect(Number.isFinite(Date.parse(dep))).toBe(true);
   });
 
+  it("FAIL-LOUD even with a valid departure ISO: retired weekday/time or preset → 400 (not a validation bypass)", async () => {
+    planTrip.mockResolvedValue({ reachable: false });
+    const validIso = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+    const enc = encodeURIComponent(validIso);
+    // A valid departure alongside the removed custom params must still 400.
+    expect((await call(`${FROM}&${TO}&departure=${enc}&weekday=6&time=09:30`)).status).toBe(400);
+    // A valid departure alongside a retired preset id must still 400.
+    expect((await call(`${FROM}&${TO}&departure=${enc}&preset=weekday-morning`)).status).toBe(400);
+    expect(planTrip).not.toHaveBeenCalled();
+    // Sanity: the same valid departure with NO stray time params succeeds.
+    expect((await call(`${FROM}&${TO}&departure=${enc}`)).status).toBe(200);
+  });
+
   it("maps a provider failure to 502 (never 500)", async () => {
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     planTrip.mockRejectedValueOnce(new ProviderError("transitous plan responded 503"));
-    const res = await call(`${FROM}&${TO}&preset=weekday-morning`);
+    const res = await call(`${FROM}&${TO}&preset=crowded`);
     expect(res.status).toBe(502);
     logged.mockRestore();
   });

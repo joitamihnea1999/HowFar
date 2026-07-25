@@ -479,13 +479,10 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
             maxMinutes: String(action.band),
           });
           // Prefer the selection's resolved departure so the trip matches the
-          // rings on screen; else pass the time-context params for the server.
+          // rings on screen; else pass the preset for the server. (Preset-only
+          // since task 059 removed Custom; task 060 rewrites this handler.)
           if (sel.departure?.iso) params.set("departure", sel.departure.iso);
-          else if (sel.timeContext.kind === "preset") params.set("preset", sel.timeContext.preset);
-          else {
-            params.set("weekday", String(sel.timeContext.weekday));
-            params.set("time", `${String(sel.timeContext.hour).padStart(2, "0")}:${String(sel.timeContext.minute).padStart(2, "0")}`);
-          }
+          else params.set("preset", sel.timeContext.preset);
           return void reachDirections.open({ kind: "transit", coords, band: action.band, url: `/api/reach?${params.toString()}` });
         }
         default: {
@@ -826,7 +823,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
                 // still remounts to reset that transient state. Keyed on the
                 // EFFECTIVE pace (task 052 P4) so it matches the pace the amenities
                 // were actually fetched at — the common Normal-pace toggle keeps
-                // the panel mounted; only a Brisk/Relaxed-walk→transit toggle
+                // the panel mounted; only a Slow-walk→transit toggle
                 // remounts, which is correct since the amenity set changed.
                 key={`${sel.lastSelection?.lat ?? "x"},${sel.lastSelection?.lng ?? "x"}:${effectivePace(sel.mode, sel.pace)}`}
                 status={amenity.status}

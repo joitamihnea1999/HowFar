@@ -146,13 +146,9 @@ export function effectivePace(mode: Mode, pace: Pace): Pace {
  * Pure + exported so the exact query contract is unit-testable. */
 export function isochroneUrl(mode: Mode, origin: Origin, pace: Pace, timeContext: TimeContext): string {
   const coords = `?lat=${origin.lat}&lng=${origin.lng}`;
-  const withTime = (base: string) => {
-    if (timeContext.kind === "preset") return `${base}&preset=${timeContext.preset}`;
-    const hh = String(timeContext.hour).padStart(2, "0");
-    const mm = String(timeContext.minute).padStart(2, "0");
-    return `${base}&weekday=${timeContext.weekday}&time=${hh}%3A${mm}`;
-  };
-  // Car: time params only, NO pace (a Brisk/Relaxed pace left over from Walk can
+  // Preset-only since task 059 (Custom weekday/time was removed).
+  const withTime = (base: string) => `${base}&preset=${timeContext.preset}`;
+  // Car: time params only, NO pace (a Slow pace left over from Walk can
   // never reach /api/car — it doesn't accept pace and we don't emit it).
   if (mode === "car") return withTime(`${isochronePath(mode)}${coords}`);
   const base = `${isochronePath(mode)}${coords}&pace=${pace}`;
@@ -254,11 +250,8 @@ export function selectionReducer(state: SelectionState, action: SelectionAction)
   }
 }
 
-/** Structural equality for a TimeContext (avoids a no-op recompute + fetch). */
+/** Structural equality for a TimeContext (avoids a no-op recompute + fetch).
+ * Preset-only since task 059 (Custom weekday/time was removed). */
 export function sameTimeContext(a: TimeContext, b: TimeContext): boolean {
-  if (a.kind !== b.kind) return false;
-  if (a.kind === "preset" && b.kind === "preset") return a.preset === b.preset;
-  if (a.kind === "custom" && b.kind === "custom")
-    return a.weekday === b.weekday && a.hour === b.hour && a.minute === b.minute;
-  return false;
+  return a.preset === b.preset;
 }

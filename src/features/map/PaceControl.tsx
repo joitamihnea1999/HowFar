@@ -1,12 +1,12 @@
 import { PACES, PACE_MODEL, type Pace } from "@/features/isochrones/pace";
 
 /**
- * Walking-pace selector (task 051): Relaxed / Normal / Brisk, with a single
- * adaptive hint line that changes to teach WHEN to use each — no manual, no
- * hover needed. Pure presentation; the recompute/abort semantics live in
- * AppMap's `setPace`. Applies to BOTH modes (it also scales transit access +
- * egress walk and the amenity radius), so it uses the neutral accent rather
- * than a mode colour. Reach at a non-normal pace is an ESTIMATE (labelled).
+ * Walking-pace selector (task 051; cut to two in 059): Slow / Normal. Each
+ * button carries a COMPACT per-option meaning (owner: "a short description of
+ * what it means") so the choice is legible without selecting; the aria-live line
+ * below only surfaces the honesty qualifier for Slow (a non-normal, estimated
+ * reach). Pure presentation; the recompute/abort semantics live in AppMap's
+ * `setPace`. Walk-only (task 052 `effectivePace`), neutral accent.
  */
 
 interface PaceControlProps {
@@ -23,7 +23,7 @@ export default function PaceControl({ pace, onSelect }: PaceControlProps) {
       <div
         role="group"
         aria-label="Walking pace"
-        className="grid grid-cols-3 rounded-xl border border-white/[.09] bg-[#080b09]/65 p-1"
+        className="grid grid-cols-2 rounded-xl border border-white/[.09] bg-[#080b09]/65 p-1"
       >
         {PACES.map((p) => {
           const model = PACE_MODEL[p];
@@ -34,28 +34,38 @@ export default function PaceControl({ pace, onSelect }: PaceControlProps) {
               type="button"
               onClick={() => onSelect(p)}
               aria-pressed={active}
-              className={`inline-flex min-h-11 items-center justify-center gap-1.5 rounded-[0.65rem] px-2 text-xs font-semibold transition-[background-color,color,box-shadow] sm:text-[0.8rem] ${
+              className={`flex min-h-11 flex-col items-center justify-center gap-0.5 rounded-[0.65rem] px-2 py-1.5 text-center transition-[background-color,color,box-shadow] ${
                 active
                   ? "bg-[#edf2ed] text-[#111713] shadow-[0_5px_16px_rgba(0,0,0,.2)]"
                   : "text-[#9ca9a0] hover:bg-white/[.055] hover:text-[#edf2ed]"
               }`}
             >
-              <span aria-hidden="true">{model.emoji}</span>
-              {model.label}
+              <span className="inline-flex items-center gap-1.5 text-xs font-semibold sm:text-[0.8rem]">
+                <span aria-hidden="true">{model.emoji}</span>
+                {model.label}
+              </span>
+              {/* Per-option meaning — visible on BOTH buttons so the user can
+                  compare without selecting (owner ask / plan panel E). Dims on
+                  the inactive button but stays readable. */}
+              <span
+                data-testid={`pace-blurb-${p}`}
+                className={`text-[0.62rem] leading-3 ${active ? "text-[#4b5650]" : "text-[#6b776e]"}`}
+              >
+                {model.blurb}
+              </span>
             </button>
           );
         })}
       </div>
-      {/* Adaptive "why" hint — always visible, announced to screen readers.
-          Non-normal paces append an estimate qualifier (both walk + transit),
-          since the pace-scaled ring is a calibrated approximation (G6). */}
+      {/* Honesty qualifier — Slow is a non-normal, calibrated-approximation reach
+          (G6). Announced to screen readers; blank (reserved height) for Normal so
+          the layout doesn't jump. */}
       <p
         data-testid="pace-hint"
         aria-live="polite"
-        className="mt-1.5 px-1 text-[0.68rem] leading-4 text-[#78857b]"
+        className="mt-1.5 min-h-4 px-1 text-[0.68rem] leading-4 text-[#78857b]"
       >
-        {PACE_MODEL[pace].hint}
-        {pace !== "normal" ? " — estimated reach" : ""}
+        {pace === "normal" ? "" : `${PACE_MODEL[pace].hint} — estimated reach`}
       </p>
     </div>
   );

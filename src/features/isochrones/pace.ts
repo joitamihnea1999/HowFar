@@ -16,15 +16,18 @@
  * normal ranges (distance calibration is speed-independent — PROVIDERS.md
  * "Calibration": distance is the ruler, pace only rescales minutes⇄distance).
  * VALIDATED (task 051 G6, bounded MOTIS distance-ruler at pace extremes): the
- * linear scale holds within ±10% (Relaxed −2.1%, Brisk +9.7% — borderline, so
- * the UI labels non-normal paced reach an "estimated reach"). A multi-origin
- * tightening of Brisk is parked. If a future audit fails, replace the failing
- * pace's `orsRangesS` with a measured triple.
+ * linear scale holds within ±10% (the Slow=66 m/min pace measured −2.1%), so the
+ * UI labels non-normal (Slow) reach an "estimated reach". If a future audit
+ * fails, replace the failing pace's `orsRangesS` with a measured triple.
+ *
+ * Task 059: the pace set was cut to two — `slow` (the pre-059 "relaxed"
+ * constants, unchanged) + `normal` — dropping "brisk"; only ids/copy changed, so
+ * `normal` stays byte-identical and `slow` keeps relaxed's calibration.
  */
 
-export type Pace = "relaxed" | "normal" | "brisk";
+export type Pace = "slow" | "normal";
 
-export const PACES: readonly Pace[] = ["relaxed", "normal", "brisk"] as const;
+export const PACES: readonly Pace[] = ["slow", "normal"] as const;
 export const DEFAULT_PACE: Pace = "normal";
 
 /** Nominal normal walking speed — the speed the ring LABELS have always promised. */
@@ -40,6 +43,10 @@ export interface PaceModel {
   label: string;
   /** Leading glyph for the control (client only reads this). */
   emoji: string;
+  /** Short per-option description shown UNDER each button (both visible, so a
+   *  user can choose without selecting) — the owner's "short description of what
+   *  it means" (task 059 / plan panel E). */
+  blurb: string;
   /** Adaptive one-line "when to use this" hint (client `aria-live`). */
   hint: string;
   /** Pedestrian speed in metres/minute. */
@@ -61,11 +68,16 @@ function scaledRanges(speedMPerMin: number): [number, number, number] {
 }
 
 export const PACE_MODEL: Record<Pace, PaceModel> = {
-  relaxed: {
-    id: "relaxed",
-    label: "Relaxed",
+  // `slow` reuses the pre-059 "relaxed" physical constants EXACTLY (66 m/min,
+  // "1.100", egress 66/detour, scaledRanges(66)) — only the id/label/copy change,
+  // so its calibration is the same one G6 bounded (Relaxed −2.1%). Labelled an
+  // "estimated reach" (non-normal) in the control.
+  slow: {
+    id: "slow",
+    label: "Slow",
     emoji: "🚶",
-    hint: "with kids, a stroller, or taking it easy",
+    blurb: "leisurely, ~4 km/h",
+    hint: "an easy stroll — with kids, a stroller, or in no hurry",
     speedMPerMin: 66,
     pedestrianSpeedMs: "1.100",
     egressMPerMin: 66 / STREET_DETOUR,
@@ -75,6 +87,7 @@ export const PACE_MODEL: Record<Pace, PaceModel> = {
     id: "normal",
     label: "Normal",
     emoji: "🚶‍♂️",
+    blurb: "average adult, ~4.8 km/h",
     hint: "average adult, about 4.8 km/h",
     speedMPerMin: NORMAL_SPEED_M_PER_MIN,
     // Kept as the pre-051 literal (NOT 80/60="1.3333…") for request byte-identity.
@@ -82,25 +95,13 @@ export const PACE_MODEL: Record<Pace, PaceModel> = {
     egressMPerMin: NORMAL_SPEED_M_PER_MIN / STREET_DETOUR,
     orsRangesS: scaledRanges(NORMAL_SPEED_M_PER_MIN),
   },
-  brisk: {
-    id: "brisk",
-    label: "Brisk",
-    emoji: "🏃",
-    hint: "fit and walking with purpose",
-    speedMPerMin: 92,
-    pedestrianSpeedMs: "1.533",
-    egressMPerMin: 92 / STREET_DETOUR,
-    orsRangesS: scaledRanges(92),
-  },
 };
 
-/** Narrow an untrusted string (query param) to a `Pace`, defaulting to normal. */
-export function parsePace(raw: string | null | undefined): Pace {
-  return raw && (PACES as readonly string[]).includes(raw) ? (raw as Pace) : DEFAULT_PACE;
-}
-
-/** Strict variant for API validation: null when the value is present but invalid
- * (so a route can 400 on junk) vs undefined/empty → default. */
+/** Narrow an untrusted string (query param) to a `Pace` for API validation: null
+ * when the value is present but invalid (so a route can 400 on junk incl. the
+ * retired `relaxed`/`brisk` ids — fail-loud, no silent alias) vs undefined/empty
+ * → default. Every route uses this strict form (the pre-059 lenient `parsePace`
+ * that silently defaulted junk was removed as dead + policy-contradicting). */
 export function parsePaceStrict(raw: string | null | undefined): Pace | null {
   if (raw === null || raw === undefined || raw === "") return DEFAULT_PACE;
   return (PACES as readonly string[]).includes(raw) ? (raw as Pace) : null;

@@ -1,128 +1,109 @@
 /**
- * Transit departure "time context" — the single source of truth for WHEN the
- * transit reachability is computed, shared by the UI `TimeContextControl`
- * (labels + hints + presets), the `/api/transit` route (param parsing), and
+ * Transit/car departure "time context" — the single source of truth for WHEN
+ * reachability is computed, shared by the UI `TimeContextControl` (labels +
+ * hints), the `/api/transit` `/api/car` `/api/reach` routes (param parsing), and
  * `server/transit.ts` (resolution to a pinned ISO instant).
  *
- * PURE module — no server imports — so the client control can read presets and
- * the server can resolve them from the same table.
+ * PURE module — no server imports — so the client control and the server read
+ * the same table.
  *
- * Transit-only (walking has no schedule). The default preset reproduces the
- * pre-051 behaviour exactly (upcoming Wednesday 08:30 Europe/Bucharest,
- * strictly-future / never-today), so an unchanged request is byte-identical.
+ * Task 059 cut this to the least-necessary set the owner asked for: TWO options,
+ * **Crowded** (weekday rush) and **Not crowded** (off-peak midday). The four old
+ * presets and the free-form Custom day/time editor are gone. `crowded` reuses the
+ * pre-059 default fields exactly (upcoming Wednesday 08:30 Europe/Bucharest,
+ * strictly-future / never-today), so a default request stays byte-identical
+ * (same resolved departure → same transit cache key; same am-peak car slot).
  *
- * Custom is deliberately NOT exact-minute trip planning (task 051 scope): the
- * minute is quantised to :00/:30 slots so cache keys stay bounded, and the
- * resolver rolls forward to the nearest UPCOMING occurrence of the chosen
- * weekday+slot (same-day if still in the future — unlike the presets).
+ * No live users (CLAUDE.md), so removed query params are NOT aliased — they are
+ * rejected fail-loud (→ 400) rather than silently defaulting, and the intentional
+ * API break is documented in docs/PROVIDERS.md.
  */
 
 // JS `Date.getUTCDay()` convention: 0=Sun … 3=Wed … 6=Sat.
-export type TimePresetId = "weekday-morning" | "midday" | "evening" | "weekend";
+export type TimePresetId = "crowded" | "quiet";
 
 export interface TimePreset {
   id: TimePresetId;
+  /** Segment label shown on the chip. */
   label: string;
   /** Adaptive "why" hint, mirroring the pace control. */
   hint: string;
+  /** Natural time-phrase for the SelectionCard honesty sentence
+   *  ("Scheduled public transport for {phrase}"). */
+  phrase: string;
   weekday: number;
   hour: number;
   minute: number;
 }
 
 export const TIME_PRESETS: Record<TimePresetId, TimePreset> = {
-  "weekday-morning": {
-    id: "weekday-morning",
-    label: "Weekday morning",
-    hint: "typical weekday morning peak",
+  // `crowded` == the pre-059 default (Wed 08:30) → byte-identical default rings
+  // and the weekday-morning car slot (am-peak ×2.1).
+  crowded: {
+    id: "crowded",
+    label: "Crowded",
+    hint: "rush hour — busiest service and heaviest traffic",
+    phrase: "a weekday rush hour",
     weekday: 3,
     hour: 8,
     minute: 30,
   },
-  midday: {
-    id: "midday",
-    label: "Midday",
-    hint: "quieter off-peak weekday service",
+  quiet: {
+    id: "quiet",
+    // Owner label "Not crowded". Mapped to weekday MIDDAY (Wed 12:30): the honest
+    // "not crowded" for BOTH engines — full daytime transit service + light-but-
+    // real traffic (car midday ×1.5). Night/weekend would misread as a thin
+    // timetable (worse reach), which is not what "quieter" should imply.
+    label: "Not crowded",
+    hint: "off-peak midday — quieter service and lighter traffic",
+    phrase: "a quieter midday",
     weekday: 3,
     hour: 12,
     minute: 30,
   },
-  evening: {
-    id: "evening",
-    label: "Evening",
-    hint: "evening rush-hour service",
-    weekday: 3,
-    hour: 18,
-    minute: 0,
-  },
-  weekend: {
-    id: "weekend",
-    label: "Weekend",
-    hint: "thinner weekend timetable",
-    weekday: 6,
-    hour: 12,
-    minute: 0,
-  },
 };
 
 export const TIME_PRESET_IDS = Object.keys(TIME_PRESETS) as TimePresetId[];
-export const DEFAULT_TIME_PRESET: TimePresetId = "weekday-morning";
+export const DEFAULT_TIME_PRESET: TimePresetId = "crowded";
 
-export type TimeContext =
-  | { kind: "preset"; preset: TimePresetId }
-  | { kind: "custom"; weekday: number; hour: number; minute: number };
+/** One option now, but kept as a discriminated shape so `tc.kind`/`tc.preset`
+ *  consumers stay unchanged after the Custom variant was removed (task 059). */
+export type TimeContext = { kind: "preset"; preset: TimePresetId };
 
 export const DEFAULT_TIME_CONTEXT: TimeContext = { kind: "preset", preset: DEFAULT_TIME_PRESET };
 
-/** Quantise a raw minute to the nearest :00/:30 slot (bounds cache keys; the
- * picker only offers those two anyway). Rounds to 30 only within the same hour
- * — 30..59 → 30, else 0 — so no hour carry is needed. */
-export function quantizeMinute(minute: number): 0 | 30 {
-  return minute >= 30 ? 30 : 0;
-}
-
-/** Resolved wall-clock fields + whether "today" is allowed (presets are
- * strictly-future/never-today for cache stability; custom may be today). */
+/** Resolved wall-clock fields. Both presets are strictly-future/never-today for
+ * cache stability (~6-day reuse, rolls forward weekly). The pre-059 `allowToday`
+ * flag existed only for the now-removed Custom mode, so it is gone. */
 export interface DepartureFields {
   weekday: number;
   hour: number;
   minute: number;
-  allowToday: boolean;
 }
 
 export function departureFields(tc: TimeContext): DepartureFields {
-  if (tc.kind === "custom") {
-    return {
-      weekday: ((tc.weekday % 7) + 7) % 7,
-      hour: Math.min(23, Math.max(0, Math.trunc(tc.hour))),
-      minute: quantizeMinute(tc.minute),
-      allowToday: true,
-    };
-  }
   const p = TIME_PRESETS[tc.preset];
-  return { weekday: p.weekday, hour: p.hour, minute: p.minute, allowToday: false };
+  return { weekday: p.weekday, hour: p.hour, minute: p.minute };
 }
 
-/** Short human summary for the UI honesty copy ("Scheduled public transport for …"). */
+/** Natural time-phrase for the UI honesty copy — reads correctly inside
+ * "Scheduled public transport for {…}" (never the raw label, which would render
+ * "…for Crowded"). */
 export function timeContextSummary(tc: TimeContext): string {
-  if (tc.kind === "preset") return TIME_PRESETS[tc.preset].label;
-  const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-  const f = departureFields(tc);
-  const hh = String(f.hour).padStart(2, "0");
-  const mm = String(f.minute).padStart(2, "0");
-  return `${days[f.weekday]} ${hh}:${mm}`;
+  return TIME_PRESETS[tc.preset].phrase;
 }
 
 /** Adaptive hint for the active context (mirrors pace's `hint`). */
 export function timeContextHint(tc: TimeContext): string {
-  return tc.kind === "preset" ? TIME_PRESETS[tc.preset].hint : "your chosen day and time";
+  return TIME_PRESETS[tc.preset].hint;
 }
 
 /**
- * Parse untrusted query params into a `TimeContext`. Returns `null` on invalid
- * input (route → 400) and `DEFAULT_TIME_CONTEXT` when nothing is supplied (so
- * pre-051 URLs keep working). Custom (weekday+time) takes precedence; both are
- * required together. `time` is `HH:MM` 24h; the minute is slot-quantised later.
+ * Parse untrusted query params into a `TimeContext`. Preset-only (task 059).
+ * Returns `DEFAULT_TIME_CONTEXT` when nothing relevant is supplied, `null` on
+ * anything invalid (route → 400). Fail-loud on the RETIRED custom params: any
+ * `weekday` or `time` present is rejected (never silently defaulted to Crowded),
+ * and an unknown/removed preset id is rejected.
  */
 export function parseTimeContext(params: {
   preset?: string | null;
@@ -133,16 +114,10 @@ export function parseTimeContext(params: {
   const weekday = params.weekday ?? "";
   const time = params.time ?? "";
 
-  if (weekday !== "" || time !== "") {
-    if (weekday === "" || time === "") return null; // custom needs BOTH
-    const wd = Number(weekday);
-    const m = /^(\d{1,2}):(\d{2})$/.exec(time);
-    if (!Number.isInteger(wd) || wd < 0 || wd > 6 || !m) return null;
-    const hour = Number(m[1]);
-    const minute = Number(m[2]);
-    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
-    return { kind: "custom", weekday: wd, hour, minute };
-  }
+  // Retired custom mode: reject rather than ignore, so a stale client fails
+  // loudly instead of getting a silent Crowded default (plan panel).
+  if (weekday !== "" || time !== "") return null;
+
   if (preset !== "") {
     if (!(TIME_PRESET_IDS as string[]).includes(preset)) return null;
     return { kind: "preset", preset: preset as TimePresetId };
