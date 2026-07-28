@@ -23,11 +23,13 @@ interface FakeNode {
   tag: string;
   attrs: Record<string, string>;
   dataset: Record<string, string>;
-  style: { cssText: string };
+  style: { cssText: string; transform?: string; transformOrigin?: string; transition?: string; zIndex?: string };
   className: string;
   type: string;
   textContent: string;
   children: FakeNode[];
+  /** The hover path scales the inner SVG via `firstElementChild` (task 062). */
+  readonly firstElementChild: FakeNode | null;
   listeners: Record<string, ((event: unknown) => void)[]>;
   setAttribute: (name: string, value: string) => void;
   appendChild: (child: FakeNode) => void;
@@ -44,6 +46,9 @@ function makeNode(tag: string): FakeNode {
     type: "",
     textContent: "",
     children: [],
+    get firstElementChild() {
+      return node.children[0] ?? null;
+    },
     listeners: {},
     setAttribute: (name, value) => void (node.attrs[name] = value),
     appendChild: (child) => void node.children.push(child),
@@ -82,7 +87,7 @@ const { createAmenityClusterController } = await import("./amenity-cluster-contr
 const { createAmenityClusterController: _ctor, MIN_MARK_TAP_RADIUS_PX } = await import(
   "./amenity-cluster-controller");
 void _ctor;
-const { clusterFootprintRadius, pinFootprintRadius } = await import(
+const { clusterFootprintRadius, pinFootprintRadius, DONUT_HOVER_SCALE } = await import(
   "@/features/amenities/amenity-cluster");
 
 /** Pending animation frames, flushed explicitly so reconcile timing is exact. */
@@ -168,12 +173,14 @@ function setup({
   const el = { dataset: {} as Record<string, string> } as unknown as HTMLElement;
   const onClusterClick = vi.fn();
   const onAbsorbedChange = vi.fn();
+  const onHoverLost = vi.fn();
   const controller = createAmenityClusterController({
     map: map as never,
     el,
     loadState: { styleLoaded: true } as never,
     onClusterClick,
     onAbsorbedChange,
+    onHoverLost,
   });
   /** Run one reconcile pass at an unchanged camera and unchanged data. */
   const tick = () => {
@@ -187,7 +194,7 @@ function setup({
     for (const fn of listeners.sourcedata ?? []) fn({ sourceId: "amenities" });
     flush();
   };
-  return { controller, map, el, listeners, onClusterClick, onAbsorbedChange, tick, tickData, state };
+  return { controller, map, el, listeners, onClusterClick, onAbsorbedChange, onHoverLost, tick, tickData, state };
 }
 
 beforeEach(() => {
@@ -633,9 +640,10 @@ describe("defensive paths", () => {
     const many = markers.find((m) => m.element.dataset.clusterTotal === "150");
     expect(one?.element.attrs["aria-label"]).toContain("1 place here");
     expect(one?.element.attrs["aria-label"]).not.toContain("1 places");
-    // A three-digit count needs the smaller glyph to stay inside the ring.
+    // A three-digit count needs the smaller glyph to stay inside the ring
+    // (task 062 bumped the pair to 12/11 for legibility).
     const text = many?.element.children[0]?.children.at(-1);
-    expect(text?.attrs["font-size"]).toBe("9");
+    expect(text?.attrs["font-size"]).toBe("11");
   });
 
   it("orders coincident PIN candidates deterministically", () => {
@@ -841,8 +849,13 @@ describe("hit target by pointer kind", () => {
     // Near-tangent is the worst case the invariant permits, so it decides whether
     // click-to-select survives in a dense field. (At EXACTLY tangent the single shared
     // point belongs to both marks and nearest-centre picks one — measure-zero, and not
-    // worth contorting the geometry over.)
-    const gap = 2 * clusterFootprintRadius(2) + 4;
+    // worth contorting the geometry over.) Since task 062 the merge pass reserves the
+    // HOVER-grown donut footprint, so "almost touching but legally separate" means
+    // clear of the hovered tangency, not the resting one.
+    // +2 (not more): the midpoint must stay inside the 22px touch target while
+    // remaining outside the resting footprint — the two contracts this fixture
+    // exists to hold simultaneously at the tightest legal spacing.
+    const gap = 2 * clusterFootprintRadius(2) * DONUT_HOVER_SCALE + 2;
     const { controller, tick } = setup({
       clusters: [
         cluster(1, 100, 100, { groceries: 2 }),
@@ -856,11 +869,109 @@ describe("hit target by pointer kind", () => {
   });
 
   it("gives an ambiguous tap to the nearest mark", () => {
+    // Spacing derived from the merge boundary (hover-grown footprints since task
+    // 062) so the two marks are the CLOSEST pair that legally stays separate.
+    const sep = Math.ceil(2 * clusterFootprintRadius(3) * DONUT_HOVER_SCALE) + 2;
     const { controller, tick } = setup({
-      clusters: [cluster(1, 100, 100, { groceries: 3 }), cluster(2, 140, 100, { groceries: 3 })],
+      clusters: [cluster(1, 100, 100, { groceries: 3 }), cluster(2, 100 + sep, 100, { groceries: 3 })],
     });
     tick();
     expect(controller.pickAt({ x: 112, y: 100 })?.ids).toEqual([1]);
-    expect(controller.pickAt({ x: 128, y: 100 })?.ids).toEqual([2]);
+    expect(controller.pickAt({ x: 100 + sep - 12, y: 100 })?.ids).toEqual([2]);
+  });
+});
+
+describe("hover grow + preview data (task 062)", () => {
+  // The hover is CONTROLLER-owned: reconcile rebuilds donut elements every
+  // camera frame, so an externally-applied transform dies on the next pan.
+  // These tests pin the ownership contract the plan panel required.
+  it("hoverAt grows the inner SVG of the mark under the point and returns its counts", () => {
+    const { controller, tick } = setup({ clusters: [cluster(1, 100, 100, { groceries: 2, parks: 1 })] });
+    tick();
+    const pick = controller.hoverAt({ x: 102, y: 100 });
+    expect(pick?.total).toBe(3);
+    expect(pick?.counts).toEqual([
+      { category: "groceries", count: 2 },
+      { category: "parks", count: 1 },
+    ]);
+    const svg = markers[0].element.children[0];
+    expect(svg.style.transform).toContain("scale(");
+    // The transform lives on the INNER svg — MapLibre owns the root's transform.
+    expect(markers[0].element.style.transform ?? "").toBe("");
+  });
+
+  it("moving off the mark (hoverAt null) reverts the grow", () => {
+    const { controller, tick } = setup({ clusters: [cluster(1, 100, 100, { groceries: 3 })] });
+    tick();
+    controller.hoverAt({ x: 100, y: 100 });
+    controller.hoverAt(null);
+    expect(markers[0].element.children[0].style.transform).toBe("");
+  });
+
+  it("re-applies the grow to a REBUILT element for the still-hovered key", () => {
+    const clusters = [cluster(1, 100, 100, { groceries: 3 })];
+    const { controller, tickData } = setup({ clusters });
+    tickData();
+    controller.hoverAt({ x: 100, y: 100 });
+    // Same key (same id set), new signature (count changed) → remove + recreate.
+    clusters[0] = cluster(1, 100, 100, { groceries: 4 });
+    tickData();
+    const rebuilt = markers.filter((m) => !m.removed).at(-1);
+    expect(rebuilt?.element.children[0].style.transform).toContain("scale(");
+  });
+
+  it("widens the hovered mark's OWN hit radius so the grown outer ring never clicks through", () => {
+    const { controller, tick } = setup({ clusters: [cluster(1, 100, 100, { groceries: 3 })] });
+    tick();
+    const resting = controller.pickAt({ x: 100, y: 100 });
+    if (!resting) throw new Error("no pick");
+    // A point just past the resting footprint misses while unhovered...
+    const drawn = clusterFootprintRadius(3);
+    expect(controller.pickAt({ x: 100 + drawn + 1, y: 100 })).toBeNull();
+    // ...but resolves once the mark is hover-grown (the ring is visibly there).
+    controller.hoverAt({ x: 100, y: 100 });
+    expect(controller.pickAt({ x: 100 + drawn + 1, y: 100 })?.ids).toEqual([1]);
+    expect(controller.covers({ x: 100 + drawn + 1, y: 100 })).toBe(true);
+  });
+
+  it("refuses hover while marks are stale and reports the loss exactly once", () => {
+    const { controller, tick, onHoverLost } = setup({ clusters: [cluster(1, 100, 100, { groceries: 3 })] });
+    tick();
+    controller.hoverAt({ x: 100, y: 100 });
+    controller.invalidateMarks();
+    expect(onHoverLost).toHaveBeenCalledTimes(1);
+    expect(markers[0].element.children[0].style.transform).toBe("");
+    expect(controller.hoverAt({ x: 100, y: 100 })).toBeNull();
+  });
+
+  it("reports hover loss when the hovered mark disappears in a reconcile", () => {
+    const clusters = [cluster(1, 100, 100, { groceries: 3 })];
+    const { controller, tickData, onHoverLost } = setup({ clusters });
+    tickData();
+    controller.hoverAt({ x: 100, y: 100 });
+    clusters.length = 0; // the mark is gone at this zoom/data
+    tickData();
+    expect(onHoverLost).toHaveBeenCalledTimes(1);
+  });
+
+  it("ordinary hover transitions do NOT fire onHoverLost (the pointer knows)", () => {
+    const { controller, tick, onHoverLost } = setup({
+      clusters: [cluster(1, 100, 100, { groceries: 3 }), cluster(2, 200, 100, { parks: 2 })],
+    });
+    tick();
+    controller.hoverAt({ x: 100, y: 100 });
+    controller.hoverAt({ x: 200, y: 100 }); // slide to the neighbour
+    controller.hoverAt(null); // leave the map
+    expect(onHoverLost).not.toHaveBeenCalled();
+  });
+  it("button activation (keyboard path) drops the hover so no preview outlives the popup it opens", () => {
+    const { controller, tick, onHoverLost } = setup({ clusters: [cluster(1, 100, 100, { groceries: 3 })] });
+    tick();
+    controller.hoverAt({ x: 100, y: 100 });
+    const btn = markers[0].element;
+    for (const fn of btn.listeners.click ?? [])
+      fn({ detail: 0, stopPropagation() {}, preventDefault() {} });
+    expect(onHoverLost).toHaveBeenCalledTimes(1);
+    expect(btn.children[0].style.transform).toBe("");
   });
 });

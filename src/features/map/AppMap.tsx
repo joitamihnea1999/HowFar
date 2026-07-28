@@ -3,11 +3,12 @@
 import maplibregl from "maplibre-gl";
 import { Protocol } from "pmtiles";
 import type { ReactNode } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import "maplibre-gl/dist/maplibre-gl.css";
 
 import {
+  AMENITY_CATEGORIES,
   type Amenity,
   type AmenityCategoryKey,
 } from "@/features/amenities/amenities";
@@ -21,11 +22,12 @@ import {
 import { BUCHAREST_MAX_BOUNDS } from "@/lib/bounds";
 import { DEFAULT_RING_FILTER, type RingFilter } from "@/features/isochrones/isochrone-view";
 import AmenityPanel from "@/features/map/AmenityPanel";
-import { MAP_MAX_ZOOM } from "@/features/amenities/amenity-cluster";
+import { clusterMarkerSizePx, DONUT_HOVER_SCALE, MAP_MAX_ZOOM } from "@/features/amenities/amenity-cluster";
 import AttributionBadge from "@/features/map/AttributionBadge";
 import {
   createAmenityClusterController,
   type AmenityClusterController,
+  type ClusterPick,
 } from "@/features/map/amenity-cluster-controller";
 import {
   AMENITY_ENCODING,
@@ -43,8 +45,11 @@ import {
 } from "@/features/map/map-setup";
 import { createAmenitySpiderController } from "@/features/map/amenity-spider-controller";
 import { createAmenitiesController, type AmenityUi } from "@/features/map/amenities-controller";
-import { createCameraController } from "@/features/map/camera-controller";
+import { createCameraController, type CameraController } from "@/features/map/camera-controller";
+import { DOCK_BREAKPOINT_PX } from "@/features/map/camera";
 import { createHoverController } from "@/features/map/hover-controller";
+import { deriveShell, type ShellState } from "@/features/map/shell-state";
+import StatePill from "@/features/map/StatePill";
 import { createLoadState } from "@/features/map/load-state";
 import { createPopupController } from "@/features/map/popup-controller";
 import {
@@ -93,11 +98,41 @@ import {
   type SelectionState,
 } from "@/features/map/selection-flow";
 import { type Pace } from "@/features/isochrones/pace";
-import { type TimeContext } from "@/features/isochrones/time-context";
+import { TIME_PRESETS, type TimeContext } from "@/features/isochrones/time-context";
 
 // Piața Unirii — the classic Bucharest reference point.
 const BUCHAREST_CENTER: [number, number] = [26.1025, 44.4268];
 const SUGGEST_DEBOUNCE_MS = 250;
+
+// Mobile shell breakpoint (task 062): the stacked dock/sheet layout below `md`.
+// Shares `DOCK_BREAKPOINT_PX` with the camera-padding math so "which layout is
+// on screen" and "which insets frame the map" can never disagree.
+const MOBILE_SHELL_QUERY = `(max-width: ${DOCK_BREAKPOINT_PX - 0.02}px)`;
+function subscribeToMobileShell(onChange: () => void): () => void {
+  const mql = window.matchMedia(MOBILE_SHELL_QUERY);
+  mql.addEventListener("change", onChange);
+  return () => mql.removeEventListener("change", onChange);
+}
+function readMobileShell(): boolean {
+  return window.matchMedia(MOBILE_SHELL_QUERY).matches;
+}
+
+// Hover is a pointer concept: touch browsers synthesize mousemove on tap, which
+// would flash the cluster grow+preview underneath the click ladder (plan panel,
+// task 062) — so every hover affordance is gated on a real fine pointer.
+const HOVER_CAPABLE_QUERY = "(hover: hover) and (pointer: fine)";
+
+/** What the cluster hover-preview panel renders (task 062) — a copy of the
+ * hovered mark's own reconcile-time data plus its frozen screen anchor. */
+interface ClusterHoverPreview {
+  key: string;
+  x: number;
+  y: number;
+  total: number;
+  counts: { category: AmenityCategoryKey; count: number }[];
+  /** Distance from the mark centre to the panel edge (hovered footprint + gap). */
+  offset: number;
+}
 
 /** Shared result-surface predicate for the React shell and camera resize path.
  * The reach directions panel occupies the SAME result-sheet slot (task 058), so
@@ -231,6 +266,41 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
     applyRingFilterRef.current?.(next);
   }
 
+  // --- Mobile shell state (task 062): dock pill + sheet peek. The user flags
+  // are mirrored in refs (same pattern as selRef) so the camera controller's
+  // shell getter — called synchronously inside the selection flow, before the
+  // flyTo — always reads the value the upcoming render will show.
+  const isMobileShell = useSyncExternalStore(subscribeToMobileShell, readMobileShell, () => false);
+  const [userDockOpen, setUserDockOpen] = useState(false);
+  const [userSheetExpanded, setUserSheetExpanded] = useState(false);
+  const userDockOpenRef = useRef(false);
+  const userSheetExpandedRef = useRef(false);
+  const cameraRef = useRef<CameraController | null>(null);
+  function setDockOpen(open: boolean) {
+    userDockOpenRef.current = open;
+    setUserDockOpen(open);
+  }
+  function setSheetExpanded(expanded: boolean) {
+    userSheetExpandedRef.current = expanded;
+    setUserSheetExpanded(expanded);
+  }
+  // Cluster hover preview (task 062): set only on key change, rendered
+  // pointer-events-none, closed by mouseout/movestart/click/hover-loss.
+  const [clusterPreview, setClusterPreview] = useState<ClusterHoverPreview | null>(null);
+
+  // Deep-links from the peek chips: expand the sheet, then land on the control
+  // the chip summarizes (owner: state must show "where to change and how").
+  const refineBlockRef = useRef<HTMLDivElement | null>(null);
+  const amenityBlockRef = useRef<HTMLDivElement | null>(null);
+  function expandSheetTo(target: "refine" | "amenities") {
+    setSheetExpanded(true);
+    requestAnimationFrame(() => {
+      const block = target === "refine" ? refineBlockRef.current : amenityBlockRef.current;
+      block?.scrollIntoView({ block: "nearest" });
+      block?.querySelector<HTMLElement>("button, input")?.focus();
+    });
+  }
+
   function dispatchSel(action: SelectionAction): SelectionState {
     const next = selectionReducer(selRef.current, action);
     if (next !== selRef.current) {
@@ -302,7 +372,23 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
 
     // --- Controllers (created in acyclic order; each returns its methods +
     // dispose). Leaves first: camera + hover + ring depend only on map/el/state.
-    const camera = createCameraController({ map, el });
+    const camera = createCameraController({
+      map,
+      el,
+      // Fresh shell from the synchronously-updated refs: padding committed just
+      // before a selection flyTo already reflects the dock that is about to
+      // collapse (task 062 ordering contract — see renderSelectionStash).
+      shell: () =>
+        deriveShell({
+          isMobile: readMobileShell(),
+          selStatus: selRef.current.status,
+          hasSelection: selRef.current.lastSelection !== null,
+          userDockOpen: userDockOpenRef.current,
+          userSheetExpanded: userSheetExpandedRef.current,
+          reachActive: reachActiveRef.current,
+        }),
+    });
+    cameraRef.current = camera;
     const { applyCameraPadding } = camera;
     const hover = createHoverController({ map, el, loadState });
     const {
@@ -392,6 +478,42 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
     // Donut clusters are created AFTER the amenities controller (they read its
     // source) and handed back through the holder, so the controller's single
     // visibility chokepoint can hide them along with the WebGL layers.
+    // Cluster hover preview glue (task 062). The panel state is React's, the
+    // grow is the controller's; this layer only decides WHEN. `suppressedKey`
+    // implements "the panel yields to an explicit interaction": clicking a mark
+    // closes its preview and keeps it closed while the pointer stays on that
+    // same mark, so it never floats over the list popup the click just opened.
+    // Declared BEFORE the cluster controller so `onHoverLost` routes through
+    // the SAME bookkeeping — bypassing it left `previewKey` stale, and a
+    // same-key mark rebuilt under a still pointer re-grew without its panel
+    // (found in review).
+    const hoverCapable = window.matchMedia(HOVER_CAPABLE_QUERY);
+    let previewKey: string | null = null;
+    let suppressedKey: string | null = null;
+    const updateClusterPreview = (pick: ClusterPick | null) => {
+      const key = pick ? pick.key : null;
+      if (key === null) suppressedKey = null;
+      const shown = key !== null && key !== suppressedKey ? key : null;
+      if (shown === previewKey) return;
+      previewKey = shown;
+      if (!pick || shown === null) return void setClusterPreview(null);
+      const p = map.project(pick.coords);
+      setClusterPreview({
+        key: pick.key,
+        x: p.x,
+        y: p.y,
+        total: pick.total,
+        counts: pick.counts,
+        offset: (clusterMarkerSizePx(pick.total) / 2) * DONUT_HOVER_SCALE + 10,
+      });
+    };
+    const closeClusterPreview = (suppressCurrent = false) => {
+      suppressedKey = suppressCurrent ? (previewKey ?? suppressedKey) : null;
+      if (previewKey === null) return;
+      previewKey = null;
+      setClusterPreview(null);
+    };
+
     const clusters = createAmenityClusterController({
       map,
       el,
@@ -401,6 +523,10 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       // An absorbed pin is already drawn as part of a donut, so the pin layer must
       // stop painting it (the absorbed-pin case).
       onAbsorbedChange: () => amenities.reapplyFilter(),
+      // The hovered mark vanished under a still pointer (reconcile/recluster/
+      // clear) — the preview must never outlive its mark, and the glue's own
+      // key bookkeeping must reset with it (task 062, found in review).
+      onHoverLost: () => closeClusterPreview(),
     });
     amenityClustersRef.current = clusters;
     amenityClusterDisposeRef.current = clusters.dispose;
@@ -424,12 +550,37 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
     // Stash the rendered rings+mode+origin for the right-click reach popup, and
     // clear them whenever the selection is dropped, so a right-click never reads
     // stale geometry (task 052 D).
+    // Origin of the last RESOLVED selection — a recompute at the same origin
+    // keeps the user's dock/sheet state (see renderSelectionStash).
+    let lastResolvedOrigin: { lat: number; lng: number } | null = null;
     const renderSelectionStash = (origin: Origin, label: string, rings: Ring[], mode: Mode) => {
       // `dispatchSel({type:"resolved",…,car})` runs synchronously BEFORE this in
       // the controller, so `selRef.current.car` is the fresh basis for THIS
       // resolution (null for walk/transit) — snapshot it into the atomic reach
       // stash so a right-click car band names the traffic it was computed for.
       reachRef.current = { rings, mode, origin, car: selRef.current.car };
+      // A NEW-origin resolution re-collapses the mobile dock and resets the
+      // sheet to peek (task 062). A same-origin recompute (pace/time/mode
+      // change) keeps the user's surfaces exactly as they are — resetting on
+      // every resolution snapped the sheet shut mid-comparison (tap "Slow"
+      // from the expanded sheet → sheet collapsed, focus dropped to body) and
+      // re-collapsed a deliberately reopened dock (found in review). Refs
+      // FIRST, then state: renderSelection commits its padding via the camera
+      // controller's shell getter on the next line, so the insets the flyTo
+      // frames against already describe the collapsed shell — flipping this
+      // after the flyTo would either frame against stale expanded-dock insets
+      // or cancel the animation (setPadding→jumpTo→stop).
+      const isNewOrigin =
+        lastResolvedOrigin === null ||
+        Math.abs(lastResolvedOrigin.lat - origin.lat) > 1e-9 ||
+        Math.abs(lastResolvedOrigin.lng - origin.lng) > 1e-9;
+      lastResolvedOrigin = { lat: origin.lat, lng: origin.lng };
+      if (isNewOrigin) {
+        userDockOpenRef.current = false;
+        userSheetExpandedRef.current = false;
+        setUserDockOpen(false);
+        setUserSheetExpanded(false);
+      }
       renderSelection(origin, label, rings, mode);
       // Camera-race guard (task 060, review): a cross-mode right-click
       // fires switchMode("transit"), whose recompute lands here and flyTo's the
@@ -698,6 +849,10 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
           )
         : Number.POSITIVE_INFINITY;
       if (clusterHit && clusterHit.distance <= nearestPin) {
+        // The click supersedes the hover preview: close it and keep it closed
+        // while the pointer stays on this mark, so it never floats over the
+        // list popup the click opens (task 062).
+        closeClusterPreview(true);
         // `pinIds` MUST be forwarded: an absorbed pin is hidden from the pin layer,
         // so if the pointer path drops it the place becomes completely unreachable —
         // the exact defect this task exists to remove (found in review).
@@ -738,11 +893,23 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       // rather than written here — writing the cursor directly was immediately overwritten
       // by the controller's own cursor logic, so the affordance never appeared
       // (found in review).
-      scheduleAmenityHover(e.point, clusters.pickAt(e.point) !== null);
+      // Hover grow + preview only for a real fine pointer (touch synthesizes
+      // mousemove on tap — plan panel); the cursor hint works for both.
+      const pick = hoverCapable.matches ? clusters.hoverAt(e.point) : clusters.pickAt(e.point);
+      if (hoverCapable.matches) updateClusterPreview(pick);
+      scheduleAmenityHover(e.point, pick !== null);
     });
     map.on("mouseout", () => {
+      clusters.hoverAt(null);
+      closeClusterPreview();
       cancelPendingAmenityHover();
       setHoveredAmenity(null);
+    });
+    // A camera move invalidates the frozen panel anchor AND re-lays the marks —
+    // drop the hover; the next mousemove re-establishes it if still over one.
+    map.on("movestart", () => {
+      clusters.hoverAt(null);
+      closeClusterPreview();
     });
     map.on("dragend", () => {
       el.dataset.mapDrag = String(Number(el.dataset.mapDrag ?? "0") + 1);
@@ -912,6 +1079,18 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
   // renders — and camera padding holds — whenever there's a selection OR reach.
   const hasResults = hasResultSurface(sel, amenity.status, reachActive);
   const showFirstRun = !hasResults && sel.lastSelection === null;
+  // Mobile shell (task 062): same derivation the camera's shell getter uses,
+  // fed from render state instead of the ref mirrors — the two can only differ
+  // within a single commit, in the direction the next paint will show.
+  const shell: ShellState = deriveShell({
+    isMobile: isMobileShell,
+    selStatus: sel.status,
+    hasSelection: sel.lastSelection !== null,
+    userDockOpen,
+    userSheetExpanded,
+    reachActive,
+  });
+  const sheetPeek = shell.sheet === "peek" && hasResults;
   const closeReachPanel = () => {
     reachControllerRef.current?.close();
     // Return focus to the map container (the review took it on open) — the div is
@@ -919,12 +1098,44 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
     containerRef.current?.focus();
   };
 
+  // Re-commit padding when the shell changes shape WITHOUT its own camera move
+  // (pill tap, sheet peek/expand, reach open/close, breakpoint cross). The safe
+  // variant defers to `moveend` when an animation is in flight — `setPadding`
+  // runs `jumpTo`, which `stop()`s whatever is animating (task-060 trap).
+  // Selection resolutions don't need this: their padding is committed inside
+  // the selection flow before the flyTo starts.
+  useEffect(() => {
+    cameraRef.current?.applyCameraPaddingSafe(
+      hasResultSurface(selRef.current, amenityRef.current.status, reachActiveRef.current),
+    );
+  }, [shell.dock, shell.sheet]);
+
   return (
-    <div className="hf-map-shell absolute inset-0" data-has-results={hasResults ? "true" : "false"}>
+    <div
+      className="hf-map-shell absolute inset-0"
+      data-has-results={hasResults ? "true" : "false"}
+      data-dock-state={shell.dock}
+      data-sheet-state={shell.sheet}
+    >
       {/* The overlay plane stays pointer-transparent. Individual command/result
           surfaces opt back in, keeping the map usable through every gap. */}
       <div className="pointer-events-none absolute inset-0 z-20">
         <div className="hf-command-dock absolute inset-x-3 top-[4.7rem] z-30 sm:inset-x-4 sm:top-[5.25rem] md:bottom-auto md:left-4 md:right-auto md:top-[5.15rem] md:w-[388px]">
+          {shell.dock === "collapsed" && sel.lastSelection ? (
+            <StatePill
+              label={sel.lastSelection.label}
+              mode={sel.mode}
+              ringFilter={ringFilter}
+              loading={sel.status === "loading"}
+              onExpand={() => {
+                setDockOpen(true);
+                // Disclosure pattern: focus lands in the expanded controls.
+                requestAnimationFrame(() => {
+                  document.querySelector<HTMLInputElement>('.hf-command-search input[role="combobox"]')?.focus();
+                });
+              }}
+            />
+          ) : (
           <section
             data-testid="command-surface"
             aria-label="Explore a location"
@@ -935,9 +1146,27 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
                 <p className="text-[0.65rem] font-semibold uppercase tracking-[0.16em] text-[#c7f36b]">Explore your reach</p>
                 <p className="mt-1 hidden text-xs text-[#78857b] md:block">Start from any address in Bucharest</p>
               </div>
-              <span className="rounded-full border border-white/[.09] bg-white/[.045] px-2.5 py-1 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-[#9ca9a0]">
-                Bucharest
-              </span>
+              <div className="flex items-center gap-1.5">
+                <span className="rounded-full border border-white/[.09] bg-white/[.045] px-2.5 py-1 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-[#9ca9a0]">
+                  Bucharest
+                </span>
+                {/* Mobile-only: hand the screen back to the map without waiting
+                    for a recompute. Rendered only when the derivation WOULD
+                    collapse (a resolved, non-error selection exists). */}
+                {isMobileShell && sel.lastSelection && sel.status !== "error" ? (
+                  <button
+                    type="button"
+                    data-testid="dock-collapse"
+                    aria-label="Collapse search panel and show the map"
+                    onClick={() => setDockOpen(false)}
+                    className="flex size-11 items-center justify-center rounded-full text-[#9ca9a0] transition-colors hover:bg-white/[.055] hover:text-[#edf2ed] md:hidden"
+                  >
+                    <svg aria-hidden="true" viewBox="0 0 20 20" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+                      <path d="m6 12 4-4 4 4" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
+                ) : null}
+              </div>
             </div>
             <div className="hf-command-search relative z-20">
               <SearchForm
@@ -968,6 +1197,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
               <RingSelector value={ringFilter} mode={sel.mode} onSelect={selectRingFilter} />
             </div>
           </section>
+          )}
         </div>
 
         {hasResults ? (
@@ -981,10 +1211,83 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
                 but hidden + inert (found in review) so the AmenityPanel keeps its
                 open Browse list / text filter — unmounting it would wipe that and
                 "restore" would feel broken. */}
+            {/* Peek/expand handle (task 062, mobile only): the sheet opens as a
+                one-line bar so the map keeps the screen; the bar names the
+                place and its chips deep-link to the control they summarize.
+                Directions force the sheet expanded (shell-state), so the bar
+                then only offers collapse-back. */}
+            {isMobileShell ? (
+            <div className="flex items-center gap-1.5 md:hidden">
+              {/* During directions the sheet is FORCED expanded (shell-state),
+                  so the toggle would be a dead control promising collapse —
+                  it becomes a plain label until the directions close
+                  (found in review). */}
+              <button
+                type="button"
+                data-testid="sheet-toggle"
+                aria-expanded={!sheetPeek}
+                aria-label={sheetPeek ? "Expand results" : "Collapse results to a bar"}
+                onClick={() => setSheetExpanded(sheetPeek)}
+                disabled={reachActive}
+                className="flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-xl px-1.5 text-left transition-colors enabled:hover:bg-white/[.045]"
+              >
+                <span aria-hidden="true" className="h-1 w-6 shrink-0 rounded-full bg-white/[.18]" />
+                <span className="min-w-0 flex-1 truncate text-[0.78rem] font-semibold text-[#edf2ed]">
+                  {reachActive ? "Directions" : (sel.lastSelection?.label ?? sel.label ?? "Result")}
+                </span>
+                {reachActive ? null : (
+                  <svg aria-hidden="true" viewBox="0 0 20 20" className="size-3.5 shrink-0 text-[#78857b]" fill="none" stroke="currentColor" strokeWidth="1.8">
+                    {sheetPeek ? (
+                      <path d="m6 12 4-4 4 4" strokeLinecap="round" strokeLinejoin="round" />
+                    ) : (
+                      <path d="m6 8 4 4 4-4" strokeLinecap="round" strokeLinejoin="round" />
+                    )}
+                  </svg>
+                )}
+              </button>
+              {sheetPeek && !reachActive ? (
+                <>
+                  <button
+                    type="button"
+                    data-testid="peek-chip-refine"
+                    aria-label={`${
+                      sel.mode === "walk"
+                        ? `Walking pace: ${sel.pace === "normal" ? "Normal" : "Slow"}`
+                        : `Time: ${TIME_PRESETS[sel.timeContext.preset].label}`
+                    }. Open settings`}
+                    onClick={() => expandSheetTo("refine")}
+                    className="min-h-11 shrink-0 rounded-full border border-white/[.09] bg-white/[.045] px-3 text-[0.66rem] font-semibold text-[#9ca9a0] transition-colors hover:bg-white/[.08] hover:text-[#edf2ed]"
+                  >
+                    {sel.mode === "walk"
+                      ? (sel.pace === "normal" ? "Normal" : "Slow")
+                      : TIME_PRESETS[sel.timeContext.preset].label}
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="peek-chip-filters"
+                    aria-label={`Amenity filters: ${selectedAmenityCategories.length} of ${ALL_AMENITY_CATEGORY_KEYS.length} categories shown (${selectedAmenityCategories.join(", ")}). Open filters`}
+                    onClick={() => expandSheetTo("amenities")}
+                    className="flex min-h-11 shrink-0 items-center gap-1.5 rounded-full border border-white/[.09] bg-white/[.045] px-3 text-[0.66rem] font-semibold text-[#9ca9a0] transition-colors hover:bg-white/[.08] hover:text-[#edf2ed]"
+                  >
+                    {/* WHICH categories are on, not just how many (found in
+                        review — the owner asked to always see what is
+                        selected): one dot per active category, in its map
+                        color. */}
+                    <span aria-hidden="true" className="flex items-center gap-0.5">
+                      {AMENITY_CATEGORIES.filter((c) => selectedAmenityCategories.includes(c.key)).map((c) => (
+                        <span key={c.key} className="size-1.5 rounded-full" style={{ background: c.color }} />
+                      ))}
+                    </span>
+                    {selectedAmenityCategories.length}/{ALL_AMENITY_CATEGORY_KEYS.length}
+                  </button>
+                </>
+              ) : null}
+            </div>
+            ) : null}
             {reachActive ? (
               <ReachPanel view={reachView!} onHighlight={(i) => reachControllerRef.current?.highlight(i)} onClose={closeReachPanel} />
             ) : null}
-            <div hidden={reachActive} inert={reachActive}>
+            <div hidden={reachActive || sheetPeek} inert={reachActive || sheetPeek}>
               <SelectionCard
                 label={sel.label}
                 message={sel.message}
@@ -1002,12 +1305,13 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
                   non-walk wrapper (that would resurrect pace in car). Exactly one
                   control renders per mode, so the bordered cluster is never empty.
                   Keeps the top command dock compact (no map-covering rail). */}
-              <div className="mt-2.5 grid gap-2.5 border-t border-white/[.07] pt-2.5">
+              <div ref={refineBlockRef} className="mt-2.5 grid gap-2.5 border-t border-white/[.07] pt-2.5">
                 {sel.mode === "walk" ? <PaceControl pace={sel.pace} onSelect={setPace} /> : null}
                 {sel.mode === "transit" || sel.mode === "car" ? (
                   <TimeContextControl value={sel.timeContext} onSelect={setTimeContext} mode={sel.mode} />
                 ) : null}
               </div>
+              <div ref={amenityBlockRef}>
               <AmenityPanel
                 // Key on amenity IDENTITY (resolved origin + pace) — the only
                 // things that change the amenity set — NOT sel.token. A mode
@@ -1028,6 +1332,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
                 onRetry={retryAmenities}
                 onInspect={(item) => inspectAmenityRef.current?.(item)}
               />
+              </div>
             </div>
           </section>
         ) : showFirstRun ? (
@@ -1036,6 +1341,48 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
           </div>
         ) : null}
       </div>
+
+      {/* Cluster hover preview (task 062): what's inside the hovered donut,
+          rendered synchronously from the mark's own reconcile-time counts —
+          zero source queries, pointer-transparent, and closed the moment the
+          camera moves or the mark disappears. Names stay one click away in
+          the list popup (deliberate scope line). z-30: a transient
+          pointer-anchored tooltip floats ABOVE the shell chrome — at z-10 it
+          rendered invisibly BEHIND the dock/sheet for marks hovered near them
+          (found in review). */}
+      {clusterPreview ? (
+        <div
+          data-testid="cluster-preview"
+          className={`pointer-events-none absolute z-30 w-max max-w-[230px] -translate-x-1/2 rounded-xl border border-white/[.12] bg-[#0d110e]/95 px-3 py-2 shadow-[0_14px_36px_rgba(0,0,0,.34)] backdrop-blur-xl ${
+            clusterPreview.y - clusterPreview.offset < 150 ? "" : "-translate-y-full"
+          }`}
+          style={{
+            left: Math.min(Math.max(clusterPreview.x, 118), (typeof window !== "undefined" ? window.innerWidth : 1200) - 118),
+            top:
+              clusterPreview.y - clusterPreview.offset < 150
+                ? clusterPreview.y + clusterPreview.offset
+                : clusterPreview.y - clusterPreview.offset,
+          }}
+        >
+          <p className="text-[0.72rem] font-semibold text-[#edf2ed]">
+            {clusterPreview.total} {clusterPreview.total === 1 ? "place" : "places"} here
+          </p>
+          <ul className="mt-1 grid gap-0.5">
+            {AMENITY_CATEGORIES.filter((c) => clusterPreview.counts.some((n) => n.category === c.key && n.count > 0)).map(
+              (c) => (
+                <li key={c.key} className="flex items-center gap-1.5 text-[0.66rem] text-[#9ca9a0]">
+                  <span aria-hidden="true" className="size-2 shrink-0 rounded-full" style={{ background: c.color }} />
+                  <span className="min-w-0 flex-1 truncate">{c.label}</span>
+                  <span className="pl-2 font-semibold text-[#edf2ed]">
+                    {clusterPreview.counts.find((n) => n.category === c.key)?.count}
+                  </span>
+                </li>
+              ),
+            )}
+          </ul>
+          <p className="mt-1 text-[0.6rem] text-[#6f7d73]">Click to open</p>
+        </div>
+      ) : null}
 
       {utilityHeader}
 

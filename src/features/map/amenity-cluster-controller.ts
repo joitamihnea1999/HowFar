@@ -6,6 +6,7 @@ import {
   AMENITY_SOURCE_MAX_ZOOM,
   clusterCategoryCounts,
   clusterFootprintRadius,
+  DONUT_HOVER_SCALE,
   clusterMarkerSizePx,
   resolveGenerations,
   pinFootprintRadius,
@@ -79,6 +80,14 @@ export interface AbsorbedPin {
 
 /** A donut resolved from a screen-space pick. */
 export interface ClusterPick {
+  /** Stable entry key (merged id set) — the handle the hover path grows/reverts
+   * by, so a rebuilt element re-acquires its hover state inside reconcile
+   * (task 062). */
+  key: string;
+  /** Per-category breakdown carried on the mark since reconcile time — the
+   * hover preview renders from THIS, synchronously; it never re-queries the
+   * source (task 062 contract, found in review). */
+  counts: { category: AmenityCategoryKey; count: number }[];
   ids: number[];
   /** Absorbed unclustered-pin feature ids (the absorbed-pin case). MUST be carried through the pointer
    * path: an absorbed pin is hidden from the pin layer, so dropping it here makes the
@@ -107,6 +116,14 @@ export interface AmenityClusterController {
    * became impossible across a dense donut field (found in review). A mouse therefore
    * gets the drawn ring plus a small margin; touch keeps the full target. */
   pickAt: (point: { x: number; y: number }, coarse?: boolean) => ClusterPick | null;
+  /** Hover a screen point (task 062): grows the mark under it (inner-SVG scale
+   * — MapLibre rewrites the marker root's transform every frame, so the root
+   * must stay untouched), reverts the previous one, and returns the pick so the
+   * caller can render the preview panel from its `counts` — synchronously, no
+   * source query. Pass `null` on mouseout/movestart to revert. The caller owns
+   * the pointer-capability gate (touch browsers synthesize mousemove).
+   * Stale-gated like `pickAt`: mid-recluster the marks answer no hover. */
+  hoverAt: (point: { x: number; y: number } | null) => ClusterPick | null;
   clear: () => void;
   refresh: () => void;
   /** Is a rendered mark under this point, regardless of staleness?
@@ -139,6 +156,9 @@ export interface AmenityClusterController {
 }
 
 interface Entry {
+  /** The entries-map key, stored on the entry so hover state can survive the
+   * remove-and-recreate rebuild path inside reconcile (task 062). */
+  key: string;
   marker: maplibregl.Marker;
   el: HTMLButtonElement;
   signature: string;
@@ -151,6 +171,8 @@ interface Entry {
   pins: AbsorbedPin[];
   total: number;
   radius: number;
+  /** Per-category breakdown, snapshotted at reconcile time for the hover preview. */
+  counts: { category: AmenityCategoryKey; count: number }[];
 }
 
 /**
@@ -235,7 +257,10 @@ export function buildDonutElement(
   label.setAttribute("text-anchor", "middle");
   label.setAttribute("dominant-baseline", "central");
   label.setAttribute("fill", "#f4f7f2");
-  label.setAttribute("font-size", total >= 100 ? "9" : "10");
+  // 12px (11 for 3-digit counts) — the 10px digits were the owner's "number
+  // inside them bigger" complaint (task 062); the ring grew to 40px so the
+  // larger label still clears the arc band.
+  label.setAttribute("font-size", total >= 100 ? "11" : "12");
   label.setAttribute("font-weight", "600");
   // textContent, never innerHTML — the count is derived data, but this element is
   // built the same XSS-safe way as the stop popup.
@@ -252,6 +277,7 @@ export function createAmenityClusterController({
   loadState,
   onClusterClick,
   onAbsorbedChange,
+  onHoverLost,
 }: {
   map: maplibregl.Map;
   el: HTMLElement;
@@ -273,12 +299,70 @@ export function createAmenityClusterController({
   /** Called when the absorbed-pin set changes, so the amenities controller can
    * re-apply its layer filter and stop drawing an absorbed pin twice (the absorbed-pin case). */
   onAbsorbedChange: () => void;
+  /** Called when a hover is dropped by the CONTROLLER rather than the pointer —
+   * the hovered mark disappeared in a reconcile, a recluster invalidated the
+   * marks, or the layer cleared — so the caller can close its preview panel
+   * (task 062). Not called for ordinary `hoverAt` transitions. */
+  onHoverLost?: () => void;
 }): AmenityClusterController {
   // Keyed by the merged supercluster id set (see reconcile), not a single id.
   const entries = new Map<string, Entry>();
   let visible = true;
   let raf = 0;
   let disposed = false;
+  // The hovered mark's entry key (task 062). Owned HERE because reconcile
+  // rebuilds donut elements — an externally-applied transform dies on the next
+  // camera frame; the controller re-applies it to the rebuilt element instead.
+  let hoveredKey: string | null = null;
+  function applyHoverVisual(entry: Entry, on: boolean) {
+    // Scale the inner SVG, never the marker root: MapLibre owns the root's
+    // transform and rewrites it on every camera frame.
+    const svg = entry.el.firstElementChild as SVGElement | null;
+    if (svg) {
+      svg.style.transition = "transform 120ms ease";
+      svg.style.transformOrigin = "center";
+      svg.style.transform = on ? `scale(${DONUT_HOVER_SCALE})` : "";
+    }
+    // z-lift on the root (MapLibre rewrites transform, not z-index) so the
+    // grown mark rises above tangent neighbours.
+    entry.el.style.zIndex = on ? "2" : "";
+  }
+  function setHoveredEntry(key: string | null) {
+    if (key === hoveredKey) return;
+    if (hoveredKey !== null) {
+      const prev = entries.get(hoveredKey);
+      if (prev) applyHoverVisual(prev, false);
+    }
+    hoveredKey = key;
+    if (key !== null) {
+      const next = entries.get(key);
+      if (next) applyHoverVisual(next, true);
+      el.dataset.amenityClusterHover = key;
+    } else {
+      delete el.dataset.amenityClusterHover;
+    }
+  }
+  /** Controller-initiated hover drop (mark gone / marks stale / cleared). */
+  function dropHover() {
+    if (hoveredKey === null) return;
+    setHoveredEntry(null);
+    onHoverLost?.();
+  }
+  /** Hit radius honours the hover growth: the enlarged outer ring must resolve
+   * to the mark, not click through to a bare-map re-selection (found in review). */
+  const effectiveRadius = (entry: Entry) =>
+    entry.key === hoveredKey ? entry.radius * DONUT_HOVER_SCALE : entry.radius;
+  /** One pick shape for pickAt and hoverAt — copies, never live references. */
+  const pickOf = (entry: Entry, distance: number): ClusterPick => ({
+    key: entry.key,
+    counts: entry.counts.map((c) => ({ ...c })),
+    ids: [...entry.ids],
+    pinIds: [...entry.pinIds],
+    pins: [...entry.pins],
+    coords: [entry.lng, entry.lat],
+    total: entry.total,
+    distance,
+  });
   // Cheap change-detection so a steady-state animation frame costs nothing.
   // Reconciling on every `render` is necessary for correctness during a zoom (see
   // the note above), but doing the full querySourceFeatures + agglomeration + DOM
@@ -308,7 +392,12 @@ export function createAmenityClusterController({
    * an earlier pass). Reserving the grown size costs a little extra merging and makes the
    * guarantee hold in every pointer state. */
   const pinAwareFootprint = (total: number) =>
-    total <= 1 ? pinFootprintRadius(map.getZoom(), true) : clusterFootprintRadius(total);
+    total <= 1
+      ? pinFootprintRadius(map.getZoom(), true)
+      : // Donuts hover-grow too since task 062 — reserve THEIR worst case as
+        // well, or a hover could regrow an overlap this pass cleared (the
+        // exact defect class the pin reservation already prevents).
+        clusterFootprintRadius(total) * DONUT_HOVER_SCALE;
 
   function removeEntry(key: string) {
     const entry = entries.get(key);
@@ -318,6 +407,7 @@ export function createAmenityClusterController({
   }
 
   function clear() {
+    dropHover(); // before the entries go — the preview must not outlive them
     for (const id of [...entries.keys()]) removeEntry(id);
     el.dataset.amenityClusters = "0";
     // Marks are gone, but staleness is about the SOURCE, not about them: if the data has
@@ -570,6 +660,12 @@ export function createAmenityClusterController({
         // list, so guarding only the pointer path would leave the race open for
         // keyboard users alone.
         if (marksStale) return;
+        // Activation supersedes any hover preview: the button path (keyboard
+        // Enter/Space, or a synthetic click) stops propagation, so the map's
+        // click handler never runs its own preview-close — drop the hover here
+        // or the panel floats over the popup this activation opens
+        // (found in review).
+        dropHover();
         // Read the CURRENT entry rather than the closure's captured values
         // (found in review): a reused entry has its position and absorbed-pin
         // snapshots refreshed in place, so a listener created on the first pass would
@@ -587,7 +683,8 @@ export function createAmenityClusterController({
         );
       });
       const marker = new maplibregl.Marker({ element: button }).setLngLat(anchor).addTo(map);
-      entries.set(key, {
+      const entry: Entry = {
+        key,
         marker,
         el: button,
         signature,
@@ -598,11 +695,19 @@ export function createAmenityClusterController({
         pins,
         total,
         radius: clusterFootprintRadius(total),
-      });
+        counts: group.counts.map((c) => ({ ...c })),
+      };
+      entries.set(key, entry);
+      // A rebuilt element loses its inline styles — re-acquire the hover state
+      // the pointer still holds (task 062: reconcile runs every camera frame).
+      if (key === hoveredKey) applyHoverVisual(entry, true);
     }
 
     // Drop donuts whose group no longer exists at this zoom/data.
     for (const key of [...entries.keys()]) if (!liveKeys.has(key)) removeEntry(key);
+    // The hovered mark may have been dropped or merged away — tell the caller
+    // so the preview panel never outlives its mark.
+    if (hoveredKey !== null && !entries.has(hoveredKey)) dropHover();
     el.dataset.amenityClusters = String(entries.size);
     // Clicks mean what they say again ONLY if this pass actually saw the new data:
     // the epoch must have advanced past the invalidation AND the source must report
@@ -674,25 +779,37 @@ export function createAmenityClusterController({
         // drawn size; nearest-centre arbitration keeps it unambiguous, and the
         // no-overlap invariant guarantees marks are at least their footprints apart so
         // a widened donut target cannot swallow a neighbouring pin's centre.
-        if (d > hitRadius(entry.radius, coarse)) continue;
+        if (d > hitRadius(effectiveRadius(entry), coarse)) continue;
         if (!best || d < best.d) best = { entry, d };
       }
-      return best
-        ? {
-            ids: [...best.entry.ids],
-            pinIds: [...best.entry.pinIds],
-            pins: [...best.entry.pins],
-            coords: [best.entry.lng, best.entry.lat],
-            total: best.entry.total,
-            distance: best.d,
-          }
-        : null;
+      return best ? pickOf(best.entry, best.d) : null;
+    },
+    hoverAt(point: { x: number; y: number } | null): ClusterPick | null {
+      if (point === null) {
+        setHoveredEntry(null);
+        return null;
+      }
+      // Same stale gate as pickAt: mid-recluster the rendered arcs/counts may
+      // describe the previous indexing, and a preview must never show them.
+      if (!visible || marksStale || entries.size === 0) {
+        dropHover();
+        return null;
+      }
+      let best: { entry: Entry; d: number } | null = null;
+      for (const entry of entries.values()) {
+        const p = map.project([entry.lng, entry.lat]);
+        const d = Math.hypot(p.x - point.x, p.y - point.y);
+        if (d > hitRadius(effectiveRadius(entry), false)) continue;
+        if (!best || d < best.d) best = { entry, d };
+      }
+      setHoveredEntry(best ? best.entry.key : null);
+      return best ? pickOf(best.entry, best.d) : null;
     },
     covers(point: { x: number; y: number }, coarse = false) {
       if (!visible) return false;
       for (const entry of entries.values()) {
         const p = map.project([entry.lng, entry.lat]);
-        if (Math.hypot(p.x - point.x, p.y - point.y) <= hitRadius(entry.radius, coarse)) return true;
+        if (Math.hypot(p.x - point.x, p.y - point.y) <= hitRadius(effectiveRadius(entry), coarse)) return true;
       }
       return false;
     },
@@ -712,6 +829,9 @@ export function createAmenityClusterController({
       lastSignature = ""; // force the next pass to recompute absorption
     },
     invalidateMarks() {
+      // Stale marks answer no hover either — and the preview panel must close
+      // rather than describe ids that now mean something else (task 062).
+      dropHover();
       marksStale = true;
       staleEpoch = dataEpoch;
       // Read-back for the e2e, and an honest signal that these marks are inert.

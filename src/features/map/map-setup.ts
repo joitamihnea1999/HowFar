@@ -378,7 +378,9 @@ export function addAmenityLayers(map: LayerHost): void {
       // Calibrated against real screenshots at the W7 checkpoint: the first pass
       // (0.32/0.42/0.55) rendered legible-but-faint icons inside the pin, so each
       // stop is nudged up to fill more of the disc without touching its edge.
-      "icon-size": ["interpolate", ["linear"], ["zoom"], 11, 0.3, 12.5, 0.34, 15, 0.46, 18, 0.62],
+      // Task 062: stops scaled with the PIN_RADIUS_STOPS legibility bump (icons
+      // track their pin's disc — mid-zoom +~22%, top +~10%).
+      "icon-size": ["interpolate", ["linear"], ["zoom"], 11, 0.36, 12.5, 0.42, 15, 0.56, 18, 0.68],
       "icon-allow-overlap": true,
       "icon-ignore-placement": true,
       "icon-optional": true,
@@ -484,7 +486,8 @@ export function addAmenitySpiderLayers(map: LayerHost): void {
     filter: ["==", ["geometry-type"], "Point"],
     layout: {
       "icon-image": amenityIconImageExpression() as unknown as maplibregl.DataDrivenPropertyValueSpecification<maplibregl.ResolvedImageSpecification>,
-      "icon-size": 0.5,
+      // Tracks the task-062 pin-icon bump (fan leaves reuse the pin paint).
+      "icon-size": 0.56,
       "icon-allow-overlap": true,
       "icon-ignore-placement": true,
       "icon-optional": true,

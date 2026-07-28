@@ -158,7 +158,11 @@ async function cameraSubjectPixel(page: Page) {
 async function expectSubjectClearOfUi(page: Page) {
   const point = await cameraSubjectPixel(page);
   const viewport = page.viewportSize();
-  const command = await page.getByTestId("command-surface").boundingBox();
+  // Task 062: below md a resolved selection collapses the dock to the state
+  // pill — whichever top surface is present is the chrome the subject clears.
+  const command = (await page.getByTestId("command-surface").count())
+    ? await page.getByTestId("command-surface").boundingBox()
+    : await page.getByTestId("state-pill").boundingBox();
   const results = await page.getByTestId("result-sheet").boundingBox();
   if (!viewport || !command || !results) throw new Error("responsive shell has no measurable boxes");
   if (viewport.width >= 768) {
@@ -269,7 +273,10 @@ test("camera reframes an existing result across desktop and mobile breakpoints",
 
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(map).toHaveAttribute("data-camera-pad-left", "12");
-  await expect(map).toHaveAttribute("data-camera-pad-top", "188");
+  // Task 062: crossing into mobile with a resolved selection lands in the
+  // collapsed-dock + peek-sheet shell, so the insets are the compact pair.
+  await expect(map).toHaveAttribute("data-camera-pad-top", "140");
+  await expect(map).toHaveAttribute("data-camera-pad-bottom", "124");
   await expectResultFramedAfterResize(page);
 
   await page.setViewportSize({ width: 1280, height: 720 });
@@ -409,10 +416,23 @@ test("core controls meet touch-size, search-first focus, and live-state contract
 
   await search.fill("Piața Unirii");
   await search.press("Enter");
-  await expect(page.locator('[aria-live="polite"][aria-busy="true"]').first()).toBeVisible();
+  // Task 062: a fresh search keeps the dock expanded and the focused combobox
+  // itself carries the live busy state (the amenity live region now sits
+  // behind the sheet's peek bar until expanded).
+  await expect(search).toHaveAttribute("aria-busy", "true");
   await expect(map).toHaveAttribute("data-selection", "Piața Unirii, București");
-  await expect(page.getByRole("region", { name: "Explore a location" })).toBeVisible();
+  // The resolution collapses the dock to the ≥44px state pill; the full
+  // command region is one activation away, and the sheet opens at peek.
+  const pill = page.getByTestId("state-pill");
+  await expect(pill).toBeVisible();
   await expect(page.getByRole("region", { name: "Location result" })).toBeVisible();
+  const pillBox = await pill.boundingBox();
+  if (!pillBox) throw new Error("state pill has no box");
+  expect(pillBox.height).toBeGreaterThanOrEqual(44);
+  await pill.click();
+  await expect(page.getByRole("region", { name: "Explore a location" })).toBeVisible();
+  // Expand the sheet before measuring its inner controls (peek hides content).
+  await page.getByTestId("sheet-toggle").click();
   const browseBox = await page.getByTestId("amenity-browser-trigger").boundingBox();
   if (!browseBox) throw new Error("browse control has no box");
   expect(browseBox.height).toBeGreaterThanOrEqual(44);

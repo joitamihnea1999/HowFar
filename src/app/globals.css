@@ -51,11 +51,18 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-button,
-input,
-select,
-textarea {
-  font: inherit;
+/* In the base layer, NOT unlayered (task 062): unlayered author rules beat
+   every @layer rule, so this reset was silently overriding ALL Tailwind
+   font/text utilities on form controls — every button in the app rendered
+   16px text whatever its text-[…] class said (the cause of the clipped
+   "Public transport" mode label found in live inspection). */
+@layer base {
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
 }
 
 button,
@@ -377,9 +384,21 @@ button,
     max-width: min(300px, calc(100vw - 2rem));
   }
 
+  /* ONE bottom-clearance source (task 062): how far above the viewport bottom
+     the result sheet's top edge sits at its current state. The MapLibre bottom
+     controls (incl. the OSM attribution) AND the Transitous badge both consume
+     this variable, so neither can float mid-map or disagree with the sheet. */
+  .hf-map-shell[data-has-results="true"] {
+    --hf-sheet-clearance: calc(min(30dvh, 14.5rem) + 3.25rem);
+  }
+  .hf-map-shell[data-has-results="true"][data-sheet-state="peek"] {
+    /* Peek = one-line bar (~64px) above the 2.8rem sheet offset + breathing. */
+    --hf-sheet-clearance: 7.5rem;
+  }
+
   .hf-map-shell[data-has-results="true"] .maplibregl-ctrl-bottom-right,
   .hf-map-shell[data-has-results="true"] .maplibregl-ctrl-bottom-left {
-    bottom: calc(min(30dvh, 14.5rem) + 3.25rem);
+    bottom: var(--hf-sheet-clearance);
   }
 }
 

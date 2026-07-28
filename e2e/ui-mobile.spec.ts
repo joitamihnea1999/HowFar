@@ -44,15 +44,27 @@ const AMENITIES = {
 async function touchSwipe(page: Page, from: { x: number; y: number }, to: { x: number; y: number }) {
   const session = await page.context().newCDPSession(page);
   const point = (x: number, y: number) => [{ x, y, radiusX: 3, radiusY: 3, force: 1, id: 1 }];
-  await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: point(from.x, from.y) });
+  // Dispatch the whole gesture WITHOUT awaiting each ack: under CPU contention a
+  // per-step round-trip stretched the gap between touchStart and the first
+  // touchMove past the 500ms long-press threshold, so the "swipe" read as a
+  // stationary hold and fired the right-click reach action (task 062 repro:
+  // 726ms to the first move). A real finger's moves stream continuously; the
+  // burst keeps the emulated ones in one delivery window while staying ordered
+  // (CDP processes queued input in dispatch order).
+  const sends: Promise<unknown>[] = [
+    session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: point(from.x, from.y) }),
+  ];
   for (let step = 1; step <= 6; step += 1) {
     const progress = step / 6;
-    await session.send("Input.dispatchTouchEvent", {
-      type: "touchMove",
-      touchPoints: point(from.x + (to.x - from.x) * progress, from.y + (to.y - from.y) * progress),
-    });
+    sends.push(
+      session.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: point(from.x + (to.x - from.x) * progress, from.y + (to.y - from.y) * progress),
+      }),
+    );
   }
-  await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  sends.push(session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] }));
+  await Promise.all(sends);
   await session.detach();
 }
 
@@ -132,6 +144,11 @@ test("touch journey stays usable through selection, results, inspection, map ges
   await suggestion.tap();
   await expect(map).toHaveAttribute("data-selection", "Piața Unirii, București");
   await expect(map).toHaveAttribute("data-amenity-count", "5");
+
+  // Task 062: the sheet opens at PEEK on mobile — expand it before driving the
+  // full result content (this tap is itself part of the new contract).
+  await page.getByTestId("sheet-toggle").tap();
+  await expect(page.locator(".hf-map-shell")).toHaveAttribute("data-sheet-state", "expanded");
 
   const sheet = page.getByTestId("result-sheet");
   const sheetBox = await sheet.boundingBox();
@@ -250,7 +267,7 @@ test("Car mode toggle: three options meet the 44px target and don't overflow or 
     await expect(btn).toBeVisible();
     const box = await btn.boundingBox();
     if (!box) throw new Error(`no box for ${name}`);
-    // 44px minimum touch target on BOTH axes (impl panel: 3-up was ~37px WIDE
+    // 44px minimum touch target on BOTH axes (found in review: 3-up was ~37px WIDE
     // at 375px), and no horizontal overflow past the viewport.
     expect(box.height).toBeGreaterThanOrEqual(44);
     expect(box.width).toBeGreaterThanOrEqual(44);
@@ -313,6 +330,9 @@ test("mobile: long-press transit directions show a compact card and draw the jou
   await page.getByRole("combobox").fill("Piata Unirii");
   await page.getByRole("button", { name: "Go" }).click();
   await expect(map).toHaveAttribute("data-isochrone-rings", "3");
+  // Task 062: the resolved selection collapsed the dock to the state pill —
+  // reopening it IS the mode-change path now.
+  await page.getByTestId("state-pill").tap();
   await page.getByRole("button", { name: "Public transport", exact: true }).click();
   await expect(map).toHaveAttribute("data-mode", "transit");
 
@@ -406,4 +426,162 @@ test("mobile: long-press from Walk auto-switches to Public transport and draws t
   // reselection would have geocoded a new origin (the label stays Piața Unirii).
   expect(reachCalls).toHaveLength(1);
   await expect(map).toHaveAttribute("data-selection", "Piața Unirii, București");
+  // Task 062: active directions FORCE the sheet expanded — a journey answer
+  // must never hide behind the peek bar.
+  await expect(page.locator(".hf-map-shell")).toHaveAttribute("data-sheet-state", "expanded");
+});
+
+// Task 062: below md the shell hands the screen to the map — the dock collapses
+// to a state pill on a resolved selection and the result sheet opens at a peek
+// bar, while every piece of state (address, mode, time budget, pace, filters)
+// stays visible and one tap from its editor.
+test("mobile shell: collapsed dock + peek sheet reclaim the map; state stays visible and editable (task 062)", async ({
+  page,
+}) => {
+  await page.route("**/api/suggest**", (route) =>
+    route.fulfill({ json: { suggestions: [{ label: "Piața Unirii, București", lat: 44.4268, lng: 26.1025 }] } }),
+  );
+  let failIsochrone = false;
+  await page.route("**/api/isochrone**", (route) =>
+    failIsochrone ? route.fulfill({ status: 500, json: { error: "boom" } }) : route.fulfill({ json: ISOCHRONE }),
+  );
+  await page.route("**/api/amenities**", (route) => route.fulfill({ json: AMENITIES }));
+
+  await page.goto("/");
+  const map = page.getByTestId("app-map");
+  const shell = page.locator(".hf-map-shell");
+  await expect(map).toHaveAttribute("data-map-loaded", "true", { timeout: 30_000 });
+
+  // Pre-selection: full dock, no pill.
+  await expect(shell).toHaveAttribute("data-dock-state", "expanded");
+  await expect(page.getByTestId("command-surface")).toBeVisible();
+
+  const search = page.getByRole("combobox");
+  await search.tap();
+  await search.fill("Unirii");
+  await page.getByRole("option", { name: "Piața Unirii, București" }).tap();
+  await expect(map).toHaveAttribute("data-selection", "Piața Unirii, București");
+
+  // Resolution collapses the dock to the pill and opens the sheet at peek,
+  // and the camera insets already describe the compact shell.
+  await expect(shell).toHaveAttribute("data-dock-state", "collapsed");
+  await expect(shell).toHaveAttribute("data-sheet-state", "peek");
+  const pill = page.getByTestId("state-pill");
+  await expect(pill).toBeVisible();
+  await expect(pill).toContainText("Piața Unirii");
+  await expect(pill).toContainText("Walk");
+  await expect(pill).toContainText("15 min");
+  await expect(map).toHaveAttribute("data-camera-pad-top", "140");
+  await expect(map).toHaveAttribute("data-camera-pad-bottom", "124");
+  const pillBox = await pill.boundingBox();
+  if (!pillBox) throw new Error("state pill has no box");
+  expect(pillBox.height).toBeGreaterThanOrEqual(44);
+
+  // The camera settled on the origin — the padding flip did not cancel the
+  // selection flyTo (task-060 trap class).
+  await expect
+    .poll(async () => {
+      const center = await map.getAttribute("data-camera-center");
+      if (!center) return null;
+      const [lng, lat] = center.split(",").map(Number);
+      return Math.abs(lng - 26.1025) < 0.01 && Math.abs(lat - 44.4268) < 0.01;
+    })
+    .toBe(true);
+
+  // Map strip: the contiguous unobstructed corridor between pill and peek bar
+  // is the majority of the screen (the owner's core complaint: it was ~13%).
+  const viewport = page.viewportSize()!;
+  const sheetBox = await page.getByTestId("result-sheet").boundingBox();
+  if (!sheetBox) throw new Error("result sheet has no box");
+  const strip = sheetBox.y - (pillBox.y + pillBox.height);
+  expect(strip / viewport.height).toBeGreaterThanOrEqual(0.55);
+  // Point-sample the same 20px grid the live inspection used (CHECKPOINT-B
+  // method): unobstructed map ≥ 60%.
+  const sampled = await page.evaluate(() => {
+    const vw = innerWidth;
+    const vh = innerHeight;
+    const mapEl = document.querySelector(".maplibregl-map");
+    let hits = 0;
+    let total = 0;
+    for (let x = 5; x < vw; x += 20)
+      for (let y = 5; y < vh; y += 20) {
+        total++;
+        const el = document.elementFromPoint(x, y);
+        if (
+          el &&
+          el.closest(".maplibregl-map") === mapEl &&
+          !el.closest("[class*=panel],[class*=sheet],[class*=card],[class*=dock],[class*=pill],aside,header,nav,form")
+        )
+          hits++;
+      }
+    return Math.round((hits / total) * 100);
+  });
+  expect(sampled).toBeGreaterThanOrEqual(60);
+
+  // Both attribution surfaces sit at the strip's bottom edge — never mid-map,
+  // never under the sheet.
+  for (const attribution of [page.locator(".hf-transit-attribution p"), page.locator(".maplibregl-ctrl-attrib")]) {
+    await expect(attribution).toBeVisible();
+    const box = await attribution.boundingBox();
+    if (!box) throw new Error("attribution has no box");
+    expect(box.y + box.height).toBeLessThanOrEqual(sheetBox.y + 2);
+    expect(box.y).toBeGreaterThan(sheetBox.y - 120);
+  }
+
+  // Pill → dock: one tap re-opens the full controls with focus in search.
+  await pill.tap();
+  await expect(page.getByTestId("command-surface")).toBeVisible();
+  await expect(page.getByRole("combobox")).toBeFocused();
+  // Change the time budget, hand the map back with the collapse control, and
+  // the pill reflects the new state WITHOUT another resolution.
+  await page.getByRole("button", { name: "30 min" }).tap();
+  await page.getByTestId("dock-collapse").tap();
+  await expect(pill).toContainText("30 min");
+
+  // Peek chips deep-link into the sheet: filters chip opens the amenity panel.
+  await expect(page.getByTestId("peek-chip-filters")).toContainText("5/5");
+  await page.getByTestId("peek-chip-filters").tap();
+  await expect(shell).toHaveAttribute("data-sheet-state", "expanded");
+  const browse = page.getByTestId("amenity-browser-trigger");
+  await expect(browse).toBeVisible();
+  // The amenity browser's transient state survives a peek round-trip (the
+  // panel stays mounted, hidden+inert — task 058 pattern extended).
+  await browse.tap();
+  await page.getByPlaceholder("Filter places").fill("Mega");
+  await page.getByTestId("sheet-toggle").tap();
+  await expect(shell).toHaveAttribute("data-sheet-state", "peek");
+  await page.getByTestId("sheet-toggle").tap();
+  await expect(page.getByPlaceholder("Filter places")).toHaveValue("Mega");
+  await page.getByTestId("sheet-toggle").tap(); // back to peek for the pace chip
+
+  // Pace chip names the current pace and lands on the pace control.
+  await expect(page.getByTestId("peek-chip-refine")).toContainText("Normal");
+  await page.getByTestId("peek-chip-refine").tap();
+  await expect(shell).toHaveAttribute("data-sheet-state", "expanded");
+  await expect(page.getByRole("button", { name: /Slow/ })).toBeVisible();
+  // Actually CHANGE the pace: the same-origin recompute must keep the sheet
+  // expanded (it used to snap back to peek mid-comparison, dropping focus —
+  // found in review).
+  await page.getByRole("button", { name: /Slow/ }).tap();
+  await expect(page.getByTestId("peek-chip-refine")).toHaveCount(0); // still expanded, no peek chips
+  await expect(shell).toHaveAttribute("data-sheet-state", "expanded");
+  await expect(shell).toHaveAttribute("data-dock-state", "collapsed");
+
+  // Touch never sees hover chrome (task 062): taps synthesize mousemove, but
+  // the hover grow + preview are gated on a real fine pointer — no preview
+  // panel may ever have appeared in this touch-only session.
+  await expect(page.getByTestId("cluster-preview")).toHaveCount(0);
+
+  // Error path: a failed recompute REOPENS the dock (never a stale pill over
+  // an error) AND forces the sheet expanded — the SelectionCard inside is the
+  // only surface with the failure message, and a peek bar reading "Result"
+  // over a hidden alert is a silent failure (found in review).
+  failIsochrone = true;
+  await pill.tap();
+  await page.getByRole("combobox").fill("Unirii");
+  await page.getByRole("option", { name: "Piața Unirii, București" }).tap();
+  await expect(shell).toHaveAttribute("data-dock-state", "expanded");
+  await expect(page.getByTestId("command-surface")).toBeVisible();
+  await expect(shell).toHaveAttribute("data-sheet-state", "expanded");
+  await expect(page.getByText(/Could not compute/)).toBeVisible();
 });

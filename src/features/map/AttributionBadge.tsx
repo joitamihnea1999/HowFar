@@ -13,7 +13,11 @@ export default function AttributionBadge({ elevated }: AttributionBadgeProps) {
     <div
       className={`hf-transit-attribution pointer-events-none absolute inset-x-0 z-20 flex justify-center px-4 transition-[bottom] duration-200 md:bottom-0 md:pb-7 ${
         elevated
-          ? "bottom-[calc(min(30dvh,14.5rem)+3.25rem)] pb-0"
+          ? // Shared clearance variable (task 062): tracks the sheet's live
+            // peek/expanded height from globals.css, same source as the
+            // MapLibre bottom controls — the badge sits at the map strip's
+            // bottom edge instead of floating mid-strip.
+            "bottom-[var(--hf-sheet-clearance,0px)] pb-0"
           : "bottom-0 pb-[max(2.25rem,calc(env(safe-area-inset-bottom)+1.8rem))]"
       }`}
     >

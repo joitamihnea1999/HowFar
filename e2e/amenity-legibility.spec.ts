@@ -51,11 +51,11 @@ const CATS = ["groceries", "pharmacies", "parks", "schools", "transit"] as const
 
 // Must mirror src/features/amenities/amenity-cluster.ts.
 const PIN_RADIUS_STOPS: [number, number][] = [
-  [11, 4],
-  [13, 6],
-  [15, 8.5],
-  [17, 11],
-  [19, 13],
+  [11, 5],
+  [13, 7.5],
+  [15, 10],
+  [17, 12],
+  [19, 14],
 ];
 const MAP_MAX_ZOOM = 22;
 // Mirrors src/features/amenities/amenity-cluster.ts: MapLibre paints
@@ -64,6 +64,10 @@ const MAP_MAX_ZOOM = 22;
 const PIN_STROKE_PX = 1.75;
 const PIN_HOVER_SCALE = 1.4;
 const PIN_HOVER_STROKE_PX = 2.5;
+// Task 062: donuts hover-grow too, and collision reserves THEIR grown size as
+// well — so the no-overlap measurement must hold with every donut at its
+// hovered footprint, exactly like the pins.
+const DONUT_HOVER_SCALE = 1.15;
 // Mirrors src/features/amenities/amenity-spider.ts.
 const SPIDER_MAX_LEAVES = 12;
 const SPIDER_LEAF_RADIUS_PX = 9;
@@ -356,7 +360,9 @@ async function visibleMarks(page: Page) {
         ...p,
         r: pinRadius(raw.zoom) * PIN_HOVER_SCALE + PIN_HOVER_STROKE_PX,
       })),
-      ...raw.donuts,
+      // Donuts at their hover-grown footprint (task 062) — tangency legal,
+      // intersection is the regression this measurement exists to catch.
+      ...raw.donuts.map((d) => ({ ...d, r: d.r * DONUT_HOVER_SCALE })),
       ...raw.leaves.map((l) => ({ ...l, r: leafR })),
     ],
     /** Sum of every aggregate's declared count plus the individually drawn marks —
@@ -893,4 +899,64 @@ test("the browser list shows distances, and the cap is admitted WITHOUT opening 
   // Distance was already served but discarded by the client; the list is where it
   // answers the product's actual question.
   await expect(page.getByTestId("amenity-browser")).toContainText(/\d+ m|\d+(\.\d)? km/);
+});
+
+test("hovering a donut grows it, shows a synchronous preview, and yields to the click ladder (task 062)", async ({
+  page,
+}) => {
+  // A group past the fan cap resolves through the LIST — no camera move on
+  // click, so every hover assertion below is deterministic.
+  const COUNT = SPIDER_MAX_LEAVES + 4;
+  await stub(page, coincident(COUNT, TRIO_AT));
+  const map = await loadAndSearch(page);
+  await jumpTo(page, 18, [TRIO_AT.lng, TRIO_AT.lat]);
+
+  const donut = page.locator(".hf-amenity-cluster").first();
+  await expect(donut).toBeAttached();
+  const svg = donut.locator("svg");
+  const rest = await svg.boundingBox();
+  const box = await donut.boundingBox();
+  if (!rest || !box) throw new Error("donut has no box");
+  const cx = box.x + box.width / 2;
+  const cy = box.y + box.height / 2;
+
+  // Hover: the mark visibly grows (the transform lives on the inner SVG, so
+  // the rendered rect — not just a style flag — must widen)…
+  await page.mouse.move(cx, cy);
+  await expect
+    .poll(async () => (await svg.boundingBox())?.width ?? 0, { timeout: 3000 })
+    .toBeGreaterThan(rest.width * 1.1);
+  // …and the preview panel appears with the mark's own breakdown — instantly,
+  // from reconcile-time counts (no source fetch is even possible here: the
+  // stubbed amenities route has already served its one payload).
+  const preview = page.getByTestId("cluster-preview");
+  await expect(preview).toBeVisible();
+  await expect(preview).toContainText(`${COUNT} places here`);
+  await expect(preview).toContainText("Groceries");
+  await expect(preview).toContainText("Pharmacies");
+
+  // A click on the GROWN outer edge resolves to the mark — never a bare-map
+  // address reselection (the hovered hit radius widened with the visual).
+  const grown = await svg.boundingBox();
+  if (!grown) throw new Error("grown donut has no box");
+  const selectionBefore = await map.getAttribute("data-selection");
+  await page.mouse.click(cx + grown.width / 2 - 2, cy);
+  const popup = page.getByTestId("cluster-popup");
+  await expect(popup).toBeVisible();
+  expect(await map.getAttribute("data-selection")).toBe(selectionBefore);
+  // The preview yielded to the click and stays away over the same mark.
+  await expect(preview).toBeHidden();
+
+  // Leaving the mark reverts the grow; returning re-establishes the preview.
+  await page.locator(".maplibregl-popup-close-button").click();
+  await page.mouse.move(cx + 220, cy + 120);
+  await expect
+    .poll(async () => (await svg.boundingBox())?.width ?? 0, { timeout: 3000 })
+    .toBeLessThan(rest.width * 1.05);
+  await page.mouse.move(cx, cy);
+  await expect(preview).toBeVisible();
+
+  // Any camera motion closes the preview (its anchor froze at hover time).
+  await jumpTo(page, 17.6, [TRIO_AT.lng, TRIO_AT.lat]);
+  await expect(preview).toBeHidden();
 });

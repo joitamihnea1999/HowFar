@@ -49,6 +49,8 @@ describe("the mark-separation invariant", () => {
       ["a hovered pin wider than the clustering radius", { maxPinFootprint: 40, clusterRadius: 46 }],
       ["a donut budget wider than the clustering radius", { maxMarkFootprint: 60, clusterRadius: 46 }],
       ["a donut drawn wider than its own budget", { donutFootprint: 99, maxMarkFootprint: 34 }],
+      // Task 062: the hover-grown donut is budgeted too — 40 × 1.2 = 48 > 46.
+      ["a hovered donut wider than the clustering radius", { donutFootprint: 40, donutHoverScale: 1.2, clusterRadius: 46 }],
       ["a source maxzoom that stops clustering early", { sourceMaxZoom: 22, clusterMaxZoom: 22 }],
     ];
     for (const [what, overrides] of cases) {

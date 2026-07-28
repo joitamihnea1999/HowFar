@@ -289,8 +289,12 @@ describe("resolving clicks", () => {
     const r = clusterFootprintRadius(leaves.length);
     expect(r).toBeLessThan(MIN_MARK_TAP_RADIUS_PX);
     expect(controller.resolveClick({ x: HUB[0], y: HUB[1] }).kind).toBe("hub");
-    // Outside the ring but inside the tap target.
-    expect(controller.resolveClick({ x: HUB[0] + r + 2, y: HUB[1] }).kind).toBe("hub");
+    // Outside the ring but inside the tap target — probed straight DOWN, the
+    // max-clearance direction for 3 leaves (top/30°/150°). Probing along +x sat
+    // near-equidistant to the 30° leaf and the nearest-centre arbitration
+    // (which is the CONTRACT for genuinely ambiguous points) flipped it when
+    // task 062 grew the marks — the old pass margin was 0.4px.
+    expect(controller.resolveClick({ x: HUB[0], y: HUB[1] + r + 2 }).kind).toBe("hub");
   });
 
   it("never claims a hit while closed", () => {

@@ -129,9 +129,12 @@ describe("markerPickPad", () => {
   // Task 061 made pins zoom-scaled while the pad stayed a fixed 12px, so at high zoom
   // the visible outer ring of a pin could be clicked and ignored (found in review).
   it("never shrinks below the historical floor, so low zooms keep their generous target", () => {
-    for (const zoom of [11, 12, 13]) {
+    // z13 left this list in task 062: its hovered footprint (13px) now exceeds
+    // the 12px floor on its own, which is the OTHER test's regime.
+    for (const zoom of [11, 12]) {
       expect(markerPickPad(pinFootprintRadius(zoom, true))).toBe(MARKER_PICK_PAD_PX);
     }
+    expect(markerPickPad(pinFootprintRadius(13, true))).toBeGreaterThanOrEqual(MARKER_PICK_PAD_PX);
   });
 
   it("covers the whole rendered mark once a pin outgrows that floor", () => {

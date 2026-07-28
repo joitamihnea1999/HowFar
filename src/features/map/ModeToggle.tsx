@@ -23,6 +23,10 @@ interface ModeDef {
   icon: ReactNode;
   /** Active-state classes (per-mode accent so a toggle reads instantly). */
   active: string;
+  /** Grid column weight — "Public transport" needs more width than "Walk"/"Car"
+   * in the 388px desktop dock or its second line clips to "anspo" (task 062,
+   * found in live inspection). */
+  weight: number;
 }
 
 const WalkIcon = (
@@ -47,24 +51,34 @@ const CarIcon = (
   </svg>
 );
 
+/** Single source for user-facing mode names (dock toggle + collapsed state pill). */
+export const MODE_LABELS: Record<Mode, string> = {
+  walk: "Walk",
+  transit: "Public transport",
+  car: "Car",
+};
+
 const MODES: ModeDef[] = [
   {
     id: "walk",
-    label: "Walk",
+    label: MODE_LABELS.walk,
     icon: WalkIcon,
     active: "bg-[#2dd4bf] text-[#07221d] shadow-[0_5px_16px_rgba(45,212,191,.16)]",
+    weight: 1,
   },
   {
     id: "transit",
-    label: "Public transport",
+    label: MODE_LABELS.transit,
     icon: TransitIcon,
     active: "bg-[#a78bfa] text-[#1d1238] shadow-[0_5px_16px_rgba(167,139,250,.18)]",
+    weight: 1.6,
   },
   {
     id: "car",
-    label: "Car",
+    label: MODE_LABELS.car,
     icon: CarIcon,
     active: "bg-[#3b82f6] text-[#0a1633] shadow-[0_5px_16px_rgba(59,130,246,.2)]",
+    weight: 1,
   },
 ];
 
@@ -78,7 +92,7 @@ export default function ModeToggle({ mode, onSwitch }: ModeToggleProps) {
         role="group"
         aria-label="Travel mode"
         className="grid gap-1 rounded-xl border border-white/[.09] bg-[#080b09]/65 p-1"
-        style={{ gridTemplateColumns: `repeat(${MODES.length}, minmax(0, 1fr))` }}
+        style={{ gridTemplateColumns: MODES.map((m) => `minmax(0, ${m.weight}fr)`).join(" ") }}
       >
         {MODES.map((m) => {
           const isActive = mode === m.id;
@@ -88,7 +102,7 @@ export default function ModeToggle({ mode, onSwitch }: ModeToggleProps) {
               type="button"
               onClick={() => onSwitch(m.id)}
               aria-pressed={isActive}
-              className={`inline-flex h-11 flex-col items-center justify-center gap-0.5 overflow-hidden rounded-[0.65rem] px-1 text-center text-[0.62rem] font-semibold leading-[1.0] transition-[background-color,color,box-shadow] ${
+              className={`inline-flex h-11 flex-col items-center justify-center gap-0.5 overflow-hidden rounded-[0.65rem] px-1 text-center text-[0.62rem] font-semibold leading-[1.0] transition-[background-color,color,box-shadow] md:text-[0.6rem] ${
                 isActive ? m.active : "text-[#9ca9a0] hover:bg-white/[.055] hover:text-[#edf2ed]"
               }`}
             >

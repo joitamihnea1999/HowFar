@@ -63,18 +63,30 @@ export const CLUSTER_RADIUS_PX = 46;
  * not a gap. This constant caps `clusterRadiusForCount`, so a 200-member cluster
  * is no wider than a 3-member one.
  */
-export const MAX_MARK_FOOTPRINT_PX = 34;
+export const MAX_MARK_FOOTPRINT_PX = 40;
+
+/** Hover growth for a whole donut mark (task 062 — owner: growing marks must
+ * show a hover response). Budgeted, not free: the invariant proves
+ * `MAX_MARK_FOOTPRINT_PX × DONUT_HOVER_SCALE ≤ CLUSTER_RADIUS_PX` (40 × 1.15 =
+ * 46 — exact tangency, which the guarantee allows), and the merge pass
+ * reserves the HOVERED footprint for donuts just as it always has for pins, so
+ * a hover can never regrow an overlap the pass cleared. */
+export const DONUT_HOVER_SCALE = 1.15;
 
 /** Individual-pin radius by zoom. Fixed 7px at every zoom was one of the three
  * causes of the original complaint (a pin occupied the same footprint whether
  * you looked at 200m or 5km). Capped at `MAX_PIN_RADIUS_PX` so pin growth can
  * never breach the separation invariant. */
 export const PIN_RADIUS_STOPS: readonly (readonly [zoom: number, radius: number])[] = [
-  [11, 4],
-  [13, 6],
-  [15, 8.5],
-  [17, 11],
-  [19, 13],
+  // Task 062 legibility bump ("a little bigger"), biased to the z11–15 stops
+  // where pins were smallest; the top stop grows only to 14 because the
+  // envelope binds there: 2 × (14 × PIN_HOVER_SCALE + PIN_HOVER_STROKE_PX)
+  // = 44.2 must stay ≤ CLUSTER_RADIUS_PX (46), which the invariant asserts.
+  [11, 5],
+  [13, 7.5],
+  [15, 10],
+  [17, 12],
+  [19, 14],
 ];
 
 /** The largest radius `pinRadiusForZoom` can return — the invariant's binding term. */
@@ -113,7 +125,7 @@ export const MAX_PIN_FOOTPRINT_PX = MAX_PIN_RADIUS_PX * PIN_HOVER_SCALE + PIN_HO
 /** Donut geometry. `CLUSTER_MIN_RADIUS_PX` keeps a 2-member cluster comfortably
  * tappable; `CLUSTER_MAX_RADIUS_PX` is the cap that keeps the invariant true no
  * matter how many members a cluster holds. */
-export const CLUSTER_MIN_RADIUS_PX = 12;
+export const CLUSTER_MIN_RADIUS_PX = 14;
 /** Padding between the drawn ring and the edge of the marker's box, per side. */
 export const CLUSTER_MARKER_PAD_PX = 1;
 export const CLUSTER_MAX_RADIUS_PX = MAX_MARK_FOOTPRINT_PX / 2 - CLUSTER_MARKER_PAD_PX;
@@ -306,6 +318,9 @@ export interface MarkEnvelope {
   clusterRadius: number;
   maxMarkFootprint: number;
   donutFootprint: number;
+  /** Hover growth factor for donut marks (task 062) — the hovered size must
+   * still fit the clustering radius, exactly like the hovered pin. */
+  donutHoverScale: number;
   sourceMaxZoom: number;
   clusterMaxZoom: number;
 }
@@ -673,6 +688,7 @@ export function assertMarkSeparationInvariant(overrides: Partial<MarkEnvelope> =
     clusterRadius = CLUSTER_RADIUS_PX,
     maxMarkFootprint = MAX_MARK_FOOTPRINT_PX,
     donutFootprint = clusterMarkerSizePx(Number.MAX_SAFE_INTEGER),
+    donutHoverScale = DONUT_HOVER_SCALE,
     sourceMaxZoom = AMENITY_SOURCE_MAX_ZOOM,
     clusterMaxZoom = CLUSTER_MAX_ZOOM,
   } = overrides;
@@ -696,6 +712,13 @@ export function assertMarkSeparationInvariant(overrides: Partial<MarkEnvelope> =
   if (donutFootprint > maxMarkFootprint) {
     problems.push(
       `donut footprint ${donutFootprint}px exceeds MAX_MARK_FOOTPRINT_PX ${maxMarkFootprint}px`,
+    );
+  }
+  // Task 062: the hover-grown donut is part of the envelope, exactly like the
+  // hovered pin — tangency at the hovered size is legal, intersection is not.
+  if (donutFootprint * donutHoverScale > clusterRadius) {
+    problems.push(
+      `hovered donut footprint ${donutFootprint * donutHoverScale}px exceeds CLUSTER_RADIUS_PX ${clusterRadius}px`,
     );
   }
   if (sourceMaxZoom <= clusterMaxZoom) {
