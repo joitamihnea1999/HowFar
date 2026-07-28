@@ -8,12 +8,20 @@ import { createLoadState } from "@/features/map/load-state";
 import { createRoutePathController } from "@/features/map/route-path-controller";
 
 /**
- * Verification path for the dispose contract (plan panel round-2 grok#3/#4,
- * opus#3): a disposed controller must leave NO async work that can fire against
+ * Verification path for the dispose contract (review round-2 review#3/#4,
+ * review#3): a disposed controller must leave NO async work that can fire against
  * a torn-down map. The full reverse-order + map.remove()-last sequencing is
  * enforced structurally in AppMap's two-phase effect cleanup; these tests pin
  * the per-controller "post-dispose no-op" for the ones that own a timer / abort
  * / animation frame, which is where a real late-write leak would originate.
+ *
+ * ONE controller in that class is covered elsewhere, deliberately:
+ * `amenity-cluster-controller` (task 061) owns a rAF plus `render`/`sourcedata`
+ * subscriptions, and its dispose test lives in `amenity-cluster-controller.test.ts`
+ * because it needs that file's DOM + `Marker` fakes to build a marker worth
+ * disposing. A reviewer correctly caught that this file had been claimed
+ * as its home when no such test existed — so if a controller is added here, check
+ * the claim, not just the intent.
  */
 
 afterEach(() => {
@@ -82,9 +90,12 @@ describe("amenities-controller dispose", () => {
       amenityRef: { current: { status: "idle", counts: null, items: [] } },
       amenityOriginRef: { current: null },
       selectedCategoriesRef: { current: [] },
+      clustersRef: { current: null },
+      invalidateClusters: vi.fn(),
       resetAmenityHover: vi.fn(),
       getPopupCategory: () => null,
       closeStopPopup: vi.fn(),
+      closeSpider: vi.fn(),
     });
     controller.fetchAmenities({ lat: 44.4, lng: 26.1 }, 0, "normal");
     expect(capturedSignal?.aborted).toBe(false);

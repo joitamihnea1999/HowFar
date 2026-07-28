@@ -21,15 +21,27 @@ import {
 import { BUCHAREST_MAX_BOUNDS } from "@/lib/bounds";
 import { DEFAULT_RING_FILTER, type RingFilter } from "@/features/isochrones/isochrone-view";
 import AmenityPanel from "@/features/map/AmenityPanel";
+import { MAP_MAX_ZOOM } from "@/features/amenities/amenity-cluster";
 import AttributionBadge from "@/features/map/AttributionBadge";
+import {
+  createAmenityClusterController,
+  type AmenityClusterController,
+} from "@/features/map/amenity-cluster-controller";
+import {
+  AMENITY_ENCODING,
+  hasAllAmenityIcons,
+  registerAmenityIcons,
+} from "@/features/map/amenity-sprite";
 import EmptyState from "@/features/map/EmptyState";
 import {
   addAmenityLayers,
+  addAmenitySpiderLayers,
   addIsochroneLayers,
   addReachPathLayers,
   addRoutePathLayers,
   createMapStyle,
 } from "@/features/map/map-setup";
+import { createAmenitySpiderController } from "@/features/map/amenity-spider-controller";
 import { createAmenitiesController, type AmenityUi } from "@/features/map/amenities-controller";
 import { createCameraController } from "@/features/map/camera-controller";
 import { createHoverController } from "@/features/map/hover-controller";
@@ -91,7 +103,7 @@ const SUGGEST_DEBOUNCE_MS = 250;
  * The reach directions panel occupies the SAME result-sheet slot (task 058), so
  * an active reach view is a result surface too — otherwise a pre-selection hint
  * or a reach view after an error-cleared selection would have no dock and the
- * resize padding would drop it (panel gpt5.5-2). */
+ * resize padding would drop it (found in review). */
 function hasResultSurface(
   sel: Pick<SelectionState, "status" | "label" | "message">,
   amenityStatus: AmenityUi["status"],
@@ -127,20 +139,26 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
   // Mirrored so the resize handler (empty-deps effect) reads the latest active
   // flag without re-binding. Set SYNCHRONOUSLY in the controller's subscribe
   // callback (below) — NOT in a [reachView] effect, which would lag a rotate/
-  // resize by one tick and drop the dock padding (panel grok-2).
+  // resize by one tick and drop the dock padding (found in review).
   const reachActiveRef = useRef(false);
 
   // Amenities: keyed by rounded origin (NOT the selection token, which a mode
   // toggle bumps) so a Walk↔Transit toggle persists the markers with no refetch;
   // a generation guards stale responses. A transient failure auto-retries once
   // (task 024: the public-Overpass race flakes and recovers seconds later), and
-  // the last origin is kept so the panel's Retry button can refetch it.
-  // Kept so the panel's Retry button (component scope) can refetch the last
+  // the last origin is kept so the review's Retry button can refetch it.
+  // Kept so the review's Retry button (component scope) can refetch the last
   // origin; the fetch's abort/gen/key/timer state is internal to the controller.
   const amenityOriginRef = useRef<Origin | null>(null);
   const clearAmenitiesRef = useRef<(() => void) | null>(null);
   const fetchAmenitiesRef = useRef<((origin: Origin, attempt: number, pace: Pace) => void) | null>(null);
   const inspectAmenityRef = useRef<((item: Amenity) => void) | null>(null);
+  // Holder for the donut-cluster controller: it is built after the amenities
+  // controller (whose source it reads), but the amenities controller's visibility
+  // chokepoint has to be able to hide it — so they are wired through a ref rather
+  // than a constructor argument, the same pattern as the reach-declutter holder.
+  const amenityClustersRef = useRef<AmenityClusterController | null>(null);
+  const amenityClusterDisposeRef = useRef<(() => void) | null>(null);
   const applyAmenitySelectionRef = useRef<((categories: AmenityCategoryKey[]) => void) | null>(null);
   const [amenity, setAmenity] = useState<AmenityUi>({ status: "idle", counts: null, items: [] });
   const [selectedAmenityCategories, setSelectedAmenityCategories] = useState<AmenityCategoryKey[]>(
@@ -258,6 +276,12 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       style: createMapStyle(`${window.location.origin}/api/tiles`),
       center: BUCHAREST_CENTER,
       zoom: 11.5,
+      // Pinned explicitly (MapLibre's default is also 22) so the amenity
+      // clustering contract is anchored to a number this code owns: cluster
+      // aggregation runs to exactly this zoom, and the "can this cluster split?"
+      // test compares `getClusterExpansionZoom` against it (task 061). Leaving it
+      // implicit would silently decouple the two if MapLibre's default changed.
+      maxZoom: MAP_MAX_ZOOM,
       maxBounds: BUCHAREST_MAX_BOUNDS,
       attributionControl: { compact: false },
     });
@@ -265,7 +289,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
     // Expose the map instance for e2e RENDERED-state assertions (task 054): the
     // draw/declutter/highlight suites verify actual `queryRenderedFeatures` /
     // `querySourceFeatures` output, not just the code's own `data-*` stamps
-    // (which can false-pass — impl-panel). Harmless in prod (a handle
+    // (which can false-pass). Harmless in prod (a handle
     // to the already-visible map); cleared on teardown.
     (window as unknown as { __hfMap?: maplibregl.Map }).__hfMap = map;
     map.addControl(new maplibregl.NavigationControl({ showCompass: true, showZoom: true }), "bottom-right");
@@ -282,7 +306,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
     const { applyCameraPadding } = camera;
     const hover = createHoverController({ map, el, loadState });
     const {
-      pickAmenity,
+      pickAmenitiesAt,
       setHoveredAmenity,
       scheduleAmenityHover,
       cancelPendingAmenityHover,
@@ -296,11 +320,21 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
     // The right-click journey draw (task 054). Created before the popup (no popup
     // dep); the popup drives it. Amenity declutter is wired via a holder AFTER the
     // amenities controller exists (it is created after the popup), breaking the
-    // popup↔amenities construction cycle (plan-panel K).
+    // popup↔amenities construction cycle (found in review).
     const reachJourney = createReachJourneyController({ map, el, loadState, reducedMotion });
     const reachDeclutter: { set: (on: boolean) => void } = { set: () => {} };
+    // Spiderfy (task 061 W20). Created BEFORE the popup because the popup's cluster
+    // ladder ends in `spider.open`, and its own declutter is wired through a holder
+    // AFTER the amenities controller exists — the same cycle-breaking pattern as
+    // `reachDeclutter` right above.
+    const spiderDeclutter: { set: (on: boolean) => void } = { set: () => {} };
+    const spider = createAmenitySpiderController({
+      map,
+      el,
+      onActiveChange: (active) => spiderDeclutter.set(active),
+    });
     // The directions controller and the popup controller are mutually-exclusive
-    // "active map surfaces" (panel opus-1). Each must be able to close the other,
+    // "active map surfaces" (found in review). Each must be able to close the other,
     // so the popup's `closeStopPopup` is injected into the directions controller
     // through a holder (the popup is created just after), breaking the cycle.
     const closeStopPopupHolder: { current: () => void } = { current: () => {} };
@@ -312,15 +346,26 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       closeStopPopup: () => closeStopPopupHolder.current(),
     });
     reachControllerRef.current = reachDirections;
-    // Mirror the active flag SYNCHRONOUSLY (panel grok-2) — the resize handler
+    // Mirror the active flag SYNCHRONOUSLY (found in review) — the resize handler
     // reads reachActiveRef, and a rotate/resize before React's effect ran would
     // otherwise drop the dock's camera padding for a reach-only (hint) surface.
     reachDirections.subscribe((v) => {
       reachActiveRef.current = v !== null;
+      // Directions and a fan are mutually-exclusive map surfaces: both declutter the
+      // amenities, and whichever restored them second would repaint over the other.
+      if (v !== null) spider.close();
       setReachView(v);
     });
-    const popup = createPopupController({ map, el, reducedMotion, route, applyCameraPadding, closeReach: reachDirections.close });
-    const { openAmenityPopup, inspectAmenity, closeStopPopup } = popup;
+    const popup = createPopupController({
+      map,
+      el,
+      reducedMotion,
+      route,
+      applyCameraPadding,
+      closeReach: reachDirections.close,
+      spiderfy: spider.open,
+    });
+    const { openAmenityPopup, openAmenityChoicePopup, inspectAmenity, closeStopPopup } = popup;
     closeStopPopupHolder.current = closeStopPopup;
     inspectAmenityRef.current = inspectAmenity;
     const amenities = createAmenitiesController({
@@ -334,11 +379,34 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       resetAmenityHover,
       getPopupCategory: popup.getPopupCategory,
       closeStopPopup,
+      clustersRef: amenityClustersRef,
+      invalidateClusters: () => popup.invalidateClusters(),
+      // A fan's leaves were read from the PREVIOUS indexing, so a recluster (category
+      // toggle) or a cleared selection makes them stale in exactly the way the absorbed-pin case
+      // described for the leaves list — and a fan can even show a category the user
+      // just hid. Closing it is the honest answer.
+      closeSpider: spider.close,
     });
     const { renderAmenities, clearAmenities, fetchAmenities, maybeFetchAmenities, applyAmenitySelection } =
       amenities;
+    // Donut clusters are created AFTER the amenities controller (they read its
+    // source) and handed back through the holder, so the controller's single
+    // visibility chokepoint can hide them along with the WebGL layers.
+    const clusters = createAmenityClusterController({
+      map,
+      el,
+      loadState,
+      onClusterClick: (clusterIds, coords, total, pinIds, pins, keyboard) =>
+        void popup.openClusterPopup(clusterIds, coords, total, pinIds, pins, keyboard),
+      // An absorbed pin is already drawn as part of a donut, so the pin layer must
+      // stop painting it (the absorbed-pin case).
+      onAbsorbedChange: () => amenities.reapplyFilter(),
+    });
+    amenityClustersRef.current = clusters;
+    amenityClusterDisposeRef.current = clusters.dispose;
     // Now that the amenities controller exists, let the popup toggle declutter.
     reachDeclutter.set = amenities.setReachView;
+    spiderDeclutter.set = amenities.setSpiderView;
     clearAmenitiesRef.current = clearAmenities;
     fetchAmenitiesRef.current = fetchAmenities;
     applyAmenitySelectionRef.current = applyAmenitySelection;
@@ -363,13 +431,13 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       // stash so a right-click car band names the traffic it was computed for.
       reachRef.current = { rings, mode, origin, car: selRef.current.car };
       renderSelection(origin, label, rings, mode);
-      // Camera-race guard (task 060, plan-panel F1): a cross-mode right-click
+      // Camera-race guard (task 060, review): a cross-mode right-click
       // fires switchMode("transit"), whose recompute lands here and flyTo's the
       // origin — which could clip an already-drawn right-click journey if the
       // isochrone resolves AFTER the MOTIS plan. Re-fit the journey so its frame
       // stays authoritative. No-op when nothing is drawn. (If that transit
       // recompute instead FAILS, the drawn journey stays and Back reveals the
-      // standard error card — accepted low-likelihood degradation, plan-panel F-parked.)
+      // standard error card — accepted low-likelihood degradation, review-parked.)
       reachDirections.reframe();
     };
     const clearSelectionReach = () => {
@@ -396,6 +464,37 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       addRoutePathLayers(map);
       addReachPathLayers(map); // task 054: between the OSM route path and the markers
       addAmenityLayers(map);
+      // On top of the amenity layers: a fan replaces what it expands, so it must
+      // never be drawn under it.
+      addAmenitySpiderLayers(map);
+      // Icons must be registered before the icon layer paints, or pins render
+      // blank for a frame (task 061). Fire-and-forget: the layer declares
+      // `icon-optional`, so a slow decode degrades to the coloured circle rather
+      // than dropping the marker.
+      // `.catch` and a disposal guard: the decode can finish AFTER unmount, and touching a
+      // removed map (or leaving the rejection unhandled) is the late-write class the
+      // dispose contract exists to prevent (found in review).
+      void registerAmenityIcons(map)
+        .then(() => {
+          if (mapRef.current !== map) return;
+          if (hasAllAmenityIcons(map)) el.dataset.amenityEncoding = AMENITY_ENCODING;
+        })
+        .catch(() => {});
+
+      // Runtime-added images do not survive a style reload, and an icon layer whose
+      // sprite is gone paints bare dots. This handler was DOCUMENTED here but never
+      // actually registered (found in review) — the comment claimed a safety
+      // net that did not exist. `registerAmenityIcons` is idempotent, so re-running it
+      // on demand is safe.
+      map.on("styleimagemissing", (e) => {
+        if (!String(e.id ?? "").startsWith("amenity-icon-")) return;
+        void registerAmenityIcons(map)
+          .then(() => {
+            if (mapRef.current !== map) return;
+            if (hasAllAmenityIcons(map)) el.dataset.amenityEncoding = AMENITY_ENCODING;
+          })
+          .catch(() => {});
+      });
 
       loadState.styleLoaded = true;
       applyCameraPadding(false);
@@ -416,11 +515,8 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       reachJourney.flushPending(); // replay a right-click journey that raced `load`
       // A journey replayed from a pre-load right-click was buffered without a
       // camera fit — reframe it now so the path isn't left off-screen with the
-      // dock open (panel luna-1/terra-1). No-op when nothing was drawn.
+      // dock open (review/review). No-op when nothing was drawn.
       reachDirections.reframe();
-      if (map.getLayer("amenity-markers") && map.getLayer("amenity-glyphs")) {
-        el.dataset.amenityEncoding = "color+glyph";
-      }
       el.dataset.mapLoaded = "true";
       const center = map.getCenter();
       el.dataset.cameraCenter = `${center.lng.toFixed(5)},${center.lat.toFixed(5)}`;
@@ -447,6 +543,17 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
     };
     window.addEventListener("resize", onResize);
 
+    // Escape collapses an open fan, from anywhere. The fan is a map-owned surface
+    // with no focusable container of its own (its hub is a marker button, and focus
+    // may well be in the search field), so this has to be a document listener —
+    // the same shape `ReachPanel` uses for the directions dock. Guarded on `isOpen`
+    // so it never swallows an Escape meant for the search command surface.
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || !spider.isOpen()) return;
+      spider.close();
+    };
+    document.addEventListener("keydown", onKeyDown);
+
     // Right-click / long-press "how do I get there?" — task 060: ONE action in
     // every mode. Right-clicking anywhere means "get me there by public
     // transport": auto-switch to transit (from walk/car) and draw the journey +
@@ -459,16 +566,16 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       const coords: [number, number] = [lngLat.lng, lngLat.lat];
       // No resolved origin yet (true first-load): explain what to do. Guard on
       // lastSelection ONLY — a right-click DURING a transit recompute still has a
-      // stable origin and must open directions, not fall to the hint (plan-panel F5).
+      // stable origin and must open directions, not fall to the hint (found in review).
       if (!sel.lastSelection) {
         return void reachDirections.open({ kind: "hint", coords });
       }
       // Snapshot everything the request needs BEFORE switchMode (which nulls the
       // ring stash + starts an async recompute) so the URL is built from stable
-      // values (plan-panel F6). The band is the point's transit ring band when the
+      // values (found in review). The band is the point's transit ring band when the
       // stash already holds transit rings, else the 45-min transit max — ALWAYS a
       // number so the honesty copy never renders "undefined", and it bounds the
-      // planner's within-band ranking cross-mode (plan-panel F2/F3).
+      // planner's within-band ranking cross-mode (found in review).
       const origin = sel.lastSelection;
       const departureIso = sel.departure?.iso;
       const preset = sel.timeContext.preset;
@@ -486,6 +593,13 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       // screen once transit resolves); else the preset (preset-only since 059).
       if (departureIso) params.set("departure", departureIso);
       else params.set("preset", preset);
+      // Release the shared popup slot unconditionally (found in review).
+      // `switchMode` only tears the popup down when the mode actually changes, so a
+      // right-click while ALREADY in transit left a POI/cluster popup floating over the
+      // drawn journey — two "mutually exclusive" surfaces coexisting. Called before
+      // `open()` so it cannot close the directions it is about to start (closeStopPopup
+      // funnels through closeReach).
+      closeStopPopup();
       // Switch to transit FIRST: select({recompute}) runs clearSelection →
       // closeStopPopup → closeReach synchronously, tearing down any prior
       // directions BEFORE we open the new ones (teardown-race-safe). No-ops when
@@ -545,18 +659,86 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       // never recompute the address (task 024). A click on the active drawn
       // route is a no-op (viewing, not reselecting). Only a click hitting
       // neither falls through to the normal selection.
-      const hit = pickAmenity(e.point);
-      if (hit) return void openAmenityPopup(hit.feature, hit.coords);
+      // An open fan owns the map: its leaves and hub are the only amenity marks
+      // drawn, so it resolves the click first and a click that misses everything
+      // collapses it (a dismissal) rather than starting a new selection underneath.
+      if (spider.isOpen()) {
+        const hit = spider.resolveClick(e.point);
+        if (hit.kind === "hub") return void spider.close();
+        if (hit.kind === "leaf") {
+          // Collapse the fan before opening the place's detail (review
+          // reviewers, reversing an earlier decision of mine to keep it open as "context").
+          // Leaving it open leaves every OTHER amenity hidden behind `spiderView` while
+          // the user reads one card — which reads as "the amenities vanished", the kind
+          // of hidden state this task exists to remove.
+          spider.close();
+          return void inspectAmenity(hit.leaf);
+        }
+        return void spider.close();
+      }
+      // A cluster donut takes precedence: it is drawn on top, and it is
+      // `pointer-events: none` (so it cannot swallow map gestures), which means the
+      // map handler is what resolves a click on it.
+      // Touch gets the 44px target; a mouse gets the drawn ring plus a small margin, so
+      // clicking bare map between donuts still picks a new address (found in review).
+      const coarsePointer = (e.originalEvent as PointerEvent | undefined)?.pointerType === "touch";
+      const clusterHit = clusters.pickAt(e.point, coarsePointer);
+      // Individual-pin hits are resolved FIRST so a donut cannot steal a click that
+      // landed visibly inside a pin. The donut's tap target is widened to the 44px
+      // contract, and the no-overlap guarantee only makes footprints non-intersecting —
+      // so the widened target can reach over a neighbouring pin's disc. Nearest centre
+      // wins between the two (found in review).
+      const pinHits = pickAmenitiesAt(e.point);
+      const nearestPin = pinHits.length
+        ? Math.min(
+            ...pinHits.map((hit) => {
+              const p = map.project(hit.coords);
+              return Math.hypot(p.x - e.point.x, p.y - e.point.y);
+            }),
+          )
+        : Number.POSITIVE_INFINITY;
+      if (clusterHit && clusterHit.distance <= nearestPin) {
+        // `pinIds` MUST be forwarded: an absorbed pin is hidden from the pin layer,
+        // so if the pointer path drops it the place becomes completely unreachable —
+        // the exact defect this task exists to remove (found in review).
+        return void popup.openClusterPopup(
+          clusterHit.ids,
+          clusterHit.coords,
+          clusterHit.total,
+          clusterHit.pinIds,
+          // The absorbed pins' own data, snapshotted when the mark was built, so
+          // resolving them never depends on a second source query (found in review).
+          clusterHit.pins,
+        );
+      }
+      // Multiple unclustered markers inside the pick pad ⇒ offer the choice
+      // instead of silently resolving to the nearest, which used to leave a
+      // clumped marker permanently unclickable (task 061). Clustering handles the
+      // dense case; this covers sub-pad near-misses among individual pins.
+      const hits = pinHits;
+      if (hits.length > 1) return void openAmenityChoicePopup(hits, e.lngLat.toArray() as [number, number]);
+      if (hits.length === 1) return void openAmenityPopup(hits[0].feature, hits[0].coords);
+      // A donut is on screen here but its ids are momentarily stale (mid-recluster), so
+      // `pickAt` refused it. Swallow the click rather than fall through: recomputing the
+      // whole address because the user clicked a visible marker is precisely what this
+      // app promises never to do (found in review).
+      if (clusters.covers(e.point, coarsePointer)) return;
       if (hitsActiveRoutePath(e.point)) return;
       // A click on the drawn right-click journey (a leg line or a used-stop dot)
       // is a no-op, not a new selection — mirrors the OSM route-path guard so
-      // inspecting the journey never moves the origin (task 054, plan-panel C).
+      // inspecting the journey never moves the origin (task 054, review).
       if (reachJourney.hitsActiveJourney(e.point)) return;
       selectRef.current?.({ kind: "click", lat: e.lngLat.lat, lng: e.lngLat.lng });
     });
 
     map.on("mousemove", (e) => {
-      scheduleAmenityHover(e.point);
+      // Donuts are `pointer-events:none`, so the hover path (which queries the pin layer)
+      // cannot see them: the most prominent mark in a dense district gave no feedback while
+      // a click on it opened a list. The donut hint is passed INTO the hover controller
+      // rather than written here — writing the cursor directly was immediately overwritten
+      // by the controller's own cursor logic, so the affordance never appeared
+      // (found in review).
+      scheduleAmenityHover(e.point, clusters.pickAt(e.point) !== null);
     });
     map.on("mouseout", () => {
       cancelPendingAmenityHover();
@@ -575,8 +757,15 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
           selectFlow.dispose,
           selectionRender.dispose,
           amenities.dispose,
+          // Before popup.dispose, and in reverse create order: it detaches the
+          // render/sourcedata listeners and removes every donut DOM marker, which
+          // must happen while the map still exists (phase 2 removes it).
+          clusters.dispose,
           popup.dispose,
           reachDirections.dispose,
+          // Reverse create order: the fan was built just after reachJourney, and its
+          // dispose removes a DOM marker + detaches move/resize while the map lives.
+          spider.dispose,
           reachJourney.dispose,
           route.dispose,
           ring.dispose,
@@ -584,11 +773,14 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
           camera.dispose,
           () => longPress.cancel(),
           () => window.removeEventListener("resize", onResize),
+          () => document.removeEventListener("keydown", onKeyDown),
           () => {
             applyAmenitySelectionRef.current = null;
             clearAmenitiesRef.current = null;
             fetchAmenitiesRef.current = null;
             inspectAmenityRef.current = null;
+            amenityClustersRef.current = null;
+            amenityClusterDisposeRef.current = null;
             applyRingFilterRef.current = null;
             selectRef.current = null;
             reachControllerRef.current = null;
@@ -722,8 +914,8 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
   const showFirstRun = !hasResults && sel.lastSelection === null;
   const closeReachPanel = () => {
     reachControllerRef.current?.close();
-    // Return focus to the map container (the panel took it on open) — the div is
-    // tabIndex=-1 so it can receive focus (panel terra-5).
+    // Return focus to the map container (the review took it on open) — the div is
+    // tabIndex=-1 so it can receive focus (found in review).
     containerRef.current?.focus();
   };
 
@@ -767,7 +959,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
             </div>
             {/* Stacked full-width rows by default so the 3-up mode toggle (task
                 053) keeps ≥44px-wide touch targets and "Public transport" never
-                clips on phones (impl panel: 375/412px). Two columns only at md+,
+                clips on phones (375/412px). Two columns only at md+,
                 where the dock is a fixed 388px and MUST stay one settings row
                 tall to clear the result sheet pinned at md:top-[21.3rem]; on
                 mobile the result sheet is a bottom sheet, so the extra row is free. */}
@@ -786,7 +978,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
           >
             {/* Right-click directions REPLACE the selection card + filters while
                 active (task 058, owner item 2). The selection block stays MOUNTED
-                but hidden + inert (panel grok-5) so the AmenityPanel keeps its
+                but hidden + inert (found in review) so the AmenityPanel keeps its
                 open Browse list / text filter — unmounting it would wipe that and
                 "restore" would feel broken. */}
             {reachActive ? (
@@ -803,7 +995,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
                 car={sel.car}
               />
               {/* Reach refinements live WITH the result they adjust. The two
-                  controls are gated INDEPENDENTLY (plan-panel grok-3): PaceControl
+                  controls are gated INDEPENDENTLY (found in review): PaceControl
                   is strictly Walk (pace is a walking concept, task 052 P4);
                   TimeContextControl is transit OR car (task 058 — car reach is
                   time-aware for traffic realism). They are never merged into one
@@ -820,12 +1012,12 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
                 // Key on amenity IDENTITY (resolved origin + pace) — the only
                 // things that change the amenity set — NOT sel.token. A mode
                 // toggle or a transit time change keeps the same origin+pace, so
-                // the panel no longer remounts and lose its open Browse list /
-                // text filter (impl-panel finding); a new origin or pace change
+                // the review no longer remounts and lose its open Browse list /
+                // text filter (review finding); a new origin or pace change
                 // still remounts to reset that transient state. Keyed on the
                 // EFFECTIVE pace (task 052 P4) so it matches the pace the amenities
                 // were actually fetched at — the common Normal-pace toggle keeps
-                // the panel mounted; only a Slow-walk→transit toggle
+                // the review mounted; only a Slow-walk→transit toggle
                 // remounts, which is correct since the amenity set changed.
                 key={`${sel.lastSelection?.lat ?? "x"},${sel.lastSelection?.lng ?? "x"}:${effectivePace(sel.mode, sel.pace)}`}
                 status={amenity.status}
@@ -855,7 +1047,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
         data-testid="app-map"
         aria-label="Interactive map of travel reach and nearby places in Bucharest"
         // tabIndex -1 so directions can return focus here on close (panel
-        // terra-5): the map container is otherwise not focusable.
+        // review): the map container is otherwise not focusable.
         tabIndex={-1}
         className="h-full w-full outline-none"
       />

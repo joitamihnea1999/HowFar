@@ -11,6 +11,9 @@ function fakeJourney() {
     setDestination: vi.fn(),
     highlight: vi.fn(),
     frame: vi.fn(),
+    // Whether a journey is drawn and framable. `reframe` MUST consult this before
+    // computing padding — see the guard test below for why that ordering matters.
+    canFrame: vi.fn(() => true),
     hitsActiveJourney: vi.fn(() => false),
     flushPending: vi.fn(),
     dispose: vi.fn(),
@@ -85,7 +88,7 @@ describe("reach-directions-controller — mutual exclusivity", () => {
     expect(closeStopPopup).toHaveBeenCalledTimes(2);
   });
 
-  it("open() self-invalidates the prior journey even when closeStopPopup is a no-op (panel opus-1/grok-5)", async () => {
+  it("open() self-invalidates the prior journey even when closeStopPopup is a no-op (panel review/review)", async () => {
     vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(reachablePlan) })) as never);
     const { controller, journey } = makeController({ drawReturns: true });
     controller.open({ kind: "transit", coords: [26.1, 44.4], band: 30, url: "/api/reach?x=1" });
@@ -206,5 +209,29 @@ describe("reach-directions-controller — transit fetch", () => {
     expect(journey.highlight).toHaveBeenCalledWith(2);
     controller.reframe();
     expect(journey.frame).toHaveBeenLastCalledWith(expect.anything(), true);
+  });
+
+  it("reframe does NOT touch camera padding when there is no journey to frame", () => {
+    // Regression guard for a real, shipped bug: `reframe` used to pass
+    // `applyCameraPadding(true)` as an ARGUMENT, so the padding was committed even
+    // when `frame()` would immediately bail. Committing padding goes through
+    // `map.setPadding` → `jumpTo` → `stop()`, which cancels any in-flight camera
+    // animation. Since `renderSelectionStash` calls reframe right after
+    // `renderSelection` starts its origin flyTo, EVERY search had its zoom
+    // animation killed and the map stayed at the previous zoom.
+    const applyCameraPadding = vi.fn(() => ({ top: 0, right: 0, bottom: 0, left: 0 }));
+    const journey = fakeJourney();
+    journey.canFrame = vi.fn(() => false); // nothing drawn
+    const el = { dataset: {} } as unknown as HTMLElement;
+    const controller = createReachDirectionsController({
+      el,
+      journey: journey as never,
+      reachDeclutter: { set: vi.fn() },
+      applyCameraPadding,
+      closeStopPopup: vi.fn(),
+    });
+    controller.reframe();
+    expect(journey.frame).not.toHaveBeenCalled();
+    expect(applyCameraPadding).not.toHaveBeenCalled();
   });
 });

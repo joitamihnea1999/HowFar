@@ -26,7 +26,7 @@ import type { EdgeInsets } from "@/features/map/route-framing";
  *     the camera frame;
  *   - the `data-reach-state` e2e stamp.
  *
- * Mutual exclusivity (panel opus-1): directions and the stop/POI popup are the
+ * Mutual exclusivity (found in review): directions and the stop/POI popup are the
  * two "active map surfaces" and never coexist. `open()` closes any stop/POI
  * popup via the injected `closeStopPopup`; the popup controller's
  * `closeStopPopup` calls back into `close()` here — so every funnel that clears
@@ -42,7 +42,7 @@ export interface ReachStepView {
 }
 
 /** What `ReachPanel` renders. `state` drives the `data-reach-state` stamp and
- * the panel's test hooks; `steps` is present only for a drawn transit journey. */
+ * the review's test hooks; `steps` is present only for a drawn transit journey. */
 export interface ReachView {
   state: "hint" | "outside" | "none" | "loading" | "error" | "transit";
   title: string;
@@ -98,7 +98,7 @@ export function createReachDirectionsController({
   }
 
   function open(req: ReachRequest) {
-    // Self-contained invalidation (panel opus-1/grok-5): abort any in-flight
+    // Self-contained invalidation (review/review): abort any in-flight
     // fetch, bump the gen so a late response can't draw, and tear down the prior
     // journey/pin/declutter — WITHOUT relying on the arbiter callback. A `hint`
     // open (or a re-open) otherwise leaves an in-flight transit fetch able to
@@ -176,7 +176,7 @@ export function createReachDirectionsController({
         // A real public-transport journey: DRAW it and, only if it produced
         // drawable features, declutter + frame so the trip is legible beside the
         // dock (a transit plan with no drawable coords must not hide markers
-        // behind an empty map — review).
+        // behind an empty map).
         const drawn = journey.draw(plan.legs);
         if (drawn) {
           reachDeclutter.set(true);
@@ -208,7 +208,25 @@ export function createReachDirectionsController({
     /** Step hover/focus → highlight that leg + its stops on the map. */
     highlight: (index: number | null) => journey.highlight(index),
     /** Reframe the drawn journey (resize/orientation) — no-op if none drawn. */
-    reframe: () => journey.frame(applyCameraPadding(true), true),
+    /**
+     * Re-fit a drawn journey (task 058/060's camera-race guard).
+     *
+     * The `canFrame()` check must come FIRST. `applyCameraPadding` commits
+     * `map.setPadding`, which internally calls `jumpTo`, and `jumpTo`
+     * unconditionally calls `stop()` — so evaluating it as an argument cancelled
+     * whatever camera animation was in flight, even when `frame()` would then bail
+     * because no journey is drawn.
+     *
+     * That is not hypothetical: `renderSelectionStash` calls this immediately after
+     * `renderSelection` starts its 900ms origin `flyTo`, so EVERY search had its
+     * zoom animation killed a frame after starting and the map stayed at the
+     * previous zoom. It surfaced as ~20 e2e failures whose projected marker clicks
+     * missed, because they assume the documented post-selection zoom 13.
+     */
+    reframe: () => {
+      if (!journey.canFrame()) return;
+      journey.frame(applyCameraPadding(true), true);
+    },
     subscribe(cb: (v: ReachView | null) => void) {
       subscriber = cb;
       cb(view);

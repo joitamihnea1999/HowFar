@@ -62,7 +62,7 @@ const PLAN2 = {
 };
 
 // Rendered map state (NOT the code's own data-* stamps) — the true check the
-// impl panel required (): what MapLibre actually painted. Counts DISTINCT
+// review required: what MapLibre actually painted. Counts DISTINCT
 // legs/stops (deduped by the unique legIndex/stopIndex props) because
 // queryRenderedFeatures/querySourceFeatures return a feature once per tile it
 // touches — a raw length double-counts. Wrapped in expect.poll by callers so a
@@ -87,10 +87,30 @@ async function reachRenderedCounts(page: Page) {
     return { lines: lineIdx.size, stops: stopIdx.size };
   });
 }
+/**
+ * Every amenity MARK on screen: unclustered WebGL pins PLUS cluster donut DOM
+ * markers.
+ *
+ * Counting only `amenity-markers` was correct before task 061, but under display
+ * clustering a dense fixture collapses into donuts and that layer legitimately
+ * reports 0 — so a declutter assertion of "drops to 0" would pass while proving
+ * NOTHING, and would not notice donuts left painted over the journey (donuts are
+ * DOM markers, outside the layer/filter system entirely). Both halves are counted,
+ * and the callers assert a non-zero count BEFORE declutter so the proof cannot go
+ * vacuous.
+ */
 async function renderedAmenityMarkers(page: Page) {
   return page.evaluate(() => {
     const m = (window as unknown as { __hfMap?: { queryRenderedFeatures: (o: unknown) => unknown[] } }).__hfMap;
-    return m ? m.queryRenderedFeatures({ layers: ["amenity-markers"] }).length : -1;
+    if (!m) return -1;
+    let pins = 0;
+    try {
+      pins = m.queryRenderedFeatures({ layers: ["amenity-markers"] }).length;
+    } catch {
+      pins = 0; // layer absent (pre-load) — donuts still counted below
+    }
+    const donuts = document.querySelectorAll(".hf-amenity-cluster").length;
+    return pins + donuts;
   });
 }
 // The drawn journey's screen-space bbox (project every reach-path coord). Used to
@@ -113,7 +133,7 @@ async function journeyScreenBBox(page: Page) {
 // True when every given [lng,lat] projects INSIDE the map viewport. We pass the
 // KNOWN journey extremes (PLAN's origin + far endpoint) rather than reading
 // querySourceFeatures — the latter only returns loaded tiles, so a clipped far
-// leg could go unchecked and pass vacuously (impl-panel fable-1). project()
+// leg could go unchecked and pass vacuously (found in review). project()
 // works on any coord regardless of tiling, so this is tile-independent.
 async function coordsInView(page: Page, coords: [number, number][]) {
   return page.evaluate((cs) => {
@@ -196,6 +216,11 @@ test("transit right-click DRAWS the journey and declutters the amenities", async
   const { map } = await setup(page);
   await search(page, map);
   await toTransit(page, map);
+  // NON-VACUITY GUARD (task 061): prove marks are actually on screen BEFORE
+  // decluttering. Under display clustering a dense fixture renders as donut DOM
+  // markers and the `amenity-markers` LAYER legitimately reports 0, so an
+  // unguarded "drops to 0" assertion could pass without declutter doing anything.
+  await expect.poll(() => renderedAmenityMarkers(page)).toBeGreaterThan(0);
   await rightClickCentre(page);
 
   await expect(map).toHaveAttribute("data-reach-state", "transit");
@@ -206,7 +231,7 @@ test("transit right-click DRAWS the journey and declutters the amenities", async
 
   // RENDERED-state truth (not the code's own stamps): the map paints 3 leg lines
   // + the 2 used stops (board + alight), and NO amenity marker while the journey
-  // shows — the check the impl panel required.
+  // shows — the check review required.
   await expect.poll(() => reachRenderedCounts(page)).toEqual({ lines: 3, stops: 2 });
   await expect.poll(() => renderedAmenityMarkers(page)).toBe(0);
 
@@ -249,7 +274,9 @@ test("starting a new selection mid-journey clears the draw and restores markers"
   await toTransit(page, map);
   await rightClickCentre(page);
   await expect(map).toHaveAttribute("data-reach-journey", "3", { timeout: 5000 });
-  expect(await renderedAmenityMarkers(page)).toBe(0);
+  // Polled: cluster donuts are reconciled on an animation frame, so a single
+  // synchronous read can sample before the declutter has removed them.
+  await expect.poll(() => renderedAmenityMarkers(page)).toBe(0);
 
   // A new address selection is a fresh selection → teardownReach via closeStopPopup.
   await page.getByRole("combobox").fill("Another place");
@@ -317,11 +344,11 @@ test("walk-mode right-click AUTO-SWITCHES to Public transport and draws the jour
   await expect(map).toHaveAttribute("data-amenity-declutter", "on");
   expect(reachCalls).toHaveLength(1); // exactly one plan fetch
   // Rendered truth: the journey is actually drawn AND fully framed in view (the
-  // cross-mode flyTo must not clip it — plan-panel F1).
+  // cross-mode flyTo must not clip it).
   await expect.poll(() => reachRenderedCounts(page)).toEqual({ lines: 3, stops: 2 });
   await expect(map).toHaveAttribute("data-camera-settled", "true");
   // Polled (the frame is animated) + tile-independent: the whole trip is framed,
-  // not clipped by the cross-mode flyTo (plan-panel F1).
+  // not clipped by the cross-mode flyTo (found in review).
   await expect.poll(() => coordsInView(page, PLAN_EXTENT)).toBe(true);
 });
 
@@ -336,12 +363,12 @@ test("car-mode right-click AUTO-SWITCHES to Public transport and draws the journ
   await expect(map).toHaveAttribute("data-amenity-declutter", "on");
   expect(reachCalls).toHaveLength(1);
   await expect.poll(() => reachRenderedCounts(page)).toEqual({ lines: 3, stops: 2 });
-  // Car→transit runs the identical flyTo-vs-frame race as walk — assert it too (opus-2).
+  // Car→transit runs the identical flyTo-vs-frame race as walk — assert it too (found in review).
   await expect(map).toHaveAttribute("data-camera-settled", "true");
   await expect.poll(() => coordsInView(page, PLAN_EXTENT)).toBe(true);
 });
 
-test("camera race: a transit recompute that lands AFTER the plan does not clip the journey (plan-panel F1)", async ({ page }) => {
+test("camera race: a transit recompute that lands AFTER the plan does not clip the journey (found in review)", async ({ page }) => {
   const { map } = await setup(page);
   // Delay ONLY /api/transit so the mode-switch recompute resolves well after the
   // /api/reach plan has drawn+framed the journey — the worst-case ordering for the
@@ -374,7 +401,7 @@ test("a walk-only plan → 'No public-transport route' (task 060: no walk-band a
   await expect(map).not.toHaveAttribute("data-amenity-declutter", "on");
 });
 
-test("amenity Browse text filter SURVIVES opening + closing directions (task 058, panel grok-3)", async ({ page }) => {
+test("amenity Browse text filter SURVIVES opening + closing directions", async ({ page }) => {
   const { map } = await setup(page);
   await search(page, map);
   await toTransit(page, map);

@@ -19,6 +19,19 @@
 
 export type AmenityCategoryKey = "groceries" | "pharmacies" | "parks" | "schools" | "transit";
 
+/**
+ * Label sort-key fallback for a POI with no server distance: sorts LAST, and
+ * keeps the `symbol-sort-key` expression from ever resolving to `undefined`.
+ *
+ * Lives here, in the dependency-free base module, rather than alongside the other
+ * display constants in `amenity-cluster` — that module imports
+ * `AMENITY_CATEGORIES` from this one, so importing back would form a cycle whose
+ * top-level `AMENITY_CATEGORIES.map(...)` crashes with "Cannot read properties of
+ * undefined" whenever `amenities.ts` is the entry module. That is not
+ * hypothetical: it was verified with a probe test before this constant was moved.
+ */
+export const UNKNOWN_DISTANCE_SORT = 1_000_000;
+
 /** An OSM tag key + the set of values that qualify for a category. */
 export interface AmenityPredicate {
   tag: string;
@@ -100,6 +113,13 @@ export interface Amenity {
   members?: TransitStopMember[];
   /** `members.length` — present only on a merged marker (≥ 2). */
   mergedCount?: number;
+  /** Walking distance from the origin, in metres. Already computed server-side
+   * (`catalogue-query`: `ST_Distance(display_point, origin)`) and already sent
+   * over the wire — this declaration just stops the client from throwing it away.
+   * Drives the label `symbol-sort-key` (so collision thinning keeps the NEAREST
+   * places' names) and the "350 m" browser rows. Optional because a malformed
+   * payload must still render as a plain marker. */
+  distanceMeters?: number;
 }
 
 /** One transit stop absorbed into a merged marker (task 047). Carries the OSM
@@ -128,6 +148,21 @@ const LABEL_BY_KEY = Object.fromEntries(AMENITY_CATEGORIES.map((c) => [c.key, c.
  * a generic fallback — used as popup title/subtitle for unnamed POIs (task 024). */
 export function amenityCategoryLabel(key: string): string {
   return (LABEL_BY_KEY as Record<string, string>)[key] ?? "Place";
+}
+
+/**
+ * Walking distance for display ("350 m", "1.2 km").
+ *
+ * Rounded to 10 m below a kilometre: the underlying figure is a straight-line
+ * geography distance from an in-ring display point, so metre precision would
+ * imply an accuracy the number does not have. Non-finite input yields an empty
+ * string rather than "NaN m", so a malformed payload degrades to no distance
+ * instead of visible nonsense.
+ */
+export function formatDistance(meters: number): string {
+  if (!Number.isFinite(meters) || meters < 0) return "";
+  if (meters < 1000) return `${Math.max(10, Math.round(meters / 10) * 10)} m`;
+  return `${(meters / 1000).toFixed(meters < 10000 ? 1 : 0)} km`;
 }
 
 /** Classify an element's tags into the FIRST matching category, or null. The
@@ -196,18 +231,61 @@ export function countByCategory(items: Amenity[]): AmenityCounts {
   return counts;
 }
 
+/**
+ * Label-placement sort key for an amenity (task 061).
+ *
+ * MapLibre gives placement priority to the LOWER `symbol-sort-key`, so returning
+ * the walking distance means that when labels must be thinned, the names that
+ * survive are the nearest places — the ones a "how far is everything?" product
+ * should keep. Two refinements matter:
+ *
+ * - a missing distance sorts LAST (`UNKNOWN_DISTANCE_SORT`) instead of first, so
+ *   an unmeasured POI never outranks a measured one;
+ * - near-equal distances are broken deterministically by index, because a raw tie lets
+ *   MapLibre thin arbitrarily and the surviving label set could differ between
+ *   repaints of identical data.
+ *
+ * Honest limit on that tie-break: the nudge is up to +0.999 m, so two places whose true
+ * distances differ by LESS than a metre can swap label priority. That is deliberate — it
+ * buys deterministic thinning — and it only ever affects which of two effectively
+ * equidistant names survives, never a visible ordering. An earlier version of this
+ * comment claimed it "never reorders genuinely different distances", which overstated it.
+ */
+export function amenityDistanceSort(distanceMeters: number | undefined, index: number): number {
+  const base =
+    typeof distanceMeters === "number" && Number.isFinite(distanceMeters) && distanceMeters >= 0
+      ? distanceMeters
+      : UNKNOWN_DISTANCE_SORT;
+  // A sub-metre nudge: it orders effectively-equal distances deterministically. See the
+  // note above for the sub-metre reordering this deliberately accepts.
+  return base + Math.min(index, 999) / 1000;
+}
+
 /** Amenities → GeoJSON points carrying the per-category color so one circle
  * layer paints via `["get","color"]` (the isochrone-layer pattern). `osmType`/
  * `osmId` ride along so a click on a transit marker can look up its lines
  * (task 021); omitted when absent so `feature.properties` never carries
- * `undefined` (MapLibre would stringify it). */
+ * `undefined` (MapLibre would stringify it).
+ *
+ * Each feature carries an **explicit numeric `id`** (its payload index). The
+ * source clusters (task 061), and MapLibre's `generateId` is unavailable on a
+ * clustered source — but supercluster preserves an author-supplied id, verified
+ * stable across tile seams and zoom changes, which is exactly what hover
+ * feature-state needs. The index is stable for the lifetime of one payload, and
+ * every `setData` is already preceded by `resetAmenityHover`. */
 export function buildAmenityFeatures(items: Amenity[]): GeoJSON.Feature[] {
-  return items.map((a) => {
+  return items.map((a, index) => {
     const properties: Record<string, string | number> = {
       category: a.category,
       color: COLOR_BY_KEY[a.category],
       name: a.name,
+      // Always a finite number so the `symbol-sort-key` expression can never
+      // resolve to `undefined` (which would make placement order arbitrary).
+      distanceSort: amenityDistanceSort(a.distanceMeters, index),
     };
+    if (typeof a.distanceMeters === "number" && Number.isFinite(a.distanceMeters)) {
+      properties.distanceMeters = a.distanceMeters;
+    }
     if (a.osmType) properties.osmType = a.osmType;
     if (typeof a.osmId === "number") properties.osmId = a.osmId;
     // Merged transit marker (task 047): stringify members so the flat-prop
@@ -218,6 +296,7 @@ export function buildAmenityFeatures(items: Amenity[]): GeoJSON.Feature[] {
     }
     return {
       type: "Feature",
+      id: index,
       properties,
       geometry: { type: "Point", coordinates: [a.lng, a.lat] },
     };

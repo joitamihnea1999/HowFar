@@ -48,13 +48,13 @@ export function createReachJourneyController({
   // Whether a journey is currently drawn. Tracked INDEPENDENTLY of the
   // `data-reach-journey` e2e stamp (which lands one rAF after setData): the
   // click-guard must be armed the instant features exist, or a click in that
-  // one-frame window falls through to a new selection (review).
+  // one-frame window falls through to a new selection (found in review).
   let active = false;
   // The destination pin (task 058): the point the user asked "how do I get
   // there?" about, drawn for every reach open — including a "No public-transport
   // route" answer that has no journey (task 060). This controller atomically owns
   // BOTH the journey features and the pin in the one `reach-path` source (panel
-  // gpt5.5-3/luna-3/terra-3 — no split writer can clobber the other). `pinActive`
+  // review/review/review — no split writer can clobber the other). `pinActive`
   // is INDEPENDENT of `active`: a lone pin must guard its own clicks WITHOUT
   // enabling journey framing/reframe.
   let destination: [number, number] | null = null;
@@ -131,7 +131,7 @@ export function createReachJourneyController({
   /** Draw the journey. Returns whether it actually produced drawable features —
    * the caller uses this to decide whether to declutter (a transit plan whose
    * legs carry no drawable coords must NOT hide the amenities behind an empty
-   * map — review). */
+   * map). */
   function draw(legs: ReachLeg[]): boolean {
     const legFeatures = journeyLegs(legs);
     const stops = journeyStops(legs);
@@ -148,7 +148,7 @@ export function createReachJourneyController({
 
     // No drawable geometry at all: stamp "none" and draw no journey, but KEEP
     // any destination pin (writeReachSource re-emits it) rather than blanking the
-    // source — plan-panel F + task-058 pin lifecycle.
+    // source — review + task-058 pin lifecycle.
     if (!hasGeometry) {
       journeyFeatures = [];
       writeReachSource();
@@ -211,7 +211,7 @@ export function createReachJourneyController({
     // Stamp once the source actually holds queryable features (e2e contract:
     // "the journey is on the map"). Self-terminates if a clear/replace bumped gen.
     runRoutePathStampPoll({
-      // Journey-only predicate (panel gpt5.5-2): the reach-path source also holds
+      // Journey-only predicate (found in review): the reach-path source also holds
       // the destination pin (written by setDestination, possibly before the legs
       // land), so a bare `.length > 0` could stamp "rendered" off the pin alone.
       // Require an actual leg/stop feature so the stamp means the TRIP is drawn.
@@ -249,7 +249,7 @@ export function createReachJourneyController({
 
   /** True when a click lands on the drawn journey (a leg line or a stop dot), so
    * the map click handler can skip starting a NEW selection — the same guard the
-   * OSM route path uses (plan-panel C). */
+   * OSM route path uses (found in review). */
   function hitsActiveJourney(point: maplibregl.Point): boolean {
     // `active`/`pinActive` (set synchronously) — NOT the e2e stamp, which lags
     // one frame — so the guard is armed the instant features are on the map. A
@@ -326,6 +326,17 @@ export function createReachJourneyController({
     setDestination,
     highlight,
     frame,
+    /**
+     * Would `frame()` actually move the camera?
+     *
+     * Exists so callers can avoid COMPUTING the padding argument when there is
+     * nothing to frame. That sounds like a micro-optimisation and is not: committing
+     * padding goes through `map.setPadding`, which internally calls `jumpTo`, and
+     * `jumpTo` unconditionally calls `stop()` — cancelling any camera animation
+     * already in flight. Evaluating the argument eagerly therefore had a real side
+     * effect even when this returns false. Mirrors `frame()`'s own guard exactly.
+     */
+    canFrame: () => active && activeBounds !== null && loadState.styleLoaded,
     hitsActiveJourney,
     flushPending,
     dispose() {

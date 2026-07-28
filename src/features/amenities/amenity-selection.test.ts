@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import type { Amenity } from "./amenities";
+import {
+  amenityDistanceSort,
+  formatDistance,
+  UNKNOWN_DISTANCE_SORT,
+  type Amenity,
+} from "./amenities";
 import {
   ALL_AMENITY_CATEGORY_KEYS,
+  cappedAmenityTotal,
   amenityMapCategoryFilter,
   filterAmenityItems,
   normalizeAmenitySelection,
@@ -79,5 +85,119 @@ describe("amenity category selection", () => {
     expect(filterAmenityItems(items, ["parks", "transit"]).map((i) => i.category)).toEqual([
       "parks",
     ]);
+  });
+});
+
+describe("cappedAmenityTotal", () => {
+  const counts = (o: Partial<Record<string, number>>) => ({
+    groceries: 0, pharmacies: 0, parks: 0, schools: 0, transit: 0, ...o,
+  }) as never;
+
+  it("returns null when nothing was capped, so the note never appears falsely", () => {
+    expect(cappedAmenityTotal(counts({ groceries: 3, parks: 2 }), 5)).toBeNull();
+  });
+
+  it("returns the TRUE in-ring total when the server capped the markers", () => {
+    // The chips report pre-cap totals while the payload is capped per category, so
+    // summing donut counts on the map disagrees with the chips — the note explains it.
+    expect(cappedAmenityTotal(counts({ groceries: 200, transit: 91 }), 155)).toBe(291);
+  });
+
+  it("is exact at the boundary (no off-by-one note when totals equal the payload)", () => {
+    expect(cappedAmenityTotal(counts({ groceries: 10 }), 10)).toBeNull();
+    expect(cappedAmenityTotal(counts({ groceries: 11 }), 10)).toBe(11);
+  });
+
+  it("returns null with no counts at all", () => {
+    expect(cappedAmenityTotal(null, 0)).toBeNull();
+  });
+
+  it("counts ONLY the selected categories, so a filtered map is not described by hidden ones", () => {
+    // Hiding a category used to leave the note quoting places the user could not
+    // see: "the nearest N of M" summed every category (found in review). An honesty note
+    // that is itself misleading is worse than no note.
+    const c = counts({ groceries: 200, parks: 300 });
+    expect(cappedAmenityTotal(c, 150, ["groceries"])).toBe(200);
+    expect(cappedAmenityTotal(c, 150, ["parks"])).toBe(300);
+    expect(cappedAmenityTotal(c, 150, ["groceries", "parks"])).toBe(500);
+  });
+
+  it("shows no note when the SELECTED categories were not capped, even though others were", () => {
+    // Groceries is capped, pharmacies is not. Viewing pharmacies alone must not
+    // inherit the groceries cap.
+    const c = counts({ groceries: 400, pharmacies: 3 });
+    expect(cappedAmenityTotal(c, 3, ["pharmacies"])).toBeNull();
+    expect(cappedAmenityTotal(c, 153, ["groceries", "pharmacies"])).toBe(403);
+  });
+
+  it("defaults to every category, which is the all-on default selection", () => {
+    const c = counts({ groceries: 200, parks: 300 });
+    expect(cappedAmenityTotal(c, 150)).toBe(cappedAmenityTotal(c, 150, ALL_AMENITY_CATEGORY_KEYS));
+  });
+});
+
+describe("formatDistance", () => {
+  it("rounds to 10 m below a kilometre — metre precision would overstate accuracy", () => {
+    expect(formatDistance(0)).toBe("10 m");
+    expect(formatDistance(214)).toBe("210 m");
+    expect(formatDistance(999)).toBe("1000 m");
+  });
+
+  it("switches to km with one decimal, then whole km when far", () => {
+    expect(formatDistance(1000)).toBe("1.0 km");
+    expect(formatDistance(1240)).toBe("1.2 km");
+    expect(formatDistance(15400)).toBe("15 km");
+  });
+
+  it("returns an empty string for unusable input rather than visible nonsense", () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, -5]) {
+      expect(formatDistance(bad)).toBe("");
+    }
+  });
+});
+
+describe("amenityDistanceSort", () => {
+  it("sorts a missing distance LAST so unmeasured places never outrank measured ones", () => {
+    expect(amenityDistanceSort(undefined, 0)).toBeGreaterThan(amenityDistanceSort(99999, 0));
+    expect(amenityDistanceSort(Number.NaN, 0)).toBeGreaterThanOrEqual(UNKNOWN_DISTANCE_SORT);
+  });
+
+  it("breaks ties deterministically by index without reordering real distances", () => {
+    // A raw tie lets MapLibre thin labels arbitrarily, so the surviving label set
+    // could differ between repaints of identical data.
+    const a = amenityDistanceSort(300, 0);
+    const b = amenityDistanceSort(300, 1);
+    expect(a).toBeLessThan(b);
+    expect(amenityDistanceSort(300, 999)).toBeLessThan(amenityDistanceSort(301, 0));
+  });
+
+  it("passes a valid distance through as its integer part", () => {
+    expect(Math.floor(amenityDistanceSort(420, 0))).toBe(420);
+  });
+
+  it("preserves order for FRACTIONAL near-ties at far-apart indices", () => {
+    // The tie-break is a sub-metre nudge, so a review asked the obvious question:
+    // can it invert two places whose distances differ by less than the nudge? The
+    // answer depends on a precondition -- `items` reaches `buildAmenityFeatures`
+    // already distance-sorted (SQL `ORDER BY distance, category, id`, and both
+    // `mergeCoincidentTransitStops` and `filterAmenityItems` preserve order). Under
+    // it, a later index always carries a distance >= the earlier one, so the nudge
+    // can only ever separate equals. These are the near-tied, non-adjacent,
+    // fractional cases the previous test (integers 1m apart) did not reach.
+    expect(amenityDistanceSort(300.0001, 0)).toBeLessThan(amenityDistanceSort(300.0002, 400));
+    expect(amenityDistanceSort(300.5, 10)).toBeLessThan(amenityDistanceSort(300.5, 900));
+    expect(amenityDistanceSort(300, 0)).toBeLessThan(amenityDistanceSort(300.0000001, 999));
+  });
+
+  it("is non-decreasing across a whole distance-sorted payload, near-ties included", () => {
+    const distances = [10, 10, 10.0004, 10.9, 11, 11.0001, 250.5, 250.5, 999.999, 1000];
+    const keys = distances.map((d, i) => amenityDistanceSort(d, i));
+    for (let i = 1; i < keys.length; i++) expect(keys[i]).toBeGreaterThan(keys[i - 1]);
+  });
+
+  it("caps the nudge so a huge payload cannot push a place past the next metre", () => {
+    // min(index, 999)/1000 keeps the nudge strictly under 1m for any payload size.
+    expect(amenityDistanceSort(300, 5000) - 300).toBeLessThan(1);
+    expect(amenityDistanceSort(300, 5000)).toBeLessThan(amenityDistanceSort(301, 0));
   });
 });

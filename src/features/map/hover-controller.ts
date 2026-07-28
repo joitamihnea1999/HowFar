@@ -1,7 +1,8 @@
 import type maplibregl from "maplibre-gl";
 
 import type { LoadState } from "@/features/map/load-state";
-import { MARKER_PICK_PAD_PX, pickNearestWithin } from "@/features/map/marker-pick";
+import { markerPickPad, pickAllWithin, pickNearestWithin } from "@/features/map/marker-pick";
+import { pinFootprintRadius } from "@/features/amenities/amenity-cluster";
 
 export interface AmenityPick {
   feature: maplibregl.MapGeoJSONFeature;
@@ -26,12 +27,12 @@ export function createHoverController({
   el: HTMLElement;
   loadState: LoadState;
 }) {
-  // Pick the amenity marker nearest the cursor within a ±MARKER_PICK_PAD_PX box
+  // Pick the amenity marker nearest the cursor within a ±markerPickPad box
   // — ANY category. Used by BOTH the click and hover handlers, so the hover
   // affordance always predicts what a click will do.
   function pickAmenity(point: maplibregl.Point): AmenityPick | null {
     if (!loadState.styleLoaded) return null;
-    const pad = MARKER_PICK_PAD_PX;
+    const pad = markerPickPad(pinFootprintRadius(map.getZoom(), true));
     const bbox: [maplibregl.PointLike, maplibregl.PointLike] = [
       [point.x - pad, point.y - pad],
       [point.x + pad, point.y + pad],
@@ -48,9 +49,52 @@ export function createHoverController({
     return hit ? { feature: hit.feature, coords: hit.coords } : null;
   }
 
+  /**
+   * EVERY unclustered marker under the cursor's pad, nearest first (task 061).
+   *
+   * `pickAmenity` returns only the nearest, which meant a marker in a tight clump
+   * could be permanently unclickable — the pointer could never get closer to it
+   * than to its neighbour. Callers use this to offer the choice instead. Dedupes
+   * on the feature id (MapLibre returns a feature once per tile it appears in), so
+   * a marker straddling a tile boundary is not offered twice.
+   */
+  function pickAmenitiesAt(point: maplibregl.Point): AmenityPick[] {
+    if (!loadState.styleLoaded) return [];
+    const pad = markerPickPad(pinFootprintRadius(map.getZoom(), true));
+    const bbox: [maplibregl.PointLike, maplibregl.PointLike] = [
+      [point.x - pad, point.y - pad],
+      [point.x + pad, point.y + pad],
+    ];
+    let hits: maplibregl.MapGeoJSONFeature[];
+    try {
+      hits = map.queryRenderedFeatures(bbox, { layers: ["amenity-markers"] });
+    } catch {
+      return [];
+    }
+    const candidates = [];
+    for (const f of hits) {
+      if (f.geometry.type !== "Point") continue;
+      const [lng, lat] = f.geometry.coordinates;
+      const p = map.project([lng, lat]);
+      candidates.push({ x: p.x, y: p.y, feature: f, coords: [lng, lat] as [number, number] });
+    }
+    return pickAllWithin(candidates, point, pad, (c) =>
+      c.feature.id !== undefined ? String(c.feature.id) : `${c.x},${c.y}`,
+    ).map((c) => ({ feature: c.feature, coords: c.coords }));
+  }
+
   // Hover feedback: the hovered marker grows via feature-state and the cursor
   // turns pointer. `data-amenity-hover` exposes it to e2e.
   let hoveredAmenityId: string | number | null = null;
+  // A cluster donut under the pointer also deserves the pointer cursor, but donuts are
+  // DOM markers with `pointer-events:none`, so this controller's own hit-test cannot see
+  // them — the map handler passes the hint in. It has to be folded into THIS function
+  // because it is the single writer of the cursor; setting the cursor at the call site was
+  // simply overwritten here a moment later (found in review).
+  let overDonut = false;
+  function applyCursor() {
+    map.getCanvas().style.cursor = hoveredAmenityId !== null || overDonut ? "pointer" : "";
+  }
   function setHoveredAmenity(id: string | number | null) {
     if (id === hoveredAmenityId) return;
     if (hoveredAmenityId !== null) {
@@ -63,7 +107,7 @@ export function createHoverController({
     } else {
       delete el.dataset.amenityHover;
     }
-    map.getCanvas().style.cursor = id !== null ? "pointer" : "";
+    applyCursor();
   }
 
   // Coalesce hover hit-tests to one queryRenderedFeatures per animation frame.
@@ -74,8 +118,12 @@ export function createHoverController({
     hoverRaf = 0;
     pendingHoverPoint = null;
   }
-  function scheduleAmenityHover(point: maplibregl.Point) {
+  function scheduleAmenityHover(point: maplibregl.Point, donutUnderPointer = false) {
     pendingHoverPoint = point;
+    if (overDonut !== donutUnderPointer) {
+      overDonut = donutUnderPointer;
+      applyCursor();
+    }
     if (hoverRaf) return;
     hoverRaf = requestAnimationFrame(() => {
       hoverRaf = 0;
@@ -99,6 +147,7 @@ export function createHoverController({
 
   return {
     pickAmenity,
+    pickAmenitiesAt,
     setHoveredAmenity,
     scheduleAmenityHover,
     cancelPendingAmenityHover,

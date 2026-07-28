@@ -1,6 +1,14 @@
 import { layers, namedFlavor } from "@protomaps/basemaps";
 import type maplibregl from "maplibre-gl";
 
+import { AMENITY_CATEGORIES, UNKNOWN_DISTANCE_SORT } from "@/features/amenities/amenities";
+import {
+  AMENITY_SOURCE_MAX_ZOOM,
+  CLUSTER_MAX_ZOOM,
+  CLUSTER_RADIUS_PX,
+  pinRadiusHoverExpression,
+} from "@/features/amenities/amenity-cluster";
+import { amenityIconImageExpression } from "@/features/amenities/amenity-icons";
 import { RING_BANDS } from "@/features/isochrones/isochrone-view";
 
 /**
@@ -197,7 +205,7 @@ export function addReachPathLayers(map: LayerHost): void {
   // The reach-path source also carries a single `kind:"destination"` pin (task
   // 058) — the point the user asked "how do I get there?" about. The stop layers
   // below are scoped to `kind:"stop"` so the pin never renders as a transit stop
-  // or gets a stop label (panel gpt5.5-3/luna-3/terra-3 — atomic source, one
+  // or gets a stop label (review/review/review — atomic source, one
   // owner, kind-scoped layers).
   const isStop = ["all", isPoint, ["==", ["get", "kind"], "stop"]] as maplibregl.FilterSpecification;
   // Used stops: board/alight are big filled violet dots; transfers a smaller
@@ -266,74 +274,247 @@ export function addReachPathLayers(map: LayerHost): void {
   });
 }
 
-/** Amenity marker sizing: rest vs hover (task 024). The hover radius nearly
- * doubles the target and is what the shared 12px pick pad is calibrated to. */
-export const AMENITY_RADIUS = 7;
-export const AMENITY_RADIUS_HOVER = 10;
+/** Zoom at which individual pins start showing their place NAME. Below this the
+ * icon + colour carry the meaning; above it there is room for text. */
+export const AMENITY_LABEL_MINZOOM = 15.5;
+
+/** Only clusters / only individual points. A clustered GeoJSON source serves BOTH
+ * from one source, so every amenity layer must state which half it draws — an
+ * unfiltered layer would paint cluster centroids as if they were places. */
+const IS_SINGLE = ["!", ["has", "point_count"]] as unknown as maplibregl.FilterSpecification;
 
 /** Feature-state-driven value: `hovered` when the pointer's pick lands on the
  * marker (AppMap sets `hover` via setFeatureState), else `rest`. */
-function hoverCase(hovered: number, rest: number): maplibregl.DataDrivenPropertyValueSpecification<number> {
-  return ["case", ["boolean", ["feature-state", "hover"], false], hovered, rest];
+function hoverCase(
+  hovered: maplibregl.ExpressionSpecification | number,
+  rest: maplibregl.ExpressionSpecification | number,
+): maplibregl.DataDrivenPropertyValueSpecification<number> {
+  return ["case", ["boolean", ["feature-state", "hover"], false], hovered, rest] as
+    maplibregl.DataDrivenPropertyValueSpecification<number>;
 }
 
-/** Amenity markers: one circle layer on top of the isochrone fills, colored
- * per category via the feature's own `color` (the isochrone-layer pattern).
- * The white stroke gives figure/ground pop AND a secondary encoding beyond
- * hue (the palette's residual CVD proximity is covered by this + the legend).
- * `generateId` gives every feature a stable numeric id for the hover feature
- * state — `osmId` cannot serve (optional, and only unique per osmType). */
+/**
+ * Amenity layers (task 061 — display-level aggregation).
+ *
+ * The source **clusters**, and `clusterMaxZoom` is pinned to the map's own
+ * maximum so aggregation never dissolves: any two amenities closer than
+ * `CLUSTER_RADIUS_PX` are one mark at every zoom, which is what makes overlapping
+ * unreadable pins structurally impossible rather than merely rarer. `maxzoom`
+ * must stay STRICTLY above `clusterMaxZoom` — MapLibre otherwise warns and stops
+ * clustering early, and the source default (18) is below the map default (22), so
+ * both are explicit.
+ *
+ * `clusterProperties` accumulate a per-category count on every cluster, so an
+ * aggregate can still say *what kinds* of places it holds — the whole point of
+ * the feature, and something a plain count bubble throws away.
+ *
+ * Feature ids are explicit (`buildAmenityFeatures` emits them) rather than
+ * `generateId`, because supercluster preserves an author-supplied id — verified
+ * stable across tile seams and zooms — while generated ids are not available on a
+ * clustered source. Hover feature-state depends on that stability.
+ *
+ * Layers, in paint order: cluster halo (WebGL, under the DOM donuts) → individual
+ * pins → icons → names. Icon and name are SEPARATE symbol layers because they
+ * need opposite overlap policies: the icon must stay glued to its pin
+ * (`icon-allow-overlap`), while names must be collision-managed so they thin
+ * instead of overprinting into mud (the previous letter-glyph layer disabled
+ * collisions outright, which is what produced the owner's `GG`/`+G+` screenshot).
+ */
 export function addAmenityLayers(map: LayerHost): void {
   map.addSource("amenities", {
     type: "geojson",
     data: EMPTY_FC as GeoJSON.FeatureCollection,
-    generateId: true,
+    cluster: true,
+    clusterRadius: CLUSTER_RADIUS_PX,
+    clusterMaxZoom: CLUSTER_MAX_ZOOM,
+    maxzoom: AMENITY_SOURCE_MAX_ZOOM,
+    clusterProperties: Object.fromEntries(
+      AMENITY_CATEGORIES.map(({ key }) => [
+        key,
+        ["+", ["case", ["==", ["get", "category"], key], 1, 0]],
+      ]),
+    ),
   });
+
+  // NOTE: there is deliberately NO WebGL layer for clusters. An earlier "halo" circle
+  // was painted per SOURCE cluster, but donuts are merged in SCREEN space, so after a
+  // merge the halos stayed at the un-merged positions and visibly reintroduced exactly
+  // the overlap this task removes (found in review). The donut SVG draws its own dark seat,
+  // so the halo was redundant as well as wrong.
+  // Individual places. Radius now scales with zoom (a fixed 7px at every zoom was
+  // one of the three causes of the original crowding complaint); the cap in
+  // `pinRadiusForZoom` keeps the footprint inside the separation invariant.
   map.addLayer({
     id: "amenity-markers",
     type: "circle",
     source: "amenities",
+    filter: IS_SINGLE,
     paint: {
-      "circle-radius": hoverCase(AMENITY_RADIUS_HOVER, AMENITY_RADIUS),
+      // ONE zoom interpolation, scaled by a hover factor — MapLibre allows only a
+      // single zoom-based subexpression per paint property, and the two-interp
+      // `case` form makes addLayer throw (see pinRadiusHoverExpression).
+      "circle-radius":
+        pinRadiusHoverExpression() as unknown as maplibregl.DataDrivenPropertyValueSpecification<number>,
       "circle-color": ["get", "color"],
       "circle-stroke-color": "#ffffff",
       "circle-stroke-width": hoverCase(2.5, 1.75),
       "circle-opacity": hoverCase(1, 0.96),
     },
   });
-  // A compact, always-consistent non-color encoding. Single ASCII glyphs stay
-  // legible at city zoom without competing with place-name labels; the circle
-  // remains the sole hit layer so this symbol cannot change pick behavior.
+
+  // Category icons — the shared `AMENITY_ICONS` shapes, so the map and the
+  // AmenityPanel speak one visual language and a marker no longer needs a legend
+  // lookup to decode. Glued to its pin, so overlap is allowed here.
   map.addLayer({
-    id: "amenity-glyphs",
+    id: "amenity-icons",
     type: "symbol",
     source: "amenities",
-    minzoom: 12.5,
+    filter: IS_SINGLE,
+    // No minzoom: the map opens at 11.5, and an isolated pin down there was drawn as a
+    // bare coloured dot with no category encoding at all (found in review). `icon-size`
+    // already shrinks the glyph at low zoom, so there is nothing to gate.
     layout: {
-      "text-field": [
-        "match",
-        ["get", "category"],
-        "groceries",
-        "G",
-        "pharmacies",
-        "+",
-        "parks",
-        "P",
-        "schools",
-        "S",
-        "transit",
-        "T",
-        "•",
-      ],
+      "icon-image": amenityIconImageExpression() as unknown as maplibregl.DataDrivenPropertyValueSpecification<maplibregl.ResolvedImageSpecification>,
+      // Calibrated against real screenshots at the W7 checkpoint: the first pass
+      // (0.32/0.42/0.55) rendered legible-but-faint icons inside the pin, so each
+      // stop is nudged up to fill more of the disc without touching its edge.
+      "icon-size": ["interpolate", ["linear"], ["zoom"], 11, 0.3, 12.5, 0.34, 15, 0.46, 18, 0.62],
+      "icon-allow-overlap": true,
+      "icon-ignore-placement": true,
+      "icon-optional": true,
+    },
+  });
+
+  // Place NAMES with collision ON. `symbol-sort-key` is the served walking
+  // distance, so when MapLibre must thin labels it keeps the NEAREST places'
+  // names (lower sort key wins placement) — the ones the user is most likely to
+  // care about — instead of an arbitrary subset. Ties fall back to the name so
+  // thinning is deterministic between repaints.
+  map.addLayer({
+    id: "amenity-labels",
+    type: "symbol",
+    source: "amenities",
+    filter: IS_SINGLE,
+    minzoom: AMENITY_LABEL_MINZOOM,
+    layout: {
+      "text-field": ["coalesce", ["get", "name"], ""],
       "text-font": ["Noto Sans Medium"],
-      "text-size": 8.5,
-      "text-allow-overlap": true,
-      "text-ignore-placement": true,
+      "text-size": 11,
+      "text-anchor": "top",
+      "text-offset": [0, 0.9],
+      "text-max-width": 9,
+      "text-allow-overlap": false,
+      "text-ignore-placement": false,
+      "text-optional": true,
+      "symbol-sort-key": ["coalesce", ["get", "distanceSort"], UNKNOWN_DISTANCE_SORT],
     },
     paint: {
-      "text-color": "#08100d",
-      "text-halo-color": "rgba(255,255,255,0.18)",
-      "text-halo-width": 0.5,
+      "text-color": "#e8ede8",
+      "text-halo-color": "rgba(6,9,8,0.92)",
+      "text-halo-width": 1.4,
+    },
+  });
+}
+
+/** Source + layer ids for the spiderfy fan, exported so the controller and the
+ * e2e name them once. */
+export const SPIDER_SOURCE = "amenity-spider";
+export const SPIDER_LEG_LAYER = "amenity-spider-legs";
+export const SPIDER_MARKER_LAYER = "amenity-spider-markers";
+export const SPIDER_ICON_LAYER = "amenity-spider-icons";
+export const SPIDER_LABEL_LAYER = "amenity-spider-labels";
+
+/**
+ * Spiderfy layers (task 061 W20) — the fan that makes coincident places
+ * individually visible.
+ *
+ * Added AFTER the amenity layers so the fan draws on top of everything it
+ * replaces, and kept in its OWN source for three reasons that each bit during
+ * design:
+ *
+ * 1. The fan's positions are screen-space offsets recomputed every frame, so they
+ *    cannot live in the clustered source (which would re-cluster them straight back
+ *    into the hub they came from).
+ * 2. Reusing the pin paint here means a fanned leaf looks exactly like an ordinary
+ *    place — same colour, same icon sprite, same label style — so nothing has to be
+ *    re-learned when a mark fans out.
+ * 3. Labels are COLLISION-MANAGED, like the main map's. The first cut set
+ *    `text-allow-overlap: true` on the reasoning that a fan is at most
+ *    `SPIDER_MAX_LEAVES` provably separated marks — but two reviewers pointed
+ *    out that the proof covers the PINS (25px apart), not their names: a 10em POI name
+ *    is far wider than that, so long names in a full fan reproduced exactly the text
+ *    mud the owner reported. Thinning a name is the lesser harm — the pin is always
+ *    drawn, the hub's `aria-label` enumerates every member, and the leaves list is one
+ *    keystroke away — so `text-optional` lets a name drop rather than overprint, and
+ *    `symbol-sort-key` makes which one drops deterministic instead of arbitrary.
+ */
+export function addAmenitySpiderLayers(map: LayerHost): void {
+  map.addSource(SPIDER_SOURCE, { type: "geojson", data: EMPTY_FC as GeoJSON.FeatureCollection });
+
+  // Leader lines from the hub to each leaf: without them a fanned pin is a place
+  // floating where no place is. Drawn first so the leaves cap their own legs.
+  map.addLayer({
+    id: SPIDER_LEG_LAYER,
+    type: "line",
+    source: SPIDER_SOURCE,
+    filter: ["==", ["geometry-type"], "LineString"],
+    layout: { "line-cap": "round" },
+    paint: { "line-color": "#8b9a8f", "line-width": 1.4, "line-opacity": 0.9 },
+  });
+
+  map.addLayer({
+    id: SPIDER_MARKER_LAYER,
+    type: "circle",
+    source: SPIDER_SOURCE,
+    filter: ["==", ["geometry-type"], "Point"],
+    paint: {
+      // Fixed radius, not the zoom interpolation the map pins use: the fan is a
+      // transient focused view and its leaves must stay readable at any zoom.
+      "circle-radius": ["get", "radius"],
+      "circle-color": ["get", "color"],
+      "circle-stroke-color": "#ffffff",
+      "circle-stroke-width": 2,
+    },
+  });
+
+  map.addLayer({
+    id: SPIDER_ICON_LAYER,
+    type: "symbol",
+    source: SPIDER_SOURCE,
+    filter: ["==", ["geometry-type"], "Point"],
+    layout: {
+      "icon-image": amenityIconImageExpression() as unknown as maplibregl.DataDrivenPropertyValueSpecification<maplibregl.ResolvedImageSpecification>,
+      "icon-size": 0.5,
+      "icon-allow-overlap": true,
+      "icon-ignore-placement": true,
+      "icon-optional": true,
+    },
+  });
+
+  map.addLayer({
+    id: SPIDER_LABEL_LAYER,
+    type: "symbol",
+    source: SPIDER_SOURCE,
+    filter: ["==", ["geometry-type"], "Point"],
+    layout: {
+      "text-field": ["coalesce", ["get", "name"], ""],
+      "text-font": ["Noto Sans Medium"],
+      "text-size": 11,
+      "text-anchor": "top",
+      "text-offset": [0, 0.95],
+      "text-max-width": 10,
+      // See the header note (3): pin separation is not label separation.
+      "text-allow-overlap": false,
+      "text-ignore-placement": false,
+      "text-optional": true,
+      // Lower wins placement, so the fan's first members keep their names when the
+      // set has to be thinned — deterministic between repaints of identical data.
+      "symbol-sort-key": ["coalesce", ["get", "leafOrder"], 0],
+    },
+    paint: {
+      "text-color": "#f4f7f2",
+      "text-halo-color": "rgba(6,9,8,0.95)",
+      "text-halo-width": 1.5,
     },
   });
 }

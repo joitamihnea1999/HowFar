@@ -171,7 +171,9 @@ async function expectSubjectClearOfUi(page: Page) {
 
 async function expectOriginMarkerAtCameraSubject(page: Page) {
   const point = await cameraSubjectPixel(page);
-  const marker = await page.locator(".maplibregl-marker").boundingBox();
+  // Scoped to the ORIGIN marker's own class: since task 061, cluster donuts are
+  // also MapLibre DOM markers, so a bare `.maplibregl-marker` matches several.
+  const marker = await page.locator(".hf-origin-marker").boundingBox();
   if (!marker) throw new Error("origin marker has no box");
   expect(Math.abs(marker.x + marker.width / 2 - point.x)).toBeLessThanOrEqual(3);
   expect(Math.abs(marker.y + marker.height / 2 - point.y)).toBeLessThanOrEqual(3);
@@ -205,7 +207,10 @@ test("deterministic populated fixture renders the complete map result", async ({
   await expect(map).toHaveAttribute("data-ring-reveal-sequence", "15");
   await expect(map).toHaveAttribute("data-ring-reveal", "settled");
   await expect(map).toHaveAttribute("data-camera-motion", "animated");
-  await expect(map).toHaveAttribute("data-amenity-encoding", "color+glyph");
+  // task 061: category is encoded as colour + a real per-category ICON, replacing
+  // the single-letter glyphs. The stamp lands only once every sprite image is
+  // registered, so this asserts the encoding is actually available.
+  await expect(map).toHaveAttribute("data-amenity-encoding", "color+icon");
   await expect(page.getByText("Within a 15-min walk")).toBeVisible();
   await expect(page.getByText("Mega Image Unirii")).toHaveCount(0); // map marker, popup remains on demand
   expect(await page.evaluate(() => getComputedStyle(document.body).fontFamily)).toContain("Geist");

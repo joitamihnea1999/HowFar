@@ -438,6 +438,99 @@ button,
   }
 }
 
+/* Cluster "N places here" list (task 061) — the floor of the amenity resolution
+   ladder. Because clustering never dissolves, genuinely coincident places can
+   only be read here, so this list has to be comfortably scrollable and its rows
+   have to meet the same 44px touch target as the rest of the UI. */
+.hf-cluster-popup__title {
+  margin-bottom: 0.15rem;
+  padding-right: 1.5rem;
+  color: var(--hf-text);
+  font-size: 0.9rem;
+  font-weight: 680;
+  line-height: 1.3;
+  letter-spacing: -0.015em;
+}
+.hf-cluster-popup__note {
+  margin-bottom: 0.4rem;
+  color: var(--hf-muted);
+  font-size: 0.68rem;
+}
+.hf-cluster-popup__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 232px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.hf-cluster-popup__row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.35rem 0.45rem;
+  border: 0;
+  border-radius: 0.6rem;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 140ms ease;
+}
+.hf-cluster-popup__row:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.hf-cluster-popup__row:focus-visible {
+  outline: 2px solid var(--hf-accent);
+  outline-offset: 1px;
+}
+.hf-cluster-popup__swatch {
+  flex: 0 0 auto;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 999px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.22);
+}
+.hf-cluster-popup__text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.hf-cluster-popup__name {
+  overflow: hidden;
+  color: var(--hf-text);
+  font-size: 0.8rem;
+  font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hf-cluster-popup__meta {
+  color: var(--hf-muted);
+  font-size: 0.66rem;
+}
+
+/* Donut cluster marker: a DOM marker (MapLibre layers cannot paint arcs).
+   `pointer-events: none` is load-bearing, not cosmetic: as a real <button> over the
+   canvas it SWALLOWED map gestures, so a long-press that happened to land on a
+   donut never reached MapLibre's touch handler and silently gave no directions on
+   mobile. Pointer hits are resolved instead by hit-testing donut positions inside
+   the map's own click handler (amenity-cluster-controller.pickAt), which keeps the
+   canvas fully draggable. Keyboard is unaffected — a focusable button still takes
+   Tab and still fires `click` on Enter with pointer-events off. */
+.hf-amenity-cluster {
+  pointer-events: none;
+}
+.hf-amenity-cluster:focus-visible {
+  outline: 2px solid var(--hf-accent);
+  outline-offset: 2px;
+  border-radius: 999px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

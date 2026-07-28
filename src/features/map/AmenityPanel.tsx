@@ -8,9 +8,12 @@ import {
   type Amenity,
   type AmenityCategoryKey,
   type AmenityCounts,
+  formatDistance,
 } from "@/features/amenities/amenities";
+import { AMENITY_ICONS } from "@/features/amenities/amenity-icons";
 import {
   ALL_AMENITY_CATEGORY_KEYS,
+  cappedAmenityTotal,
   filterAmenityItems,
   toggleAmenityCategory,
 } from "@/features/amenities/amenity-selection";
@@ -29,37 +32,27 @@ interface AmenityPanelProps {
   onInspect: (item: Amenity) => void;
 }
 
+/**
+ * Category glyph, rendered from the shared `AMENITY_ICONS` source of truth so the
+ * panel and the map sprite can never drift apart (task 061). Shapes are data, not
+ * markup, so this stays a normal React tree with no `dangerouslySetInnerHTML`.
+ */
 function CategoryIcon({ category, className = "size-4" }: { category: AmenityCategoryKey; className?: string }) {
-  const common = { className, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8 };
-  if (category === "groceries")
-    return (
-      <svg {...common} aria-hidden="true">
-        <path d="M4 5h2l1.6 9h9.8l1.5-6H7M10 18.5h.1M16.5 18.5h.1" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    );
-  if (category === "pharmacies")
-    return (
-      <svg {...common} aria-hidden="true">
-        <path d="M9 4h6v5h5v6h-5v5H9v-5H4V9h5V4Z" strokeLinejoin="round" />
-      </svg>
-    );
-  if (category === "parks")
-    return (
-      <svg {...common} aria-hidden="true">
-        <path d="M12 21v-7M8.5 17.5 12 14l3.5 3.5M12 3c-4 2.2-6 5.1-6 8a6 6 0 0 0 12 0c0-2.9-2-5.8-6-8Z" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    );
-  if (category === "schools")
-    return (
-      <svg {...common} aria-hidden="true">
-        <path d="m3 9 9-5 9 5-9 5-9-5Z" strokeLinejoin="round" />
-        <path d="M7 12v4.5c3 2 7 2 10 0V12M21 9v6" strokeLinecap="round" />
-      </svg>
-    );
+  const icon = AMENITY_ICONS[category];
   return (
-    <svg {...common} aria-hidden="true">
-      <rect x="5" y="3" width="14" height="14" rx="3" />
-      <path d="M8 17l-1.5 3M16 17l1.5 3M8 8h8M9 13h.1M15 13h.1" strokeLinecap="round" />
+    <svg
+      className={className}
+      viewBox={icon.viewBox}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={icon.strokeWidth}
+      aria-hidden="true"
+    >
+      {icon.shapes.map((shape, index) =>
+        shape.kind === "rect" ? (
+          <rect key={index} x={shape.x} y={shape.y} width={shape.width} height={shape.height} rx={shape.rx} />) : (
+          <path key={index} d={shape.d} strokeLinecap={shape.cap} strokeLinejoin={shape.join} />),
+        )}
     </svg>
   );
 }
@@ -80,6 +73,19 @@ export default function AmenityPanel({
   const filteredItems = useMemo(
     () => filterAmenityItems(items, selectedCategories, query),
     [items, query, selectedCategories],
+  );
+  // The cap note describes the SELECTED categories only — both sides of its
+  // "nearest N of M" must be scoped the same way, or hiding a category leaves the
+  // note quoting places the user cannot see (found in review). The text query is
+  // deliberately excluded: the note is about what the server returned versus what
+  // is in range, not about the list's current search.
+  const selectedItems = useMemo(
+    () => filterAmenityItems(items, selectedCategories),
+    [items, selectedCategories],
+  );
+  const cappedTotal = useMemo(
+    () => cappedAmenityTotal(counts, selectedItems.length, selectedCategories),
+    [counts, selectedItems.length, selectedCategories],
   );
 
   if (status === "idle") return null;
@@ -190,6 +196,17 @@ export default function AmenityPanel({
               );
             })}
           </div>
+          {/* Truncation honesty (task 061), shown BESIDE THE CHIPS rather than inside the
+              browser panel. The chips report the server's TRUE in-ring totals while the
+              payload is capped at MAX_PER_CATEGORY per category, so donut sums on the map
+              are legitimately smaller. Hiding the explanation behind "Browse places" left
+              the default view showing chips that claim hundreds against donuts covering
+              only the capped set, with no way to know why (found in review). */}
+          {cappedTotal !== null ? (
+            <p data-testid="amenity-cap-note" className="px-0.5 pt-2 text-[0.62rem] text-[#78857b]">
+              Chips count every place in range ({cappedTotal}); the map shows only the
+              nearest of them.
+            </p>) : null}
         </div>
       ) : null}
 
@@ -256,7 +273,13 @@ export default function AmenityPanel({
                       {item.name || amenityCategoryLabel(item.category)}
                     </span>
                     <span className="mt-0.5 block text-[0.62rem] text-[#78857b]">
+                      {/* Distance is already served (catalogue-query computes it); showing it
+                          turns the list from "what is nearby" into "how far is each one", which
+                          is the actual product question. */}
                       {amenityCategoryLabel(item.category)}
+                      {formatDistance(item.distanceMeters ?? Number.NaN)
+                        ? ` · ${formatDistance(item.distanceMeters as number)}`
+                        : ""}
                     </span>
                   </span>
                   <svg aria-hidden="true" viewBox="0 0 20 20" className="size-3.5 shrink-0 text-[#667269]" fill="none" stroke="currentColor" strokeWidth="1.7">

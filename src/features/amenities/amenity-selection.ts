@@ -3,6 +3,7 @@ import {
   amenityCategoryLabel,
   type Amenity,
   type AmenityCategoryKey,
+  type AmenityCounts,
 } from "@/features/amenities/amenities";
 
 export const AMENITY_PREFERENCE_KEY = "howfar:amenity-categories:v1";
@@ -41,6 +42,36 @@ export function parseAmenitySelection(value: string | null): AmenityCategoryKey[
   } catch {
     return null;
   }
+}
+
+/**
+ * The TRUE in-ring total when the server capped the markers it returned, else null.
+ *
+ * The server sends pre-cap per-category counts but at most `MAX_PER_CATEGORY`
+ * markers per category, so in a dense area the map holds strictly fewer places
+ * than the chips report. Once cluster donuts display counts (task 061), summing
+ * them visibly disagrees with the chips — and an unexplained mismatch reads as a
+ * bug rather than a documented limit. Returns null when nothing was capped, so
+ * the note only appears when it is actually true.
+ *
+ * Scoped to the SELECTED categories (found in review). Summing every category made the
+ * note quote a total the user could not see: with only Groceries shown it still
+ * said "the nearest 400 of 900 places", counting schools and parks that were
+ * deliberately hidden — an honesty note that is itself misleading is worse than
+ * none. `selected` defaults to all categories, which is the all-on default state.
+ */
+export function cappedAmenityTotal(
+  counts: AmenityCounts | null,
+  renderedCount: number,
+  selected: readonly AmenityCategoryKey[] = ALL_AMENITY_CATEGORY_KEYS,
+): number | null {
+  if (!counts) return null;
+  const visible = new Set(normalizeAmenitySelection([...selected]));
+  const total = ALL_AMENITY_CATEGORY_KEYS.reduce(
+    (sum, key) => (visible.has(key) ? sum + (counts[key] ?? 0) : sum),
+    0,
+  );
+  return total > renderedCount ? total : null;
 }
 
 export function filterAmenityItems(

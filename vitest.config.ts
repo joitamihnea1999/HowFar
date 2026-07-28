@@ -36,6 +36,18 @@ export default defineConfig({
         "src/features/map/reach-journey-controller.ts", // task 054: MapLibre draw/stamp/hover glue; pure model in reach.ts is measured
         "src/features/map/popup-controller.ts",
         "src/features/map/amenities-controller.ts",
+        // task 061: sprite registration glue (`addImage` + decode retry); its
+        // decisions live in the MEASURED amenity-icons.ts (icon shapes + SVG
+        // serialisation, exhaustive over the category set), and the registration
+        // itself is asserted by e2e (icons appear on pins at every zoom).
+        //
+        // NOTE: amenity-cluster-controller.ts is deliberately NOT excluded. The
+        // "MapLibre glue" rationale does not hold for it: the module makes real decisions
+        // of its own (which tile generation to trust, which pins join the collision pass,
+        // when a marker entry may be reused, when hit-testing is stale), and those are
+        // exactly where its bugs have come from. Unit-tested in
+        // amenity-cluster-controller.test.ts against DOM/Marker fakes.
+        "src/features/map/amenity-sprite.ts",
         "src/features/map/selection-render.ts",
         // NOTE: select-flow-controller.ts is intentionally NOT excluded — it is
         // pure orchestration over injected callbacks + fetch (no MapLibre), so its
