@@ -37,8 +37,8 @@ const TIMEOUT_MS = 20_000; // one-to-all is heavy (~1.5–3 s live)
 const TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_TRAVEL_MIN = THRESHOLDS[THRESHOLDS.length - 1]; // 45
 // MOTIS access-walk speed, egress stamping, and the unioned ORS ring all read
-// ONE speed model — `PACE_MODEL[pace]` (task 051). Normal pace == the pre-051
-// pinned "1.333" m/s so an unchanged request stays byte-identical; routed
+// ONE speed model — `PACE_MODEL[pace]` (task 051). Normal pace sends "1.389" m/s
+// (5 km/h, task 064 — the pre-064 "1.333" byte-identity pin is retired); routed
 // transfers cost nothing extra and reach ~4% more stops (probed 2026-07-17).
 // Ceiling on how long the transit response waits for the walking rings: past
 // this, ship with the radial origin fallback instead of inheriting ORS's
@@ -140,7 +140,7 @@ export function representativeDeparture(
 // Keep stops a little beyond the launch box: a stop just outside it can still
 // have egress-walk minutes that reach area INSIDE the box. The grid itself only
 // spans the box (and clamps stamping to it), so out-of-area cells never render.
-const STOP_MARGIN_DEG = 0.05; // ~4–5.5 km — comfortably ≥ max egress walk (45 min · 57 m/min ≈ 2.6 km)
+const STOP_MARGIN_DEG = 0.05; // ~4–5.5 km — comfortably ≥ max egress walk (45 min · 59.4 m/min ≈ 2.7 km at Normal)
 
 function parseStops(all: OneToAllStop[]): TransitStop[] {
   const stops: TransitStop[] = [];
@@ -181,12 +181,13 @@ export async function transitIsochrone(
   timeContext: TimeContext = DEFAULT_TIME_CONTEXT,
 ): Promise<TransitIsochroneResult> {
   const departure = representativeDeparture(new Date(), departureFields(timeContext));
-  // v4 (task 052): cache key includes pace + departure so paced/time-shifted
-  // rings never serve a Normal/other-time result (and different-pace/time
-  // concurrent callers don't share one flight). Bumped v3→v4 because the cached
-  // ring geometry now has the speck filter applied (task 052 C) — the bump
-  // retires all pre-052 (v3) entries so no stale unfiltered rings serve.
-  const key = `transit:v4:${pace}:${roundCoord(latRaw)},${roundCoord(lngRaw)}:${departure}`;
+  // Cache key includes pace + departure so paced/time-shifted rings never serve
+  // a Normal/other-time result (and different-pace/time concurrent callers
+  // don't share one flight). v4 (task 052): ring geometry gained the speck
+  // filter. v5 (task 064): the walking speeds changed to 3/5 km/h, which moves
+  // both the MOTIS access walk and the egress stamping — v4 entries would serve
+  // rings built at the old speed.
+  const key = `transit:v5:${pace}:${roundCoord(latRaw)},${roundCoord(lngRaw)}:${departure}`;
 
   const hit = await getCachedSafe<TransitIsochroneResult>(key);
   if (hit) return hit;

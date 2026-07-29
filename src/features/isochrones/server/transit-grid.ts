@@ -4,6 +4,7 @@ import { union } from "@turf/union";
 import { contours } from "d3-contour";
 import type { Feature, MultiPolygon, Polygon } from "geojson";
 
+import { PACE_MODEL, STREET_DETOUR as PACE_STREET_DETOUR } from "@/features/isochrones/pace";
 import { BUCHAREST_BBOX } from "@/lib/bounds";
 
 /**
@@ -36,15 +37,21 @@ import { BUCHAREST_BBOX } from "@/lib/bounds";
  * event loop). This grid pass stays well under 300 ms for the same input.
  */
 
-/** Nominal pedestrian speed (~4.8 km/h) — the speed the ring LABELS promise. */
-export const WALK_SPEED_M_PER_MIN = 80;
+/** Pedestrian speed of the Normal pace (5 km/h) — the speed the ring LABELS
+ * promise. DERIVED from `pace.ts`, never re-declared: until task 064 this
+ * module carried its own `80` and `1.402` literals, a second speed model that
+ * would have silently kept the pre-064 speed when the owner changed it. */
+export const WALK_SPEED_M_PER_MIN = PACE_MODEL.normal.speedMPerMin;
 /** Median street-network detour vs crow-fly in Bucharest — measured 2026-07-17
  * from 143 routed-vs-straight distance pairs at 6 diverse origins (MOTIS
- * one-to-many, withDistance): p25 1.29, median 1.402, p75 1.54, p90 1.82. */
-export const STREET_DETOUR = 1.402;
-/** Effective radial egress speed: r crow-fly metres ≈ r·STREET_DETOUR street
- * metres, so stamping at speed/detour keeps the stamped minutes honest. */
-export const EGRESS_M_PER_MIN = WALK_SPEED_M_PER_MIN / STREET_DETOUR;
+ * one-to-many, withDistance): p25 1.29, median 1.402, p75 1.54, p90 1.82.
+ * Re-exported from `pace.ts` so there is exactly one definition. */
+export const STREET_DETOUR = PACE_STREET_DETOUR;
+/** Effective radial egress speed at the NORMAL pace: r crow-fly metres ≈
+ * r·STREET_DETOUR street metres, so stamping at speed/detour keeps the stamped
+ * minutes honest. Not a default — `buildRings` requires an explicit
+ * `egressMPerMin`; this is the named Normal-pace value for callers/tests. */
+export const EGRESS_M_PER_MIN = PACE_MODEL.normal.egressMPerMin;
 /** Reachability thresholds in minutes (ascending). */
 export const THRESHOLDS = [15, 30, 45] as const;
 
@@ -76,18 +83,21 @@ export interface Ring {
  * street-routed walking rings instead (transit.ts's normal path) — the radial
  * disc would only ADD over-claimed area the union cannot remove.
  *
- * `egressMPerMin` (default the normal-pace `EGRESS_M_PER_MIN`): the radial
- * egress/origin-walk speed. Task 051 threads the active pace here so stop
- * egress (and the radial-fallback origin stamp) scale with Slow/Normal in
- * lockstep with the MOTIS access speed and the unioned ORS ring — otherwise a
- * paced request would show internally inconsistent rings.
+ * `egressMPerMin` is REQUIRED: the radial egress/origin-walk speed. Task 051
+ * threads the active pace here so stop egress (and the radial-fallback origin
+ * stamp) scale with Slow/Normal in lockstep with the MOTIS access speed and the
+ * unioned ORS ring — otherwise a paced request would show internally
+ * inconsistent rings. It has NO default on purpose (task 064): a defaulted
+ * Normal speed would let a future call site silently stamp Normal-pace egress
+ * on a Slow request, which is exactly the drift class this module stopped
+ * carrying when its duplicate speed constants were removed.
  */
 export function buildRings(
   origin: { lat: number; lng: number },
   stops: TransitStop[],
-  opts?: { stampOrigin?: boolean; egressMPerMin?: number },
+  opts: { stampOrigin?: boolean; egressMPerMin: number },
 ): Ring[] {
-  const egressMPerMin = opts?.egressMPerMin ?? EGRESS_M_PER_MIN;
+  const egressMPerMin = opts.egressMPerMin;
   const mPerDegLng = 111320 * Math.cos((origin.lat * Math.PI) / 180);
   const spanLng = BUCHAREST_BBOX.maxLng - BUCHAREST_BBOX.minLng;
   const spanLat = BUCHAREST_BBOX.maxLat - BUCHAREST_BBOX.minLat;

@@ -301,12 +301,14 @@ export async function planTrip(
   departureIso: string,
   maxMinutes?: number,
 ): Promise<ReachPlan> {
-  // v4: the request contract changed (maxPostTransitTime + pedestrianSpeed +
-  // useRoutedTransfers) — a cached v3 plan could keep serving a "no route"
-  // answer the new limits would revive. maxMinutes is in the key because it
-  // changes the selected itinerary.
+  // v4 (task 063): the request contract changed (maxPostTransitTime +
+  // pedestrianSpeed + useRoutedTransfers) — a cached v3 plan could keep serving
+  // a "no route" answer the new limits would revive. v5 (task 064): the
+  // pedestrian speed sent to /plan changed 1.333 -> 1.389 m/s, so the walking
+  // legs (and therefore the chosen itinerary) can differ. maxMinutes is in the
+  // key because it changes the selected itinerary.
   const band = typeof maxMinutes === "number" && maxMinutes > 0 ? Math.round(maxMinutes) : 0;
-  const key = `reach:plan:v4:${roundCoord(from.lat)},${roundCoord(from.lng)}:${roundCoord(to.lat)},${roundCoord(to.lng)}:${departureIso}:${band}`;
+  const key = `reach:plan:v5:${roundCoord(from.lat)},${roundCoord(from.lng)}:${roundCoord(to.lat)},${roundCoord(to.lng)}:${departureIso}:${band}`;
   const hit = await getCachedSafe<ReachPlan>(key);
   if (hit) return hit;
   const existing = inFlight.get(key);

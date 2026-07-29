@@ -30,11 +30,12 @@ const TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // walking: auditing ring boundaries with street-routed distances (MOTIS
 // one-to-many, withDistance) at three diverse origins (Unirii / Grozăvești /
 // Berceni, 2026-07-17) put the nominal 900/1800/2700 s boundaries at
-// 1.265/1.164/1.123 × their labels at 80 m/min. Two-pass fit landed the
-// normal-pace calibrated triple [827,1674,2528] (now in `pace.ts`
-// NORMAL_ORS_RANGES_S). For non-normal paces the triple is that calibrated
-// baseline scaled by speed/80 (task 051, distance is speed-independent);
-// `PACE_MODEL[pace].orsRangesS` is the requested triple. So the polygon LABELED
+// 1.265/1.164/1.123 × their labels at the 80 m/min CALIBRATION ANCHOR. Two-pass
+// fit landed the anchor triple [827,1674,2528] (now `pace.ts`
+// CALIBRATED_RANGES_S_AT_80). Since task 064 NO pace walks at the anchor speed —
+// every pace's triple is that baseline scaled by speed/CALIBRATION_SPEED (task
+// 051, distance is speed-independent); `PACE_MODEL[pace].orsRangesS` is the
+// requested triple. So the polygon LABELED
 // "15/30/45 min" takes ≈ that many street-walking minutes at the chosen pace.
 // Methodology + re-run: docs/PROVIDERS.md "Calibration".
 const NOMINAL_MINUTES = [15, 30, 45];
@@ -164,10 +165,12 @@ export async function walkingIsochrone(
   lngRaw: number,
   pace: Pace = DEFAULT_PACE,
 ): Promise<IsochroneResult> {
-  // v3: cache key includes pace so a Slow request never serves the
-  // Normal ring (and concurrent different-pace callers don't share one flight).
-  // The version bump also retires all pre-051 (v2) cached rings.
-  const key = `iso:foot:v3:${pace}:${roundCoord(latRaw)},${roundCoord(lngRaw)}`;
+  // The cache key includes pace so a Slow request never serves the Normal ring
+  // (and concurrent different-pace callers don't share one flight).
+  // v3 (task 051): pace added to the key. v4 (task 064): the walking speeds
+  // changed to 3/5 km/h, so every cached ring's GEOMETRY is different at the
+  // same coordinates — v3 entries must never serve (7-day TTL).
+  const key = `iso:foot:v4:${pace}:${roundCoord(latRaw)},${roundCoord(lngRaw)}`;
   return orsIsochrone("foot-walking", latRaw, lngRaw, PACE_MODEL[pace].orsRangesS, NOMINAL_MINUTES, key);
 }
 
@@ -176,7 +179,7 @@ export async function walkingIsochrone(
  *  so the painted band reflects real Bucharest drive time at that time of day.
  *  No pace (a walk concept). Cache `iso:car:v2:{frev}:est:{slotId}:{coords}` —
  *  the factor-table revision (`frev`) is IN THE KEY so a recalibration can never
- *  serve rings computed with the old factors (panel fable-4/terra-4); `slotId`
+ *  serve rings computed with the old factors; `slotId`
  *  keeps the eight traffic periods distinct. `v2` retires all free-flow `v1`
  *  entries. `basis` on the payload is always "estimate" (typical-congestion
  *  adjustment, not live traffic) — surfaced honestly in the UI. */

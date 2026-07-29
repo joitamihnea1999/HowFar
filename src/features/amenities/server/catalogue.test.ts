@@ -103,6 +103,10 @@ describe("nearbyAmenities local catalogue flow", () => {
       ring,
       { lat: 44.4268, lng: 26.1025 },
     );
+    // LITERAL key, not `amenityResultCacheKey(...)` — deriving the expectation
+    // from the implementation would stay green if the version were reverted,
+    // and a stale prefix serves pre-speed-change amenities for up to 24h.
+    expect(amenityCacheRead).toHaveBeenCalledWith("amenity:local:v4:dataset-1:normal:44.42680,26.10250");
     expect(amenityCacheRead).toHaveBeenCalledWith(amenityResultCacheKey("dataset-1", 44.4268, 26.1025, "normal"));
     expect(amenityCacheWrite).toHaveBeenCalledWith(
       amenityResultCacheKey("dataset-1", 44.4268, 26.1025, "normal"),

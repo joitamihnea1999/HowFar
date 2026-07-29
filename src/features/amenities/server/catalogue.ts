@@ -48,8 +48,10 @@ export const AMENITY_RESULT_TTL_MS = 24 * 60 * 60 * 1_000;
 /** Bump when the cached JSON shape changes. Includes datasetId so a publish
  * invalidates. v2 (task 047): merged-transit `members`. v3 (task 051): the walk
  * ring used for the clip is PACE-dependent, so the pace is part of the key —
- * Slow and Normal must never share a cache entry (or counts would be wrong). */
-const AMENITY_RESULT_CACHE_PREFIX = "amenity:local:v3:";
+ * Slow and Normal must never share a cache entry (or counts would be wrong).
+ * v4 (task 064): the 3/5 km/h walking speeds resize the 15-minute clip ring, so
+ * the SET of amenities in range changed at every origin. */
+const AMENITY_RESULT_CACHE_PREFIX = "amenity:local:v4:";
 
 export function amenityResultCacheKey(
   datasetId: string,
@@ -131,7 +133,7 @@ async function computeNearbyAmenities(
 ): Promise<NearbyAmenitiesResult> {
   // Cheap active-pointer + ApiCache probe OUTSIDE any long interactive
   // transaction so cache hits never hold a pool slot across a second client
-  // (impl panel: pool starvation on concurrent warm origins).
+  // (pool starvation on concurrent warm origins).
   const active = await db().amenityDataset.findUnique({
     where: { activeKey: 1 },
     select: { id: true },

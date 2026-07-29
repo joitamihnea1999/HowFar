@@ -6,6 +6,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import fc from "fast-check";
 
+import { PACE_MODEL, STREET_DETOUR as PACE_STREET_DETOUR } from "@/features/isochrones/pace";
+
 import {
   buildRings,
   dropSmallComponents,
@@ -33,13 +35,13 @@ function ringArea(r: Ring): number {
 
 describe("buildRings", () => {
   it("returns exactly the 3 thresholds, ascending, as MultiPolygons", () => {
-    const rings = buildRings(ORIGIN, []);
+    const rings = buildRings(ORIGIN, [], { egressMPerMin: EGRESS_M_PER_MIN });
     expect(rings.map((r) => r.minutes)).toEqual([...THRESHOLDS]);
     for (const r of rings) expect(r.geometry.type).toBe("MultiPolygon");
   });
 
   it("origin-only (no stops) still yields a non-empty innermost ring containing the origin", () => {
-    const rings = buildRings(ORIGIN, []);
+    const rings = buildRings(ORIGIN, [], { egressMPerMin: EGRESS_M_PER_MIN });
     expect(rings[0].geometry.coordinates.length).toBeGreaterThan(0);
     expect(booleanPointInPolygon(pt(ORIGIN.lng, ORIGIN.lat), asFeature(rings[0]))).toBe(true);
   });
@@ -50,7 +52,7 @@ describe("buildRings", () => {
       { lat: 44.475, lng: 26.16, dur: 20 }, // ~7 km NE — a transit-only reach
       { lat: 44.41, lng: 26.05, dur: 12 },
     ];
-    const [r15, r30, r45] = buildRings(ORIGIN, stops);
+    const [r15, r30, r45] = buildRings(ORIGIN, stops, { egressMPerMin: EGRESS_M_PER_MIN });
     expect(ringArea(r15)).toBeLessThanOrEqual(ringArea(r30));
     expect(ringArea(r30)).toBeLessThanOrEqual(ringArea(r45));
     // containment: (smaller − larger) must be empty
@@ -65,10 +67,10 @@ describe("buildRings", () => {
     // ~7 km from origin: a 45-min WALK covers only 45*80 = 3.6 km, so pure walking
     // can never reach it — only transit (dur 20) + egress does.
     const far = { lat: 44.475, lng: 26.16, dur: 20 };
-    const rings = buildRings(ORIGIN, [far]);
+    const rings = buildRings(ORIGIN, [far], { egressMPerMin: EGRESS_M_PER_MIN });
     const [r15, , r45] = rings;
     const farPt = pt(far.lng, far.lat);
-    const walkOnly = buildRings(ORIGIN, []); // no transit
+    const walkOnly = buildRings(ORIGIN, [], { egressMPerMin: EGRESS_M_PER_MIN }); // no transit
     expect(booleanPointInPolygon(farPt, asFeature(r45))).toBe(true);
     expect(booleanPointInPolygon(farPt, asFeature(walkOnly[2]))).toBe(false); // not reachable on foot
     // and it is NOT in the 15-min ring (stop needs 20 min just to reach)
@@ -87,7 +89,7 @@ describe("buildRings", () => {
       });
     }
     const t0 = performance.now();
-    const [r15, r30, r45] = buildRings(ORIGIN, stops);
+    const [r15, r30, r45] = buildRings(ORIGIN, stops, { egressMPerMin: EGRESS_M_PER_MIN });
     const ms = performance.now() - t0;
 
     expect([r15.minutes, r30.minutes, r45.minutes]).toEqual([15, 30, 45]);
@@ -119,19 +121,25 @@ describe("buildRings", () => {
     // the real perf ceiling above (ms < 2000) is the actual regression guard.
   }, 20_000);
 
-  it("uses the documented walk speed and measured detour constants", () => {
-    expect(WALK_SPEED_M_PER_MIN).toBe(80);
-    expect(STREET_DETOUR).toBe(1.402); // measured 2026-07-17, see module comment
-    expect(EGRESS_M_PER_MIN).toBeCloseTo(80 / 1.402, 10);
+  it("derives its speed constants from the pace model — no second speed model", () => {
+    // Until task 064 this module declared its OWN `80` and `1.402`. That made it
+    // a second source of truth that would have kept the pre-064 speed when the
+    // owner changed it. Assert IDENTITY with the pace model (a drift test), not
+    // literals — restating numbers here is what allowed the duplicate to hide.
+    expect(WALK_SPEED_M_PER_MIN).toBe(PACE_MODEL.normal.speedMPerMin);
+    expect(STREET_DETOUR).toBe(PACE_STREET_DETOUR);
+    expect(EGRESS_M_PER_MIN).toBe(PACE_MODEL.normal.egressMPerMin);
+    // …and the derivation itself still holds.
+    expect(EGRESS_M_PER_MIN).toBeCloseTo(WALK_SPEED_M_PER_MIN / STREET_DETOUR, 10);
   });
 
   it("stampOrigin:false leaves the origin unstamped (empty rings with no stops)", () => {
     // transit.ts uses this when the street-routed walk rings get unioned in —
     // the radial origin disc must NOT contribute area in that mode.
-    const rings = buildRings(ORIGIN, [], { stampOrigin: false });
+    const rings = buildRings(ORIGIN, [], { stampOrigin: false, egressMPerMin: EGRESS_M_PER_MIN });
     for (const r of rings) expect(r.geometry.coordinates).toEqual([]);
     // ...while stops still stamp normally in the same mode.
-    const withStop = buildRings(ORIGIN, [{ lat: 44.44, lng: 26.12, dur: 5 }], { stampOrigin: false });
+    const withStop = buildRings(ORIGIN, [{ lat: 44.44, lng: 26.12, dur: 5 }], { stampOrigin: false, egressMPerMin: EGRESS_M_PER_MIN });
     expect(withStop[2].geometry.coordinates.length).toBeGreaterThan(0);
   });
 
@@ -140,7 +148,7 @@ describe("buildRings", () => {
     // 1120 m away (14 "crow minutes") sat inside the 15-ring; with the measured
     // 1.402 detour its street time is ~19.6 min, so it must now fall OUTSIDE.
     const stop = { lat: ORIGIN.lat, lng: ORIGIN.lng, dur: 0 };
-    const [r15] = buildRings({ lat: 50, lng: 30 }, [stop], { stampOrigin: false });
+    const [r15] = buildRings({ lat: 50, lng: 30 }, [stop], { stampOrigin: false, egressMPerMin: EGRESS_M_PER_MIN });
     const lat1120 = ORIGIN.lat + 1120 / 110540;
     expect(booleanPointInPolygon(pt(ORIGIN.lng, lat1120), asFeature(r15))).toBe(false);
     // ...but a point ~700 m out (12.3 street-minutes at the calibrated speed) IS inside.
@@ -161,7 +169,7 @@ describe("buildRings", () => {
       });
     }
     const t0 = performance.now();
-    const rings = buildRings(ORIGIN, stops);
+    const rings = buildRings(ORIGIN, stops, { egressMPerMin: EGRESS_M_PER_MIN });
     const ms = performance.now() - t0;
     expect(rings.map((r) => r.minutes)).toEqual([15, 30, 45]);
     // Real measured time ~120-250 ms locally; the generous ceiling absorbs
@@ -172,7 +180,7 @@ describe("buildRings", () => {
   it("yields three EMPTY MultiPolygons (still 3 rings, ascending) when nothing reaches the box", () => {
     // Origin far outside the launch box and no stops: no cell is stamped, every
     // threshold takes the empty-MultiPolygon fallback instead of being dropped.
-    const rings = buildRings({ lat: 50, lng: 30 }, []);
+    const rings = buildRings({ lat: 50, lng: 30 }, [], { egressMPerMin: EGRESS_M_PER_MIN });
     expect(rings.map((r) => r.minutes)).toEqual([...THRESHOLDS]);
     for (const r of rings) expect(r.geometry.coordinates).toEqual([]);
   });
@@ -181,12 +189,12 @@ describe("buildRings", () => {
     const outsideOrigin = { lat: 50, lng: 30 }; // isolates the stop's contribution
     const stop = { lat: 44.4268, lng: 26.1025 };
 
-    const spent = buildRings(outsideOrigin, [{ ...stop, dur: 45 }]);
+    const spent = buildRings(outsideOrigin, [{ ...stop, dur: 45 }], { egressMPerMin: EGRESS_M_PER_MIN });
     for (const r of spent) expect(r.geometry.coordinates).toEqual([]);
 
     // dur 20: cells within a 10-min walk have reach ≤ 30 (area for the 30-ring)
     // but nothing can be ≤ 15, so the 15-ring stays the empty fallback.
-    const [r15, r30, r45] = buildRings(outsideOrigin, [{ ...stop, dur: 20 }]);
+    const [r15, r30, r45] = buildRings(outsideOrigin, [{ ...stop, dur: 20 }], { egressMPerMin: EGRESS_M_PER_MIN });
     expect(r15.geometry.coordinates).toEqual([]);
     expect(r30.geometry.coordinates.length).toBeGreaterThan(0);
     expect(r45.geometry.coordinates.length).toBeGreaterThan(0);

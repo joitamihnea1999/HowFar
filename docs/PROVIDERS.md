@@ -75,8 +75,8 @@ entries. Go/no-go bar: ≥100 fresh addresses/day headroom on every provider. **
   clients must publish source (repo will be public ✅); send identifying `User-Agent` with contact
   ✅ (already done in probe); attribution: link <https://transitous.org/sources/> + OSM ✅;
   **"contact before … difficult to calculate requests (such as routing, isochrones)"** →
-  **ACTION: send Transitous a short hello** (Matrix/email, see their site) describing
-  HowFar's cached, Bucharest-only, low-volume use.
+  the owner reviewed this and **decided to skip the courtesy hello** (accepted risk; the use
+  stays non-commercial, cached, Bucharest-only, low-volume). See "Action items arising".
 - **Journey directions (`/api/v1/plan`):** the right-click "how do I get there?" trip uses the
   same engine's point-to-point planner (cached, single-flighted). Each leg carries a
   `legGeometry.points` encoded polyline **at precision 7 (1e7 scale), not the format's usual
@@ -87,7 +87,7 @@ entries. Go/no-go bar: ≥100 fresh addresses/day headroom on every provider. **
   last stop), while our ring egress model walks up to the whole remaining band — so `/plan`
   answered "no itineraries" for points the map painted reachable (verified live: 6/40 random
   Bucharest points; all revive with a raised post limit). We now send
-  `maxPostTransitTime=2700` (the 45-min band) + `pedestrianSpeed=1.333` +
+  `maxPostTransitTime=2700` (the 45-min band) + `pedestrianSpeed=1.389` (the Normal pace) +
   `useRoutedTransfers=true` (the same walking contract the one-to-all rings use); the pre limit
   deliberately stays at the default, matching the rings' own ingress. Values are capped
   server-side by Transitous's `street_routing_max_prepost_transit_seconds` (≥2700 as of
@@ -109,19 +109,33 @@ methodology below is re-runnable whenever providers or the city data change.
 
 - **Ruler:** MOTIS `one-to-many` (`mode=WALK`, `withDistance=true`) returns street-routed
   **distance**, making measurements independent of any speed assumption; minutes are then
-  distances at the product's documented walking speed (80 m/min ≈ 4.8 km/h). Distance-based
-  measurement is the ruler everywhere (durations depend on the router's own speed constant).
+  distances at a walking speed. Distance-based measurement is the ruler everywhere (durations
+  depend on the router's own speed constant).
+- **Anchor vs product speed (important).** The ranges below were fitted at an **80 m/min
+  calibration anchor**. Since the walking speeds were set to Slow 3 km/h (50 m/min) and Normal
+  5 km/h (83.3 m/min), **no pace walks at the anchor** — it is a measurement ruler, nothing more.
+  Each pace requests the anchor triple rescaled by `speed / 80` (distance calibration is
+  speed-independent), so re-deriving the scale from a pace's own speed would silently move every
+  ring. Constants live in `pace.ts` (`CALIBRATION_SPEED_M_PER_MIN`, `CALIBRATED_RANGES_S_AT_80`).
 - **Walking rings (ORS):** ORS foot-walking boundaries are systematically generous — boundary
   audits at three diverse origins (Unirii central / Grozăvești river-barrier / Berceni periphery)
-  put the nominal 900/1800/2700 s boundaries at 1.265/1.164/1.123 × their labels. ~4% of that is
-  ORS's faster speed constant (~5 km/h vs our 4.8), the rest boundary/hull generosity; the fix is
+  put the nominal 900/1800/2700 s boundaries at 1.265/1.164/1.123 × their labels. Part of that is
+  ORS's own faster speed constant, the rest boundary/hull generosity; the fix is
   cause-agnostic: request ranges fitted in two passes (the factor grows as ranges shrink) —
-  final `[827, 1674, 2528]` s — then re-audited: the corrected boundaries sit at ≈ nominal
-  (15-ring median exactly 15.0 min; residuals within ±10%). See `ors.ts` CALIBRATED_RANGES_S.
+  anchor triple `[827, 1674, 2528]` s at 80 m/min — then re-audited: the corrected boundaries sit
+  at ≈ nominal (15-ring median exactly 15.0 min; residuals within ±10%). See `pace.ts`
+  CALIBRATED_RANGES_S_AT_80. Per-pace requests: Slow `[517, 1046, 1580]`, Normal
+  `[861, 1744, 2633]` (both accepted and echoed exactly by ORS, verified live 2026-07-29).
 - **Transit egress:** crow-fly understates Bucharest street distance by a measured median
   **1.402×** (143 routed-vs-straight pairs, 6 origins; p25 1.29, p75 1.54, p90 1.82 — worst at
-  river/rail barriers). Stop-egress stamps run at 80/1.402 m/min. This is a **calibrated
-  approximation** — anisotropy (a river beside the stop) is documented, not modeled.
+  river/rail barriers). Stop-egress stamps run at **the selected pace's speed / 1.402** — i.e.
+  50/1.402 ≈ 35.7 m/min at Slow and 83.3/1.402 ≈ 59.4 m/min at Normal (egress has been
+  pace-scaled since the pace control shipped; there is no fixed egress speed). This is a
+  **calibrated approximation** — anisotropy (a river beside the stop) is documented, not modeled.
+- **Walking-speed audit at Slow (2026-07-29).** 3 km/h sits 37.5% below the anchor, further than
+  any previously validated pace, so the linear rescale was re-measured with the ruler above:
+  3 origins × 3 bands, 8 boundary points per ring. All 9 ratios inside ±10%, **overall median
+  1.012** (worst cell +3.2%) — the scale holds; no measured triple needed.
 - **Origin walk component:** street-routed and boundary-calibrated (the ORS ring geometry with
   the corrected ranges, ±10% residuals) — the transit rings union it in per threshold and skip
   the radial origin stamp. The merge is all-or-nothing with a superset guard; any failure
@@ -134,10 +148,12 @@ methodology below is re-runnable whenever providers or the city data change.
 - **Fair use accounting:** calibration was a bounded one-off development campaign (~35
   `one-to-many`/intermodal calls total, all ≤128 locations, ≥2 s spacing, identifying
   User-Agent with contact email). Runtime traffic is unchanged: 1 `one-to-all` + ≤1 coalesced
-  ORS call per fresh address, everything PostgreSQL-cached. **The Transitous courtesy contact is
-  still an open owner action** (see Action items) — no further calibration campaigns before it
-  lands. For later travel modes (bike/car), `one-to-many` supports `mode=BIKE|CAR` — same
-  instrument, same budget discipline.
+  ORS call per fresh address, everything PostgreSQL-cached. **The Transitous courtesy contact was
+  reviewed and skipped by the owner** (see Action items — accepted risk: still non-commercial,
+  cached, Bucharest-only). Calibration therefore continues under **bounded-campaign discipline**
+  rather than a freeze: each campaign stays small (the 2026-07-29 walking-speed audit used ~12
+  calls), ≤128 locations per call, ≥2 s spacing, identifying User-Agent. For later travel modes
+  (bike/car), `one-to-many` supports `mode=BIKE|CAR` — same instrument, same budget discipline.
 
 #### Re-audit of all modes with independent rulers (2026-07-24)
 
@@ -153,9 +169,12 @@ is circular), 3 diverse origins × 3 bands, medians of ~5–10 boundary points p
   peak; car reach is now time-aware (per-slot congestion factor — see "Car traffic realism"). The
   free-flow accuracy result stands as the FLOOR the factor scales.
 - **Walk (`foot-walking`):** ruler = **MOTIS `/plan` direct-walk distance** (a real pedestrian
-  engine, independent of ORS), converted at 80 m/min. All 9 (origin×band) ratios 0.978–1.049,
-  **median 0.999** — the calibrated `[827,1674,2528]` boundaries sit almost exactly at their
-  labelled walking minutes. **Confirmed; no change.**
+  engine, independent of ORS), converted at the 80 m/min calibration anchor. All 9 (origin×band)
+  ratios 0.978–1.049, **median 0.999** — the anchor triple `[827,1674,2528]` sits almost exactly
+  at its labelled walking minutes *for the anchor speed*. **Confirmed; no change.** This audit
+  validates the ANCHOR, which is why it stays valid after the 2026-07-29 speed change: the ranges
+  each pace requests are that same measured triple rescaled (and the rescale itself was
+  re-audited at Slow — see "Walking-speed audit at Slow" above).
   *Ruler caveat: the public OSRM demo's `/foot/` profile is NOT pedestrian — it returns car
   speeds (~35 km/h). An early walk pass using it showed a spurious 1.8× (car detours in the dense
   centre) and was discarded. Validate a ruler's profile/units before trusting a ratio.*

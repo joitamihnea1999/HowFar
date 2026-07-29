@@ -185,13 +185,16 @@ no stacks, no upstream payloads. The response body stays generic.
 - Coordinates: ORS wants `[lng, lat]`; Nominatim returns lat/lon as *strings*;
   Photon and Nominatim use different bbox parameter orders. Each quirk is
   commented at its call site.
-- Ring labels mean REAL street minutes at 80 m/min, not provider-nominal
-  values: the ORS ranges are calibrated (`ors.ts` CALIBRATED_RANGES_S — the
-  response contract matches features to those exact values before relabeling
-  to 15/30/45) and transit egress runs at a measured detour-deflated speed
-  (`transit-grid.ts` STREET_DETOUR). Methodology + numbers:
-  `docs/PROVIDERS.md` "Calibration". Cache keys are versioned (`iso:foot:v2:`,
-  `transit:v2:`) so pre-calibration rings can never be served.
+- Ring labels mean REAL street minutes at the SELECTED walking pace (Slow
+  3 km/h, Normal 5 km/h), not provider-nominal values: the ORS ranges are
+  calibrated (`pace.ts` CALIBRATED_RANGES_S_AT_80, a triple measured at an
+  80 m/min *calibration anchor* and rescaled per pace — the anchor is a ruler,
+  not a walking speed, and no pace equals it; the response contract matches
+  features to the pace's exact values before relabeling to 15/30/45) and
+  transit egress runs at a measured detour-deflated speed (`pace.ts`
+  STREET_DETOUR). Methodology + numbers: `docs/PROVIDERS.md` "Calibration".
+  Cache keys are versioned (`iso:foot:v4:`, `transit:v5:`) so rings built under
+  an older calibration or walking speed can never be served.
 - Isochrone rings are always exactly 15/30/45 minutes, ascending; transit ring
   nesting (15 ⊆ 30 ⊆ 45) is guaranteed by construction (thresholds of one
   monotonic field — see `transit-grid.ts`). The ONLY union is the per-threshold

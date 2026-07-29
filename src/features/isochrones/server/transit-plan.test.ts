@@ -305,7 +305,7 @@ describe("planTrip", () => {
     const second = await planTrip(FROM, TO, DEP);
     expect(second).toEqual(first);
     expect(providerFetch).toHaveBeenCalledTimes(1);
-    expect([...store.keys()][0]).toMatch(/^reach:plan:v4:44\.37600,26\.12500:44\.47800,26\.12800:/);
+    expect([...store.keys()][0]).toMatch(/^reach:plan:v5:44\.37600,26\.12500:44\.47800,26\.12800:/);
   });
 
   it("keys distinctly by maxMinutes (band) so a different band can't reuse another band's pick", async () => {
@@ -314,7 +314,7 @@ describe("planTrip", () => {
     await planTrip(FROM, TO, DEP, 45);
     // Two distinct provider calls + two cache rows (different band suffix).
     expect(providerFetch).toHaveBeenCalledTimes(2);
-    expect([...store.keys()].every((k) => k.startsWith("reach:plan:v4:"))).toBe(true);
+    expect([...store.keys()].every((k) => k.startsWith("reach:plan:v5:"))).toBe(true);
     expect(new Set([...store.keys()]).size).toBe(2);
   });
 
@@ -341,7 +341,7 @@ describe("planTrip", () => {
     // override either, so raising it would surface trips the map never painted.
     expect(url).not.toContain("maxPreTransitTime");
     // Same pedestrian semantics as the one-to-all that painted the rings.
-    expect(url).toContain("pedestrianSpeed=1.333");
+    expect(url).toContain("pedestrianSpeed=1.389");
     expect(url).toContain("useRoutedTransfers=true");
   });
 

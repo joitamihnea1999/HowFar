@@ -30,6 +30,7 @@ vi.mock("@/features/isochrones/server/transit-grid", async (importOriginal) => (
   buildRings: (...args: unknown[]) => buildRingsMock(...args),
 }));
 
+import { PACE_MODEL } from "@/features/isochrones/pace";
 import { departureFields, TIME_PRESETS } from "@/features/isochrones/time-context";
 import { representativeDeparture, transitIsochrone } from "./transit";
 
@@ -198,8 +199,11 @@ describe("transitIsochrone", () => {
       false,
       true,
     ]);
-    // Both builds carry the (normal-pace) egress speed.
-    expect(buildRingsMock.mock.calls.every((c) => typeof (c[2] as { egressMPerMin?: number }).egressMPerMin === "number")).toBe(true);
+    // Both builds carry the normal-pace egress speed EXACTLY (a `typeof
+    // === "number"` check here would have passed the pre-064 speed unchanged).
+    for (const c of buildRingsMock.mock.calls) {
+      expect((c[2] as { egressMPerMin: number }).egressMPerMin).toBeCloseTo(PACE_MODEL.normal.egressMPerMin, 10);
+    }
     expect(booleanPointInPolygon([26.1025, 44.4268], {
       type: "Feature", properties: {},
       geometry: result.rings[0].geometry as never,
@@ -253,22 +257,42 @@ describe("transitIsochrone", () => {
     })).toBe(true); // origin walk area present via the radial fallback
   });
 
-  it("serves a cache hit without a second fetch, under the v4 key", async () => {
+  it("serves a cache hit without a second fetch, under the v5 key", async () => {
     providerFetch.mockResolvedValue(oneToAll([stop(44.44, 26.12, 5)]));
     const first = await transitIsochrone(44.4, 26.1);
     const second = await transitIsochrone(44.4, 26.1);
     expect(providerFetch).toHaveBeenCalledTimes(1);
     expect(second).toEqual(first);
-    // v4 key (task 052): pace+departure scoped; pre-052 (v3) rings must never serve.
-    expect([...store.keys()].every((k) => k.startsWith("transit:v4:"))).toBe(true);
+    // v5 key (task 064): pace+departure scoped; pre-064 (v4) rings were built at
+    // the old walk speed and must never serve.
+    expect([...store.keys()].every((k) => k.startsWith("transit:v5:"))).toBe(true);
   });
 
   it("pins the speed model and routed transfers in the one-to-all request", async () => {
     providerFetch.mockResolvedValue(oneToAll([]));
     await transitIsochrone(44.4, 26.1);
     const url = providerFetch.mock.calls[0][0] as string;
-    expect(url).toContain("pedestrianSpeed=1.333");
+    expect(url).toContain("pedestrianSpeed=1.389");
     expect(url).toContain("useRoutedTransfers=true");
+  });
+
+  it("threads SLOW all the way through: MOTIS access speed, egress stamping, and the cache key", async () => {
+    // Task 064: every transit contract test ran at the default
+    // pace, so a broken pace→provider path would have shipped green. Slow must
+    // reach BOTH provider surfaces and the key, with its OWN egress speed.
+    providerFetch.mockResolvedValue(oneToAll([]));
+    await transitIsochrone(44.4, 26.1, "slow");
+    const url = providerFetch.mock.calls[0][0] as string;
+    expect(url).toContain("pedestrianSpeed=0.833");
+    for (const call of buildRingsMock.mock.calls) {
+      expect((call[2] as { egressMPerMin: number }).egressMPerMin).toBeCloseTo(
+        PACE_MODEL.slow.egressMPerMin,
+        10,
+      );
+    }
+    expect([...store.keys()].every((k) => k.startsWith("transit:v5:slow:"))).toBe(true);
+    // …and the origin walk ring was requested at the same pace (one source).
+    expect(walkingIsochroneMock).toHaveBeenCalledWith(44.4, 26.1, "slow");
   });
 
   it("returns the pinned representative departure so the UI can qualify the claim", async () => {

@@ -98,8 +98,11 @@ test("defaults: exactly two paces (Slow, Normal), Normal active, BOTH meanings v
   await expect(page.getByRole("button", { name: /Normal/ })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("button", { name: /Brisk/ })).toHaveCount(0);
   // Each option shows its short meaning WITHOUT being selected (owner ask / panel E).
-  await expect(page.getByTestId("pace-blurb-slow")).toContainText("4 km/h");
+  // The SPEEDS are pinned on both options (task 064: 3 and 5 km/h). Normal had
+  // no km/h assertion before, so a wrong Normal speed rendered green.
+  await expect(page.getByTestId("pace-blurb-slow")).toContainText("3 km/h");
   await expect(page.getByTestId("pace-blurb-normal")).toContainText("average adult");
+  await expect(page.getByTestId("pace-blurb-normal")).toContainText("5 km/h");
   // Normal is the honest baseline → no "estimated reach" qualifier.
   await expect(page.getByTestId("pace-hint")).not.toContainText("estimated reach");
   expect(cap.iso.some((u) => /pace=normal/.test(u))).toBe(true);
