@@ -70,6 +70,7 @@ import ModeToggle from "@/features/map/ModeToggle";
 import PaceControl from "@/features/map/PaceControl";
 import RingSelector from "@/features/map/RingSelector";
 import SearchForm from "@/features/map/SearchForm";
+import RingHint from "@/features/map/RingHint";
 import SelectionCard from "@/features/map/SelectionCard";
 import TimeContextControl from "@/features/map/TimeContextControl";
 import SuggestList from "@/features/map/SuggestList";
@@ -1120,6 +1121,14 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       {/* The overlay plane stays pointer-transparent. Individual command/result
           surfaces opt back in, keeping the map usable through every gap. */}
       <div className="pointer-events-none absolute inset-0 z-20">
+        {/* Mobile ring-meaning hint: the SelectionCard explainer is hidden by
+            the default peek sheet, so first-time mobile users get this
+            dismissible floating one-liner instead (see RingHint). */}
+        <RingHint
+          mode={sel.mode}
+          ringFilter={ringFilter}
+          active={isMobileShell && sheetPeek && !reachActive && sel.lastSelection !== null}
+        />
         <div className="hf-command-dock absolute inset-x-3 top-[4.7rem] z-30 sm:inset-x-4 sm:top-[5.25rem] md:bottom-auto md:left-4 md:right-auto md:top-[5.15rem] md:w-[388px]">
           {shell.dock === "collapsed" && sel.lastSelection ? (
             <StatePill

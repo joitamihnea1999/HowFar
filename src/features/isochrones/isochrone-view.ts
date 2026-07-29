@@ -113,6 +113,33 @@ export function visibleLegendBands(filter: RingFilter): readonly Band[] {
 }
 
 /**
+ * One plain-language sentence saying what the shaded area(s) MEAN — the rings
+ * are the product's core visualization, yet color dots + "N min" alone don't
+ * tell a first-time user that teal/violet/blue areas are "everything you can
+ * reach within N minutes by this mode" (owner, task: ring comprehension).
+ * Minutes come from `visibleLegendBands` + `bandMinutes`, so the sentence can
+ * never disagree with the painted rings or hardcode 15/30/45 (car reads
+ * 10/20/30). Shared by the SelectionCard legend and the mobile peek hint.
+ */
+export function reachExplainer(mode: Mode, filter: RingFilter): string {
+  const bands = visibleLegendBands(filter);
+  const minutes = bands.map((b) => bandMinutes(mode, b));
+  const area = bands.length > 1 ? "The shaded areas show" : "The shaded area shows";
+  const span =
+    minutes.length > 1
+      ? `${minutes.slice(0, -1).join(", ")} or ${minutes[minutes.length - 1]} minutes`
+      : `${minutes[0]} minutes`;
+  switch (mode) {
+    case "walk":
+      return `${area} everything you can walk to within ${span}.`;
+    case "transit":
+      return `${area} everything you can reach by public transport within ${span}, walks to and from stops included.`;
+    case "car":
+      return `${area} everything you can drive to within ${span} in typical traffic.`;
+  }
+}
+
+/**
  * Ordered bands for the staged All-mode reveal (largest→smallest, so the city
  * "opens up" then resolves around the origin). A single-band filter resolves
  * just that band. Extracted from `AppMap.revealRings` so the sequence is

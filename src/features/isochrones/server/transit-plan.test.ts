@@ -1,14 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { store, providerFetch } = vi.hoisted(() => ({
+const { store, expiries, providerFetch } = vi.hoisted(() => ({
   store: new Map<string, unknown>(),
+  expiries: new Map<string, Date>(),
   providerFetch: vi.fn(),
 }));
 
 vi.mock("@/lib/api-cache", () => ({
   getCachedSafe: (key: string) => Promise.resolve(store.has(key) ? store.get(key) : null),
-  setCachedSafe: (key: string, value: unknown) => {
+  setCachedSafe: (key: string, value: unknown, expiresAt: Date) => {
     store.set(key, value);
+    expiries.set(key, expiresAt);
     return Promise.resolve();
   },
 }));
@@ -18,7 +20,17 @@ vi.mock("@/lib/provider-http", async (importOriginal) => ({
   providerFetch,
 }));
 
-import { bestPlan, parseItinerary, planTrip, TRANSFER_PENALTY_S, type ReachPlan } from "./transit-plan";
+import { REACH_TIMEOUT_MS } from "@/features/map/reach-directions-controller";
+
+import {
+  bestPlan,
+  parseItinerary,
+  planTrip,
+  PLAN_BUDGET_MS,
+  PLAN_MAX_POST_TRANSIT_S,
+  TRANSFER_PENALTY_S,
+  type ReachPlan,
+} from "./transit-plan";
 import sample from "./__fixtures__/reach-plan-sample.json";
 import multi from "./__fixtures__/reach-plan-multi.json";
 
@@ -62,6 +74,7 @@ function planResponse(itineraries: unknown) {
 
 beforeEach(() => {
   store.clear();
+  expiries.clear();
   providerFetch.mockReset();
 });
 
@@ -177,6 +190,37 @@ describe("bestPlan", () => {
     expect(plan.legs.some((l) => l.mode === "SUBWAY")).toBe(true); // FAST's M2
   });
 
+  it("a malformed IN-BAND winner cannot hide a valid OVER-BAND trip (band partition, not filter)", () => {
+    // The in-band candidate trims to no legs; the only real trip exceeds the
+    // band. The old filter dropped over-band candidates whenever any in-band
+    // one existed, turning this response into a false "not reachable".
+    const brokenInBand = {
+      duration: 20 * 60,
+      transfers: 0,
+      legs: [{ mode: "WALK", duration: 20, from: { name: "START" }, to: { name: "END" } }],
+    };
+    const plan = bestPlan({ itineraries: [brokenInBand, FAST] }, { maxSeconds: 30 * 60 }) as Extract<
+      ReachPlan,
+      { reachable: true }
+    >;
+    expect(plan.reachable).toBe(true);
+    expect(plan.totalMinutes).toBe(57); // the over-band FAST trip, served with band-honest copy
+  });
+
+  it("skips a malformed winner whose legs all trim away and returns the next valid candidate", () => {
+    // Fastest candidate has only a 0-min WALK stub — parseItinerary trims it to
+    // no legs. That must not turn the whole answer into a false "not reachable"
+    // while a valid runner-up exists.
+    const degenerate = {
+      duration: 10 * 60,
+      transfers: 0,
+      legs: [{ mode: "WALK", duration: 20, from: { name: "START" }, to: { name: "END" } }],
+    };
+    const plan = bestPlan({ itineraries: [degenerate, FAST] }) as Extract<ReachPlan, { reachable: true }>;
+    expect(plan.reachable).toBe(true);
+    expect(plan.totalMinutes).toBe(57);
+  });
+
   it("breaks a duration tie by fewer transfers, tolerating a missing transfer count", () => {
     // `a` has NO transfers field (Number(undefined) → NaN → the `|| 0` fallback
     // treats it as 0); `b` has 2 → `a` wins the tie.
@@ -261,7 +305,7 @@ describe("planTrip", () => {
     const second = await planTrip(FROM, TO, DEP);
     expect(second).toEqual(first);
     expect(providerFetch).toHaveBeenCalledTimes(1);
-    expect([...store.keys()][0]).toMatch(/^reach:plan:v3:44\.37600,26\.12500:44\.47800,26\.12800:/);
+    expect([...store.keys()][0]).toMatch(/^reach:plan:v4:44\.37600,26\.12500:44\.47800,26\.12800:/);
   });
 
   it("keys distinctly by maxMinutes (band) so a different band can't reuse another band's pick", async () => {
@@ -270,7 +314,7 @@ describe("planTrip", () => {
     await planTrip(FROM, TO, DEP, 45);
     // Two distinct provider calls + two cache rows (different band suffix).
     expect(providerFetch).toHaveBeenCalledTimes(2);
-    expect([...store.keys()].every((k) => k.startsWith("reach:plan:v3:"))).toBe(true);
+    expect([...store.keys()].every((k) => k.startsWith("reach:plan:v4:"))).toBe(true);
     expect(new Set([...store.keys()]).size).toBe(2);
   });
 
@@ -283,9 +327,181 @@ describe("planTrip", () => {
     expect(url).toContain(`time=${encodeURIComponent(DEP)}`);
   });
 
+  it("matches the painted rings' walking contract: raised LAST street leg, default first leg, ring pedestrian params", async () => {
+    providerFetch.mockResolvedValue(planResponse([FAST]));
+    await planTrip(FROM, TO, DEP);
+    const url = providerFetch.mock.calls[0][0] as string;
+    // The rings' egress is our radial walk model (up to the whole remaining
+    // band), so the planner must allow the same last-mile walking — with the
+    // 900s default, points >15-min walk from every stop got "no route" while
+    // painted reachable (the owner-reported right-click flake).
+    expect(url).toContain(`maxPostTransitTime=${PLAN_MAX_POST_TRANSIT_S}`);
+    expect(PLAN_MAX_POST_TRANSIT_S).toBe(2700); // = the 45-min outer band
+    // Ingress stays at the MOTIS default — the rings' one-to-all sends no
+    // override either, so raising it would surface trips the map never painted.
+    expect(url).not.toContain("maxPreTransitTime");
+    // Same pedestrian semantics as the one-to-all that painted the rings.
+    expect(url).toContain("pedestrianSpeed=1.333");
+    expect(url).toContain("useRoutedTransfers=true");
+  });
+
+  it("the server's END-TO-END plan budget stays strictly under the client directions deadline", () => {
+    // The server must answer (or 502) while the client is still listening —
+    // otherwise a slow success is cached after the client gave up and the very
+    // next click "heals", which reads as a flaky product. The budget is
+    // enforced by an ABSOLUTE abort signal spanning queue wait + attempt +
+    // retry (a per-attempt timeout alone starts after the shared-host queue).
+    expect(PLAN_BUDGET_MS).toBeLessThan(REACH_TIMEOUT_MS);
+  });
+
+  it("passes the absolute budget signal to every provider attempt", async () => {
+    providerFetch.mockResolvedValue(planResponse([FAST]));
+    await planTrip(FROM, TO, DEP);
+    const opts = providerFetch.mock.calls[0][1] as { signal?: AbortSignal };
+    expect(opts.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("budget overrun: the passed signal FIRES at the deadline, the trip fails as a ProviderError, and NOTHING is cached", async () => {
+    vi.useFakeTimers();
+    try {
+      // The provider resolves only if aborted — mimicking a fetch parked
+      // behind a slow shared-host queue that the budget must kill.
+      providerFetch.mockImplementation(
+        (_url: string, opts: { signal: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            opts.signal.addEventListener("abort", () => reject(new Error("aborted by budget")));
+          }),
+      );
+      const pending = planTrip(FROM, TO, DEP);
+      const guarded = expect(pending).rejects.toThrow(/request failed: aborted by budget/);
+      await vi.advanceTimersByTimeAsync(PLAN_BUDGET_MS + 1);
+      await guarded;
+      // The heal-loop killer: a budget overrun must never write the cache.
+      expect(store.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("a no-route response is a cacheable not-reachable (not an error)", async () => {
     providerFetch.mockResolvedValue(planResponse([]));
     await expect(planTrip(FROM, TO, DEP)).resolves.toEqual({ reachable: false });
+  });
+
+  it("retries ONCE on an empty-itineraries body and serves the retry's routes (transient provider miss)", async () => {
+    providerFetch
+      .mockResolvedValueOnce(planResponse([]))
+      .mockResolvedValueOnce(planResponse([FAST]));
+    const plan = await planTrip(FROM, TO, DEP);
+    expect(plan).toMatchObject({ reachable: true, totalMinutes: 57 });
+    expect(providerFetch).toHaveBeenCalledTimes(2);
+    // The GOOD answer is what got cached.
+    expect([...store.values()][0]).toMatchObject({ reachable: true });
+  });
+
+  it("retry is bounded: two empty bodies mean exactly two provider calls, then not-reachable", async () => {
+    providerFetch.mockResolvedValue(planResponse([]));
+    await expect(planTrip(FROM, TO, DEP)).resolves.toEqual({ reachable: false });
+    expect(providerFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("also retries when itineraries are present but ALL garbled (no transit answer emerges)", async () => {
+    providerFetch
+      .mockResolvedValueOnce(planResponse([{ duration: 0 }, null]))
+      .mockResolvedValueOnce(planResponse([FAST]));
+    const plan = await planTrip(FROM, TO, DEP);
+    expect(plan).toMatchObject({ reachable: true, totalMinutes: 57 });
+    expect(providerFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a positive-duration itinerary whose legs are all MODELESS (parses to no transit answer)", async () => {
+    // `{duration, legs:[{duration}]}` parses to an UNKNOWN-mode leg, which must
+    // NOT pass as public transport — and an answer that garbled warrants the
+    // one bounded retry like any other effectively-empty response.
+    providerFetch
+      .mockResolvedValueOnce(planResponse([{ duration: 1200, legs: [{ duration: 1200 }] }]))
+      .mockResolvedValueOnce(planResponse([FAST]));
+    const plan = await planTrip(FROM, TO, DEP);
+    expect(plan).toMatchObject({ reachable: true, totalMinutes: 57 });
+    expect(providerFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("does NOT retry a determinate direct-only answer (close destination — citizenship)", async () => {
+    const walkDirect = {
+      duration: 15 * 60,
+      transfers: 0,
+      legs: [{ mode: "WALK", duration: 15 * 60, from: { name: "START" }, to: { name: "END" } }],
+    };
+    providerFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ itineraries: [], direct: [walkDirect] }),
+    });
+    const plan = await planTrip(FROM, TO, DEP);
+    expect(plan).toMatchObject({ reachable: true });
+    expect(providerFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("a FAILED retry falls back to the first, determinate body instead of throwing", async () => {
+    providerFetch
+      .mockResolvedValueOnce(planResponse([]))
+      .mockRejectedValueOnce(new TypeError("network blip"));
+    await expect(planTrip(FROM, TO, DEP)).resolves.toEqual({ reachable: false });
+    expect(providerFetch).toHaveBeenCalledTimes(2);
+    // The determinate answer got cached (short TTL), not dropped.
+    expect([...store.values()][0]).toEqual({ reachable: false });
+  });
+
+  it("skips the retry when the budget is nearly spent (the deadline covers queue + attempts)", async () => {
+    vi.useFakeTimers();
+    try {
+      providerFetch.mockImplementation(() => {
+        // First attempt consumes almost the whole budget (e.g. parked behind a
+        // slow one-to-all on the shared host queue) — the retry must not start.
+        vi.advanceTimersByTime(PLAN_BUDGET_MS - 1000);
+        return Promise.resolve(planResponse([]));
+      });
+      await expect(planTrip(FROM, TO, DEP)).resolves.toEqual({ reachable: false });
+      expect(providerFetch).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("caches a real transit plan for hours but a no-transit answer only for minutes", async () => {
+    const hours = (key: string) => ((expiries.get(key)?.getTime() ?? 0) - Date.now()) / 3_600_000;
+    providerFetch.mockResolvedValue(planResponse([FAST]));
+    await planTrip(FROM, TO, DEP);
+    const transitKey = [...store.keys()][0];
+    expect(hours(transitKey)).toBeGreaterThan(1); // ~6h
+
+    store.clear();
+    expiries.clear();
+    providerFetch.mockReset();
+    // Unreachable: empty both attempts.
+    providerFetch.mockResolvedValue(planResponse([]));
+    await planTrip(FROM, TO, DEP, 30);
+    const noneKey = [...store.keys()][0];
+    expect(hours(noneKey)).toBeLessThan(0.2); // ~5 min — heals fast
+    expect(hours(noneKey)).toBeGreaterThan(0);
+  });
+
+  it("a walk-only direct fallback (rendered as 'no route') also gets the short TTL", async () => {
+    const walkOnly = {
+      duration: 20 * 60,
+      transfers: 0,
+      legs: [{ mode: "WALK", duration: 20 * 60, from: { name: "START" }, to: { name: "END" } }],
+    };
+    providerFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ itineraries: [], direct: [walkOnly] }),
+    });
+    const plan = await planTrip(FROM, TO, DEP);
+    expect(plan).toMatchObject({ reachable: true });
+    const key = [...store.keys()][0];
+    const ttlMin = ((expiries.get(key)?.getTime() ?? 0) - Date.now()) / 60_000;
+    expect(ttlMin).toBeLessThan(10);
   });
 
   it("a malformed body (no itineraries array) is a ProviderError", async () => {

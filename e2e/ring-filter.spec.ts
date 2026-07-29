@@ -70,6 +70,11 @@ test("defaults to the 15-min band: all rings fetched, one band displayed, legend
   await expect(legend(page).getByText("15 min")).toBeVisible();
   await expect(legend(page).getByText("30 min")).toHaveCount(0);
   await expect(legend(page).getByText("45 min")).toHaveCount(0);
+  // First-run ring comprehension: the card states what the shaded area MEANS,
+  // with the minutes of the band actually shown.
+  await expect(page.getByTestId("ring-explainer")).toContainText(
+    "everything you can walk to within 15 minutes",
+  );
 });
 
 test("selecting a band or All updates the layers' filter and the legend", async ({ page }) => {

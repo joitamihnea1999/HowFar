@@ -82,6 +82,17 @@ entries. Go/no-go bar: ≥100 fresh addresses/day headroom on every provider. **
   `legGeometry.points` encoded polyline **at precision 7 (1e7 scale), not the format's usual
   precision 5** — decode with the leg's own `legGeometry.precision`, or the path lands ~100× out
   of range. Legs also carry `from`/`to` `lat`/`lon` (board/alight stops) and `intermediateStops`.
+  **Street-leg limits must match the painted rings** (2026-07-29): MOTIS defaults
+  `maxPreTransitTime`/`maxPostTransitTime` to **900 s** (15-min max walk to the first / from the
+  last stop), while our ring egress model walks up to the whole remaining band — so `/plan`
+  answered "no itineraries" for points the map painted reachable (verified live: 6/40 random
+  Bucharest points; all revive with a raised post limit). We now send
+  `maxPostTransitTime=2700` (the 45-min band) + `pedestrianSpeed=1.333` +
+  `useRoutedTransfers=true` (the same walking contract the one-to-all rings use); the pre limit
+  deliberately stays at the default, matching the rings' own ingress. Values are capped
+  server-side by Transitous's `street_routing_max_prepost_transit_seconds` (≥2700 as of
+  2026-07-29). Load note: this widens each `/plan` search slightly and a zero-itinerary answer
+  is retried once; both stay behind the same per-host 1.5 s rate spacing (no added concurrency).
 - Fallback if Transitous asks us to stop: TravelTime (docs.traveltime.com) — after 2-week trial,
   "a limit of 5 hits per minute applies"; isochrone detail capped at Medium on free; Romania
   transit coverage listed only behind account login — **unverified**. Kept as plan B, not the pick.

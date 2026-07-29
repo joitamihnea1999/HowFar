@@ -33,7 +33,12 @@ import type { EdgeInsets } from "@/features/map/route-framing";
  * one clears the other, in both directions.
  */
 
-const REACH_TIMEOUT_MS = 12000;
+/** Client-side deadline for the whole directions fetch. Exported so a test can
+ * assert the server's end-to-end plan budget (PLAN_BUDGET_MS) stays strictly
+ * below it — the server must answer or fail while the client is still
+ * listening, or a slow success gets cached after the client gave up and the
+ * next click "heals". */
+export const REACH_TIMEOUT_MS = 12000;
 
 export interface ReachStepView {
   primary: string;
@@ -164,7 +169,9 @@ export function createReachDirectionsController({
         // right-click that yields no public-transport leg is reported as "no
         // public-transport route" (same as an unreachable result), NOT an "On
         // foot" walk-band. No draw, no declutter. The prior draw was torn down by
-        // the arbiter above.
+        // the arbiter above. (Deliberately ONLY this — a short vehicle hop with
+        // long access walks is a real answer whose steps show the walking
+        // honestly; see transit-classify.)
         if (!hasTransitLeg(plan.legs)) {
           return void setView({
             state: "none",
@@ -182,13 +189,19 @@ export function createReachDirectionsController({
           reachDeclutter.set(true);
           journey.frame(applyCameraPadding(true));
         }
-        const withinBand = plan.totalMinutes <= band;
+        // Band honesty (task 057, precision from review): "a little beyond" only
+        // while the overshoot is small (≤4/3 of the band); a 60-min trip against
+        // a 15-min band is plainly "beyond".
+        const detail =
+          plan.totalMinutes <= band
+            ? `Within your ~${band}-min reach — journey ${reachSummary(plan)}.`
+            : plan.totalMinutes <= (band * 4) / 3
+              ? `Journey ${reachSummary(plan)} — a little beyond your ~${band}-min reach.`
+              : `Journey ${reachSummary(plan)} — beyond your ~${band}-min reach.`;
         setView({
           state: "transit",
           title: "By public transport",
-          detail: withinBand
-            ? `Within your ~${band}-min reach — journey ${reachSummary(plan)}.`
-            : `Journey ${reachSummary(plan)} — a little beyond your ~${band}-min reach.`,
+          detail,
           steps,
         });
       })

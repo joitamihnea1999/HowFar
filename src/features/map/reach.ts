@@ -108,17 +108,12 @@ export function buildReachSteps(legs: ReachLeg[]): ReachStep[] {
   });
 }
 
-const NON_TRANSIT_MODES = new Set(["WALK", "BIKE", "BICYCLE", "CAR", "CAR_PARKING", "RENTAL", "SCOOTER", "ODM"]);
-
-/** True when the plan has at least one public-transport leg — i.e. something
- * worth drawing + decluttering for. `bestPlan` can fall back to a `direct`
- * walk-OR-BIKE itinerary (transit-plan `bestPlan`), so gating the visual
- * treatment on `!isWalkOnly` would wrongly draw a bike route and label it "By
- * public transport" (impl-panel:). Any non-{walk,bike,car,…} mode
- * counts, so an unknown genuine transit mode still draws. */
-export function hasTransitLeg(legs: ReachLeg[]): boolean {
-  return legs.some((l) => !NON_TRANSIT_MODES.has(l.mode.toUpperCase()));
-}
+/** Transit classification (does this plan deserve the public-transport
+ * treatment — draw, declutter, "By public transport" copy) is shared with the
+ * server, which picks its cache TTL by the same rule: see
+ * `features/isochrones/transit-classify.ts`. Re-exported so existing consumers
+ * keep one import site. */
+export { hasTransitLeg } from "@/features/isochrones/transit-classify";
 
 // --- Drawable journey model (task 054) ------------------------------------
 // Pure derivation of what the map draws for a right-click transit journey: the

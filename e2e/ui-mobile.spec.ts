@@ -477,6 +477,17 @@ test("mobile shell: collapsed dock + peek sheet reclaim the map; state stays vis
   if (!pillBox) throw new Error("state pill has no box");
   expect(pillBox.height).toBeGreaterThanOrEqual(44);
 
+  // First-run ring comprehension: the meaning of the shaded areas must be
+  // visible in THIS default (peek) state — the SelectionCard explainer is
+  // behind the collapsed sheet, so a floating dismissible hint carries it.
+  const hint = page.getByTestId("ring-hint");
+  await expect(hint).toBeVisible();
+  await expect(hint).toContainText("everything you can walk to within 15 minutes");
+  await hint.getByRole("button", { name: "Dismiss explanation" }).tap();
+  await expect(hint).toHaveCount(0);
+  // Dismissal persists (versioned key) — a returning user is not re-taught.
+  expect(await page.evaluate(() => localStorage.getItem("hf:ring-hint-dismissed:v1"))).toBe("1");
+
   // The camera settled on the origin — the padding flip did not cancel the
   // selection flyTo (task-060 trap class).
   await expect

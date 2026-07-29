@@ -8,6 +8,7 @@ import {
   MARKER_COLOR,
   MODE_ACCENT,
   MODE_LABEL,
+  reachExplainer,
   RING_BANDS,
   RING_FILTER_OPTIONS,
   ringLayerVisibility,
@@ -84,6 +85,33 @@ describe("legendColor / bandMinutes / constants", () => {
     expect(MARKER_COLOR.car).toBe("#3b82f6");
     expect(MODE_LABEL.car).toBe("Driving");
     expect(MODE_ACCENT.car).toBe("var(--hf-car)");
+  });
+});
+
+describe("reachExplainer", () => {
+  it("explains a single visible band with its per-mode minutes (walk 15)", () => {
+    expect(reachExplainer("walk", 15)).toBe("The shaded area shows everything you can walk to within 15 minutes.");
+  });
+
+  it("names public transport and includes the stop walks (transit 45)", () => {
+    expect(reachExplainer("transit", 45)).toBe(
+      "The shaded area shows everything you can reach by public transport within 45 minutes, walks to and from stops included.",
+    );
+  });
+
+  it("uses the CAR minute labels, never the band ids (car band 45 reads 30 minutes)", () => {
+    expect(reachExplainer("car", 45)).toBe(
+      "The shaded area shows everything you can drive to within 30 minutes in typical traffic.",
+    );
+  });
+
+  it("lists every visible band's minutes for the All filter, per mode", () => {
+    expect(reachExplainer("walk", "all")).toBe(
+      "The shaded areas show everything you can walk to within 15, 30 or 45 minutes.",
+    );
+    expect(reachExplainer("car", "all")).toBe(
+      "The shaded areas show everything you can drive to within 10, 20 or 30 minutes in typical traffic.",
+    );
   });
 });
 

@@ -192,6 +192,38 @@ describe("reach-directions-controller — transit fetch", () => {
     expect(views.at(-1)?.detail).toContain("a little beyond");
   });
 
+  it("a short vehicle hop with long access walks DRAWS — its walk steps carry the honesty (review reversal)", async () => {
+    // Real captures contain owner-approved best trips like a 3-min tram between
+    // long walks; a walk-share threshold would misreport those as "no route",
+    // so the drawable line is strictly "has a transit leg".
+    const shortHop = {
+      reachable: true,
+      totalMinutes: 30,
+      transfers: 0,
+      legs: [
+        { mode: "WALK", line: "", headsign: "", fromName: "START", toName: "A", minutes: 12 },
+        { mode: "TRAM", line: "1", headsign: "X", fromName: "A", toName: "B", minutes: 3 },
+        { mode: "WALK", line: "", headsign: "", fromName: "B", toName: "END", minutes: 15 },
+      ],
+    };
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(shortHop) })) as never);
+    const { controller, journey, views } = makeController({ drawReturns: true });
+    controller.open({ kind: "transit", coords: [26.1, 44.4], band: 45, url: "/api/reach?x=1" });
+    await vi.waitFor(() => expect(views.at(-1)?.state).toBe("transit"));
+    expect(journey.draw).toHaveBeenCalledWith(shortHop.legs);
+    expect(views.at(-1)?.steps).toHaveLength(3); // both walks visible to the rider
+  });
+
+  it("far over-band trips read 'beyond', not 'a little beyond' (band honesty precision)", async () => {
+    const farOver = { ...reachablePlan, totalMinutes: 60 }; // band 15 → 4× over
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(farOver) })) as never);
+    const { controller, views } = makeController({ drawReturns: true });
+    controller.open({ kind: "transit", coords: [26.1, 44.4], band: 15, url: "/api/reach?x=1" });
+    await vi.waitFor(() => expect(views.at(-1)?.state).toBe("transit"));
+    expect(views.at(-1)?.detail).toContain("— beyond your ~15-min reach");
+    expect(views.at(-1)?.detail).not.toContain("a little beyond");
+  });
+
   it("a bike-direct fallback (no transit leg) → 'No public-transport route', text-only (task 060)", async () => {
     const bikeDirect = { reachable: true, totalMinutes: 14, transfers: 0, legs: [{ mode: "BIKE", line: "", headsign: "", fromName: "START", toName: "END", minutes: 14 }] };
     vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(bikeDirect) })) as never);

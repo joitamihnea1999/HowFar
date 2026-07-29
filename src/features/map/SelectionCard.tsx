@@ -3,6 +3,7 @@ import {
   legendColor,
   MODE_ACCENT,
   MODE_LABEL,
+  reachExplainer,
   visibleLegendBands,
   type RingFilter,
 } from "@/features/isochrones/isochrone-view";
@@ -89,6 +90,9 @@ export default function SelectionCard({ label, message, mode, ringFilter, loadin
             ))}
             <span className="ml-auto text-[#667269]">shown on map</span>
           </div>
+          <p data-testid="ring-explainer" className="mt-2 text-[0.68rem] leading-4 text-[#9ca9a0]">
+            {reachExplainer(mode, ringFilter)}
+          </p>
           {mode === "transit" && departure ? (
             <p data-testid="transit-departure-note" className="mt-2 text-[0.68rem] leading-4 text-[#667269]">
               Scheduled public transport for <span className="text-[#9ca9a0]">{departure.summary}</span> — from

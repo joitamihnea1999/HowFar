@@ -1,5 +1,7 @@
 import { getCachedSafe, setCachedSafe } from "@/lib/api-cache";
+import { PACE_MODEL } from "@/features/isochrones/pace";
 import { decodePolyline } from "@/features/isochrones/polyline";
+import { hasTransitLeg } from "@/features/isochrones/transit-classify";
 import { providerFetch, ProviderError, roundCoord, USER_AGENT } from "@/lib/provider-http";
 
 /**
@@ -16,10 +18,45 @@ import { providerFetch, ProviderError, roundCoord, USER_AGENT } from "@/lib/prov
 const URL = "https://api.transitous.org/api/v1/plan";
 const HOST = "api.transitous.org";
 const MIN_INTERVAL_MS = 1500; // community-run; be a good citizen (shared with one-to-all's host)
-const TIMEOUT_MS = 15_000; // /plan is lighter than one-to-all (~0.6s server), but stay generous
+/** END-TO-END budget for resolving one trip plan: rate-limiter queue wait +
+ * first attempt + the bounded retry, all under ONE absolute deadline (an
+ * AbortController armed at entry — a fixed per-attempt timeout would start
+ * only after the shared-host queue, so a `/plan` parked behind a slow
+ * one-to-all could finish and get CACHED after the client's 12s deadline
+ * (`REACH_TIMEOUT_MS`) had already shown an error, and the very next click
+ * would "heal" — the flaky-product read this task exists to kill. Budget <
+ * client deadline is asserted in transit-plan.test.ts; the overrun path
+ * throws a ProviderError and caches nothing. */
+export const PLAN_BUDGET_MS = 10_000;
+/** Don't bother retrying unless at least this much of the budget remains —
+ * a retry needs the 1.5s host spacing plus a realistic response window. */
+const RETRY_MIN_REMAINING_MS = 3_000;
 // Schedules are stable within a day and the departure is in the cache key, so a
 // few hours of reuse is safe and keeps repeat right-clicks instant.
 const TTL_MS = 6 * 60 * 60 * 1000;
+/** Short TTL for answers WITHOUT a useful transit leg (unreachable / walk-only /
+ * walk-dominated). These render as "No public-transport route", so caching one
+ * for 6h pins a possibly-transient miss (provider hiccup, boundary case) to its
+ * ~1.1m coordinate cell. A genuine no-service answer is cheap to re-derive. */
+const NO_TRANSIT_TTL_MS = 5 * 60 * 1000;
+/**
+ * Maximum LAST street leg (seconds) for `/plan`, mirroring the painted rings:
+ * the transit isochrone's egress is OUR radial walk model, which may spend the
+ * whole remaining band walking from the alight stop (up to 45 min), while MOTIS
+ * defaults `maxPostTransitTime` to 900s — so a point could be painted reachable
+ * yet get "no route" from `/plan`, flipping within meters at the 15-min-walk
+ * frontier (the owner-reported right-click flake). 2700s = the 45-min band, the
+ * egress model's own extreme. `maxPreTransitTime` deliberately stays at the
+ * 900s default: the rings' one-to-all sends no override either, so raising it
+ * would surface trips the map never painted (review).
+ */
+export const PLAN_MAX_POST_TRANSIT_S = 2700;
+/** Pedestrian contract for `/plan`, identical to the one-to-all call that
+ * paints the rings (transit.ts): Normal pace (transit pace is always Normal —
+ * task 052, `effectivePace`) + OSM-routed transfers. Divergent walking
+ * semantics between the two calls is another painted-vs-planned mismatch
+ * source. Sourced from PACE_MODEL so the two calls can never drift apart. */
+export const PLAN_PEDESTRIAN_SPEED_MS = PACE_MODEL.normal.pedestrianSpeedMs;
 /** Legs-per-itinerary cap (payload bound). Bucharest trips run ~3–9 legs; a
  * value well above that drops only degenerate/hostile responses (task 054). */
 const MAX_REACH_LEGS = 24;
@@ -219,18 +256,12 @@ export function bestPlan(body: MotisPlanBody, opts?: { maxSeconds?: number }): R
   const usable = (list: MotisItinerary[] | undefined): MotisItinerary[] =>
     (Array.isArray(list) ? list : []).filter((it) => it && durationSeconds(it.duration) > 0);
   const transit = usable(body.itineraries);
-  let candidates = transit.length > 0 ? transit : usable(body.direct);
+  const candidates = transit.length > 0 ? transit : usable(body.direct);
   if (candidates.length === 0) return { reachable: false };
-
-  const maxSeconds = opts?.maxSeconds;
-  if (typeof maxSeconds === "number" && maxSeconds > 0) {
-    const within = candidates.filter((it) => durationSeconds(it.duration) <= maxSeconds);
-    if (within.length > 0) candidates = within; // prefer within-band; keep all if none qualify
-  }
 
   const cost = (it: MotisItinerary): number =>
     durationSeconds(it.duration) + TRANSFER_PENALTY_S * normTransfers(it.transfers);
-  const best = [...candidates].sort((a, b) => {
+  const ranked = [...candidates].sort((a, b) => {
     const ca = cost(a);
     const cb = cost(b);
     if (ca !== cb) return ca - cb;
@@ -238,8 +269,22 @@ export function bestPlan(body: MotisPlanBody, opts?: { maxSeconds?: number }): R
     const tb = normTransfers(b.transfers);
     if (ta !== tb) return ta - tb;
     return durationSeconds(a.duration) - durationSeconds(b.duration);
-  })[0];
-  return parseItinerary(best);
+  });
+  // Within-band preference is a PARTITION of the cost order, not a filter: an
+  // over-band candidate stays eligible behind the in-band ones, so a malformed
+  // in-band winner can never turn the whole response into a false "not
+  // reachable" while a valid over-band trip exists.
+  const maxSeconds = opts?.maxSeconds;
+  const inBand = (it: MotisItinerary): boolean =>
+    typeof maxSeconds === "number" && maxSeconds > 0 ? durationSeconds(it.duration) <= maxSeconds : true;
+  const ordered = [...ranked.filter(inBand), ...ranked.filter((it) => !inBand(it))];
+  // Take the best candidate that PARSES to a usable answer — a malformed winner
+  // (e.g. legs that all trim away) must not bury a valid runner-up (review).
+  for (const candidate of ordered) {
+    const plan = parseItinerary(candidate);
+    if (plan.reachable) return plan;
+  }
+  return { reachable: false };
 }
 
 // In-flight requests keyed by cache key: concurrent cold right-clicks on the
@@ -256,11 +301,12 @@ export async function planTrip(
   departureIso: string,
   maxMinutes?: number,
 ): Promise<ReachPlan> {
-  // v3: the ranking policy changed (transfer penalty + within-band, task 057), so
-  // a cached v2 plan would keep serving the old transfer-heavy pick for the TTL.
-  // maxMinutes is in the key because it changes the selected itinerary.
+  // v4: the request contract changed (maxPostTransitTime + pedestrianSpeed +
+  // useRoutedTransfers) — a cached v3 plan could keep serving a "no route"
+  // answer the new limits would revive. maxMinutes is in the key because it
+  // changes the selected itinerary.
   const band = typeof maxMinutes === "number" && maxMinutes > 0 ? Math.round(maxMinutes) : 0;
-  const key = `reach:plan:v3:${roundCoord(from.lat)},${roundCoord(from.lng)}:${roundCoord(to.lat)},${roundCoord(to.lng)}:${departureIso}:${band}`;
+  const key = `reach:plan:v4:${roundCoord(from.lat)},${roundCoord(from.lng)}:${roundCoord(to.lat)},${roundCoord(to.lng)}:${departureIso}:${band}`;
   const hit = await getCachedSafe<ReachPlan>(key);
   if (hit) return hit;
   const existing = inFlight.get(key);
@@ -274,24 +320,16 @@ export async function planTrip(
   }
 }
 
-async function fetchAndParse(
-  from: { lat: number; lng: number },
-  to: { lat: number; lng: number },
-  departureIso: string,
-  key: string,
-  maxSeconds?: number,
-): Promise<ReachPlan> {
-  const url =
-    `${URL}?fromPlace=${roundCoord(from.lat)},${roundCoord(from.lng)}` +
-    `&toPlace=${roundCoord(to.lat)},${roundCoord(to.lng)}` +
-    `&time=${encodeURIComponent(departureIso)}&arriveBy=false`;
-
+async function fetchPlanBody(url: string, budgetSignal: AbortSignal): Promise<MotisPlanBody> {
   let body: MotisPlanBody;
   try {
     const res = await providerFetch(url, {
       rateHost: HOST,
       minIntervalMs: MIN_INTERVAL_MS,
-      timeoutMs: TIMEOUT_MS,
+      // The per-attempt timeout is a ceiling only — the ABSOLUTE budget signal
+      // is what bounds queue+attempts end-to-end (see PLAN_BUDGET_MS).
+      timeoutMs: PLAN_BUDGET_MS,
+      signal: budgetSignal,
       init: { headers: { "User-Agent": USER_AGENT } },
     });
     if (!res.ok) throw new ProviderError(`transitous plan responded ${res.status}`);
@@ -303,8 +341,70 @@ async function fetchAndParse(
   if (!Array.isArray(body?.itineraries)) {
     throw new ProviderError("transitous plan returned a malformed response (no itineraries array)");
   }
+  return body;
+}
 
-  const plan = bestPlan(body, { maxSeconds });
-  await setCachedSafe(key, plan, new Date(Date.now() + TTL_MS));
+async function fetchAndParse(
+  from: { lat: number; lng: number },
+  to: { lat: number; lng: number },
+  departureIso: string,
+  key: string,
+  maxSeconds?: number,
+): Promise<ReachPlan> {
+  const url =
+    `${URL}?fromPlace=${roundCoord(from.lat)},${roundCoord(from.lng)}` +
+    `&toPlace=${roundCoord(to.lat)},${roundCoord(to.lng)}` +
+    `&time=${encodeURIComponent(departureIso)}&arriveBy=false` +
+    // Match the painted rings' walking contract (see the constants above): the
+    // rings' egress model allows walking the whole remaining band from the
+    // alight stop, so the planner must too — with MOTIS's 900s default, points
+    // >15-min walk from every stop answered "no route" while painted reachable.
+    `&maxPostTransitTime=${PLAN_MAX_POST_TRANSIT_S}` +
+    `&pedestrianSpeed=${PLAN_PEDESTRIAN_SPEED_MS}&useRoutedTransfers=true`;
+
+  // ONE absolute deadline for queue wait + attempt + retry (see PLAN_BUDGET_MS).
+  const deadline = Date.now() + PLAN_BUDGET_MS;
+  const budget = new AbortController();
+  const budgetTimer = setTimeout(() => budget.abort(), PLAN_BUDGET_MS);
+
+  // What the budget guarantees: no SUCCESS can resolve (and thus be cached)
+  // after the deadline — the signal kills an in-flight fetch at 10s, so a
+  // late answer can never be cached after the client's 12s deadline showed an
+  // error (the heal-loop). What it does NOT bound: the shared-host queue wait
+  // itself, so the resulting ProviderError may surface later than 10s — an
+  // honest, uncached, retryable failure (review: accepted residual; making the
+  // limiter signal-aware would touch every provider for no material gain).
+  const isTransitAnswer = (p: ReachPlan): boolean => p.reachable && hasTransitLeg(p.legs);
+  const usableDirect = (b: MotisPlanBody): boolean =>
+    (Array.isArray(b.direct) ? b.direct : []).some((it) => it && durationSeconds(it.duration) > 0);
+  let plan: ReachPlan;
+  try {
+    const body = await fetchPlanBody(url, budget.signal);
+    plan = bestPlan(body, { maxSeconds });
+    // One bounded retry when the response yields NO public-transport answer AND
+    // no direct (walk/bike) answer either — an effectively-empty response is
+    // the signature of a transient provider miss (replica mid-update), which
+    // would otherwise be cached as "No public-transport route" for this cell.
+    // A direct-only response is a DETERMINATE close-destination answer and is
+    // not retried (review: citizenship). Retry only with real budget left, and
+    // NEVER let a failed retry discard the first, determinate answer (review).
+    if (!isTransitAnswer(plan) && !usableDirect(body) && Date.now() + RETRY_MIN_REMAINING_MS < deadline) {
+      try {
+        const second = bestPlan(await fetchPlanBody(url, budget.signal), { maxSeconds });
+        if (isTransitAnswer(second)) plan = second;
+      } catch {
+        // The first response already answers "no transit here" — a failed
+        // retry must not turn that determinate answer into a 502.
+      }
+    }
+  } finally {
+    clearTimeout(budgetTimer);
+  }
+  // TTL by answer kind: only a real public-transport answer is stable enough to
+  // keep for hours; a plan with no transit leg (unreachable, or the walk/bike
+  // direct fallback — both rendered as "No public-transport route") heals in
+  // minutes instead of pinning a possibly-transient miss to this cell for 6h.
+  const ttl = plan.reachable && hasTransitLeg(plan.legs) ? TTL_MS : NO_TRANSIT_TTL_MS;
+  await setCachedSafe(key, plan, new Date(Date.now() + ttl));
   return plan;
 }
