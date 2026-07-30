@@ -50,7 +50,7 @@ Complementary to listing sites (it evaluates addresses the user found there; it 
 
 - Single-field address search with geocoding + result disambiguation.
 - Isochrones for at least walking + public transport at 15 / 30 / 45 min, rendered as map layers (other modes later).
-- Nearby amenities for core categories: groceries/supermarkets, pharmacies, parks/green space, schools, transit stops — shown on the map, with counts within the walking isochrone.
+- Nearby amenities for core categories: groceries/supermarkets, pharmacies, parks/green space, schools, transit stops — shown on the map across the **whole reach area of the selected travel mode**, with counts scoped to the bands currently shaded (as-built: the amenity set follows the overlay, so widening the rings reveals more places; it is not limited to a short walk).
 - A livability score (0–100) with a transparent, visible breakdown (see §8).
 - An air-quality + climate summary for the location.
 - Map UX: full-screen, layer toggles, legend, animated isochrone reveal, responsive desktop + mobile (touch-first).

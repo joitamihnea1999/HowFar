@@ -5,6 +5,7 @@ import {
   type AmenityCategoryKey,
   type AmenityCounts,
 } from "@/features/amenities/amenities";
+import type { Band } from "@/features/isochrones/bands";
 
 export const AMENITY_PREFERENCE_KEY = "howfar:amenity-categories:v1";
 export const ALL_AMENITY_CATEGORY_KEYS = AMENITY_CATEGORIES.map(
@@ -45,11 +46,13 @@ export function parseAmenitySelection(value: string | null): AmenityCategoryKey[
 }
 
 /**
- * The TRUE in-ring total when the server capped the markers it returned, else null.
+ * The TRUE in-area total when the server capped the markers it returned, else null.
  *
- * The server sends pre-cap per-category counts but at most `MAX_PER_CATEGORY`
- * markers per category, so in a dense area the map holds strictly fewer places
- * than the chips report. Once cluster donuts display counts (task 061), summing
+ * The server sends pre-cap per-category counts but at most
+ * `MAX_PER_CATEGORY_PER_BAND` markers per category per ring band, so in a dense area
+ * the map holds strictly fewer places than the chips report. The `counts` passed in
+ * are already scoped to the SHADED bands (task 065), so this note can never quote a
+ * total for an area the user cannot see. Once cluster donuts display counts (task 061), summing
  * them visibly disagrees with the chips — and an unexplained mismatch reads as a
  * bug rather than a documented limit. Returns null when nothing was capped, so
  * the note only appears when it is actually true.
@@ -74,15 +77,38 @@ export function cappedAmenityTotal(
   return total > renderedCount ? total : null;
 }
 
+/**
+ * The visible subset: selected categories ∩ visible ring bands ∩ text query.
+ *
+ * **This is the single chokepoint for band visibility (task 065), and it has to be
+ * the DATA path rather than a MapLibre layer filter.** A cluster's `point_count` and
+ * `clusterProperties` are frozen when the source is indexed, so hiding a band with
+ * `setFilter` would remove its markers from the map while leaving them counted inside
+ * every donut total — the aggregate would lie. Task 061 reversed task 042's
+ * `setFilter` optimisation for exactly this reason on categories; bands ride the same
+ * mechanism, and the tests treat a layer-filter-only implementation as a hard fail.
+ *
+ * `bands` omitted (or empty) means "no band restriction", which keeps every existing
+ * caller — the browse list and the popup — working unchanged when the ring filter is
+ * not relevant to them.
+ */
 export function filterAmenityItems(
   items: readonly Amenity[],
   selected: readonly AmenityCategoryKey[],
   query = "",
+  bands?: readonly Band[],
 ): Amenity[] {
   const visible = new Set(selected);
+  const visibleBands = bands && bands.length > 0 ? new Set<number>(bands) : null;
   const needle = query.trim().toLocaleLowerCase();
   return items.filter((item) => {
     if (!visible.has(item.category)) return false;
+    // A row with no band stays VISIBLE here. This is now DEFENSIVE ONLY: the controller
+    // rejects a payload containing an unbanded row on arrival (a marker with no band would
+    // otherwise show under every filter, including outside the shading). Keeping the pure
+    // function total means a direct caller with partial data still gets a sensible answer
+    // rather than a silently empty list.
+    if (visibleBands && item.band !== undefined && !visibleBands.has(item.band)) return false;
     if (!needle) return true;
     return `${item.name} ${amenityCategoryLabel(item.category)}`
       .toLocaleLowerCase()

@@ -87,17 +87,22 @@ describe("amenities-controller dispose", () => {
       el: { dataset: {} } as unknown as HTMLElement,
       loadState: createLoadState(),
       setAmenity: vi.fn(),
-      amenityRef: { current: { status: "idle", counts: null, items: [] } },
+      amenityRef: { current: { status: "idle", counts: null, countsByBand: null, items: [] } },
       amenityOriginRef: { current: null },
       selectedCategoriesRef: { current: [] },
       clustersRef: { current: null },
       invalidateClusters: vi.fn(),
+      ringFilterRef: { current: 15 as const },
       resetAmenityHover: vi.fn(),
       getPopupCategory: () => null,
+      getPopupBand: () => null,
       closeStopPopup: vi.fn(),
       closeSpider: vi.fn(),
     });
-    controller.fetchAmenities({ lat: 44.4, lng: 26.1 }, 0, "normal");
+    controller.fetchAmenities({ lat: 44.4, lng: 26.1 }, 0, "normal", "walk", {
+      kind: "preset",
+      preset: "crowded",
+    });
     expect(capturedSignal?.aborted).toBe(false);
     controller.dispose();
     expect(capturedSignal?.aborted).toBe(true);

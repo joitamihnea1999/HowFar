@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { innerBandCounts, WALK_CLIP, withBands } from "./amenity-fixtures";
 
 /**
  * Amenity legibility (task 061).
@@ -100,6 +101,10 @@ interface Fixture {
   osmType?: string;
   osmId?: number;
   distanceMeters?: number;
+  /** Ring band (task 065). The client REJECTS a payload whose rows lack one, because a
+   * band-less marker would be drawn under every ring filter — including outside the
+   * shading. These fixtures all sit within the inner band. */
+  band?: number;
 }
 
 /** A dense field plus the two adversarial shapes clustering has to survive. */
@@ -118,6 +123,7 @@ function adversarialAmenities(): Fixture[] {
         osmType: "node",
         osmId: 2000 + n,
         distanceMeters: 90 + i * 25,
+        band: 15,
       });
       n++;
     }
@@ -133,6 +139,7 @@ function adversarialAmenities(): Fixture[] {
       osmType: "node",
       osmId: 4000 + i,
       distanceMeters: 260 + i,
+      band: 15,
     }),
   );
   // (3) A clump with a NEAR neighbour just outside the clustering radius — the
@@ -146,6 +153,7 @@ function adversarialAmenities(): Fixture[] {
       osmType: "node",
       osmId: 5000 + i,
       distanceMeters: 400 + i,
+      band: 15,
     });
   }
   out.push({
@@ -155,8 +163,7 @@ function adversarialAmenities(): Fixture[] {
     category: "parks",
     osmType: "node",
     osmId: 5100,
-    distanceMeters: 430,
-  });
+    distanceMeters: 430, band: 15 });
   // (4) CENTROID-DRIFT case (found in review): a seed plus members spread widely to ONE
   // side drags the cluster centroid off the seed and toward a lone pin placed just
   // beyond the clustering radius. That pin is legally unclustered (it is far from the
@@ -171,6 +178,7 @@ function adversarialAmenities(): Fixture[] {
       osmType: "node",
       osmId: 7000 + i,
       distanceMeters: 700 + i,
+      band: 15,
     });
   }
   out.push({
@@ -180,17 +188,16 @@ function adversarialAmenities(): Fixture[] {
     category: "schools",
     osmType: "node",
     osmId: 7100,
-    distanceMeters: 760,
-  });
+    distanceMeters: 760, band: 15 });
   return out;
 }
 
 const AMENITIES = {
   origin: ORIGIN,
-  walkMinutes: 15,
+  clip: WALK_CLIP,
   // Deliberately ABOVE the returned marker count so the truncation note is exercised.
-  counts: { groceries: 400, pharmacies: 41, parks: 30, schools: 31, transit: 32 },
-  amenities: adversarialAmenities(),
+  countsByBand: innerBandCounts({ groceries: 400, pharmacies: 41, parks: 30, schools: 31, transit: 32 }),
+  amenities: withBands(adversarialAmenities()),
 };
 
 async function stub(page: Page, amenities: unknown = AMENITIES) {
@@ -599,8 +606,8 @@ test("a dense area aggregates into counted donuts instead of a crowd of pins", a
 function coincident(count: number, at = { lat: ORIGIN.lat + 0.0022, lng: ORIGIN.lng - 0.002 }) {
   return {
     origin: ORIGIN,
-    walkMinutes: 15,
-    counts: { groceries: count, pharmacies: 0, parks: 0, schools: 0, transit: 0 },
+    clip: WALK_CLIP,
+    countsByBand: innerBandCounts({ groceries: count, pharmacies: 0, parks: 0, schools: 0, transit: 0 }),
     amenities: Array.from({ length: count }, (_, i) => ({
       ...at,
       name: `Mall unit ${i + 1}`,
@@ -608,6 +615,7 @@ function coincident(count: number, at = { lat: ORIGIN.lat + 0.0022, lng: ORIGIN.
       osmType: "node",
       osmId: 4000 + i,
       distanceMeters: 260 + i,
+      band: 15,
     })),
   };
 }
@@ -680,7 +688,9 @@ test("the fan owns the map while open, and Escape gives everything back", async 
   const trio = coincident(3, TRIO_AT);
   await stub(page, {
     ...trio,
-    counts: { groceries: 3, pharmacies: 0, parks: 6, schools: 0, transit: 0 },
+    // Both must be overridden together: spreading a base payload would keep ITS
+    // per-band block, leaving the chips reporting numbers this fixture never set.
+    countsByBand: innerBandCounts({ groceries: 3, pharmacies: 0, parks: 6, schools: 0, transit: 0 }),
     amenities: [
       ...trio.amenities,
       ...Array.from({ length: 6 }, (_, i) => ({
@@ -691,6 +701,7 @@ test("the fan owns the map while open, and Escape gives everything back", async 
         osmType: "node",
         osmId: 8000 + i,
         distanceMeters: 300 + i * 10,
+        band: 15,
       })),
     ],
   });
@@ -778,8 +789,8 @@ test("a cluster that CAN be split zooms in instead of listing", async ({ page })
   ];
   await stub(page, {
     origin: ORIGIN,
-    walkMinutes: 15,
-    counts: { groceries: 1, pharmacies: 1, parks: 0, schools: 0, transit: 0 },
+    clip: WALK_CLIP,
+    countsByBand: innerBandCounts({ groceries: 1, pharmacies: 1, parks: 0, schools: 0, transit: 0 }),
     amenities: PAIR.map((p, i) => ({
       lat: ORIGIN.lat + p.dlat,
       lng: ORIGIN.lng + p.dlng,
@@ -788,6 +799,7 @@ test("a cluster that CAN be split zooms in instead of listing", async ({ page })
       osmType: "node",
       osmId: 6000 + i,
       distanceMeters: 150 + i,
+      band: 15,
     })),
   });
   await loadAndSearch(page);
@@ -809,8 +821,8 @@ test("a cluster that CAN be split zooms in instead of listing", async ({ page })
 test("individual pins carry category icons and show place names when zoomed in", async ({ page }) => {
   await stub(page, {
     origin: ORIGIN,
-    walkMinutes: 15,
-    counts: { groceries: 1, pharmacies: 1, parks: 1, schools: 1, transit: 1 },
+    clip: WALK_CLIP,
+    countsByBand: innerBandCounts({ groceries: 1, pharmacies: 1, parks: 1, schools: 1, transit: 1 }),
     amenities: [
       ["Mega Image Unirii", "groceries", 0.0012, 0.0009],
       ["Farmacia Catena", "pharmacies", -0.0011, 0.0014],
@@ -825,6 +837,7 @@ test("individual pins carry category icons and show place names when zoomed in",
       osmType: "node",
       osmId: 3000 + i,
       distanceMeters: 120 + i * 40,
+      band: 15,
     })),
   });
   const map = await loadAndSearch(page);
@@ -893,7 +906,10 @@ test("the browser list shows distances, and the cap is admitted WITHOUT opening 
   // while the map's markers can merge several of them (coincident transit stops), so
   // quoting both numbers side by side compared different units (found in review).
   await expect(page.getByTestId("amenity-cap-note")).toContainText(/every place in range \(\d+\)/);
-  await expect(page.getByTestId("amenity-cap-note")).toContainText(/nearest of them/);
+  // Copy pinned deliberately: it must NOT claim "nearest" (task 065 — admission is
+  // distance-stratified, so the rendered set is a spread, not the closest N).
+  await expect(page.getByTestId("amenity-cap-note")).toContainText(/spread across the area/);
+  await expect(page.getByTestId("amenity-cap-note")).not.toContainText(/nearest/);
 
   await page.getByRole("button", { name: "Browse places" }).click();
   // Distance was already served but discarded by the client; the list is where it

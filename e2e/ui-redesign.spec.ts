@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { innerBandCounts, WALK_CLIP } from "./amenity-fixtures";
 
 // After a responsive relayout, retry the REAL geometric predicate until it holds
 // (rather than a stability proxy). A viewport change reprojects the origin marker
@@ -49,21 +50,20 @@ const WALK = {
 
 const AMENITIES = {
   origin: { lat: 44.4268, lng: 26.1025 },
-  walkMinutes: 15,
-  counts: { groceries: 62, pharmacies: 35, parks: 24, schools: 18, transit: 41 },
+  clip: WALK_CLIP,
+  countsByBand: innerBandCounts({ groceries: 62, pharmacies: 35, parks: 24, schools: 18, transit: 41 }),
   amenities: [
-    { lat: 44.4268, lng: 26.1085, name: "Mega Image Unirii", category: "groceries" },
-    { lat: 44.428, lng: 26.101, name: "Farmacia Tei", category: "pharmacies" },
-    { lat: 44.426, lng: 26.104, name: "Parcul Unirii", category: "parks" },
-    { lat: 44.429, lng: 26.1, name: "Școala Gimnazială 79", category: "schools" },
+    { lat: 44.4268, lng: 26.1085, name: "Mega Image Unirii", category: "groceries", band: 15 },
+    { lat: 44.428, lng: 26.101, name: "Farmacia Tei", category: "pharmacies", band: 15 },
+    { lat: 44.426, lng: 26.104, name: "Parcul Unirii", category: "parks", band: 15 },
+    { lat: 44.429, lng: 26.1, name: "Școala Gimnazială 79", category: "schools", band: 15 },
     {
       lat: 44.425,
       lng: 26.102,
       name: "Piața Unirii 2",
       category: "transit",
       osmType: "node",
-      osmId: 582555685,
-    },
+      osmId: 582555685, band: 15 },
   ],
 };
 
@@ -483,11 +483,12 @@ test("nearby browser starts clean when a new location replaces the result", asyn
   await page.route("**/api/amenities**", (route) => {
     const second = new URL(route.request().url()).searchParams.get("lat")?.startsWith("44.4368");
     const item = second
-      ? { lat: 44.4368, lng: 26.113, name: "Lidl Tineretului", category: "groceries" }
-      : { lat: 44.4268, lng: 26.103, name: "Mega Image Unirii", category: "groceries" };
+      ? { lat: 44.4368, lng: 26.113, name: "Lidl Tineretului", category: "groceries", band: 15 }
+      : { lat: 44.4268, lng: 26.103, name: "Mega Image Unirii", category: "groceries", band: 15 };
     route.fulfill({
       json: {
-        counts: { groceries: 1, pharmacies: 0, parks: 0, schools: 0, transit: 0 },
+        clip: WALK_CLIP,
+        countsByBand: innerBandCounts({ groceries: 1, pharmacies: 0, parks: 0, schools: 0, transit: 0 }),
         amenities: [item],
       },
     });
@@ -615,10 +616,10 @@ test("selection failure remains understandable and composed", async ({ page }) =
 });
 
 test("desktop rail gaps preserve map drag and west-side amenity inspection", async ({ page }) => {
-  const west = { lat: 44.4296, lng: 26.0475, name: "West-side park", category: "parks" };
+  const west = { lat: 44.4296, lng: 26.0475, name: "West-side park", category: "parks", band: 15 };
   await stubPopulatedState(page, {
     ...AMENITIES,
-    counts: { groceries: 0, pharmacies: 0, parks: 1, schools: 0, transit: 0 },
+    countsByBand: innerBandCounts({ groceries: 0, pharmacies: 0, parks: 1, schools: 0, transit: 0 }),
     amenities: [west],
   });
   await page.goto("/");

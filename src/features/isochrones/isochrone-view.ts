@@ -1,26 +1,37 @@
 /**
- * Pure view mapping for isochrone rings: the per-mode color ramps, the per-mode
- * minute labels, and the GeoJSON feature construction, split out of `AppMap` so
+ * Pure view mapping for isochrone rings: the per-mode color ramps, the legend and
+ * explainer copy, and the GeoJSON feature construction, split out of `AppMap` so
  * the color/label decisions and the feature shape are unit-testable without
  * MapLibre. The component keeps the imperative `setData`/marker/layer calls.
  *
- * BANDS vs MINUTES (task 053). The three nested rings are fixed POSITIONS
- * (inner → mid → outer). Their stable band ids — 15/30/45 — key the MapLibre
- * layers, the reveal animation, the ring filter, and the e2e stamps, and never
- * change with mode. The minute LABEL each band carries IS per-mode: walk and
- * transit label them 15/30/45 (band id == minute), but a car covers far more
- * ground per minute — a 45-min drive is ~3.5× the Bucharest map — so car labels
- * the same three bands 10/20/30 (owner decision), which fit the map extent. So
- * "band 45" is the outer ring in every mode; it just reads "45 min" for walk/
- * transit and "30 min" for car.
+ * BANDS vs MINUTES (task 053) now live in the pure `bands.ts` (task 065), because
+ * the server-side amenity clip needs them too and must not import this module's
+ * colour/copy graph. The band primitives are re-exported here so existing client
+ * call sites keep working; `bands.ts` is the single home.
  */
 
-// Cross-feature type-only edge: Mode/Ring belong to the selection state machine
-// in features/map until the isochrone contract grows its own types module.
+// Cross-feature type-only edge: Ring belongs to the selection state machine in
+// features/map. `Mode` comes via bands.ts, which owns the per-mode band labels.
 import type { Mode, Ring } from "@/features/map/selection-flow";
 
-/** A ring band id (fixed position key; NOT necessarily the displayed minute). */
-export type Band = 15 | 30 | 45;
+import {
+  bandMinutes,
+  LEGEND_BANDS,
+  RING_BANDS,
+  type Band,
+  type RingFilter,
+} from "@/features/isochrones/bands";
+
+export {
+  amenityBandsForFilter,
+  bandMinutes,
+  DEFAULT_RING_FILTER,
+  LEGEND_BANDS,
+  RING_BANDS,
+  RING_FILTER_OPTIONS,
+  type Band,
+  type RingFilter,
+} from "@/features/isochrones/bands";
 
 // Per-mode sequential ramps keyed by BAND (inner = brightest). Walk = teal,
 // Transit = violet, Car = blue — one mode's rings show at a time, so each hue
@@ -45,16 +56,6 @@ const RAMPS: Record<Mode, Record<Band, { fill: string; line: string }>> = {
   },
 };
 
-/** The minute label each band carries, per mode (see file header). */
-const BAND_MINUTES: Record<Mode, Record<Band, number>> = {
-  walk: { 15: 15, 30: 30, 45: 45 },
-  transit: { 15: 15, 30: 30, 45: 45 },
-  car: { 15: 10, 30: 20, 45: 30 },
-};
-
-// Draw order: largest band first so smaller (brighter) rings sit on top.
-export const RING_BANDS = [45, 30, 15] as const;
-export const LEGEND_BANDS = [15, 30, 45] as const;
 export const MARKER_COLOR: Record<Mode, string> = { walk: "#2dd4bf", transit: "#a78bfa", car: "#3b82f6" };
 export const MODE_LABEL: Record<Mode, string> = { walk: "Walking", transit: "Public transport", car: "Driving" };
 /** CSS accent variable per mode (defined in globals.css). Exhaustive Record so a
@@ -65,30 +66,12 @@ export const MODE_ACCENT: Record<Mode, string> = {
   car: "var(--hf-car)",
 };
 
-/** The displayed minute label for a band in a mode (walk/transit 15/30/45; car 10/20/30). */
-export function bandMinutes(mode: Mode, band: Band): number {
-  return BAND_MINUTES[mode][band];
-}
-
 /** The legend swatch color (line ramp) for a `band` in `mode`. `RAMPS` is an
  * exhaustive `Record<Mode, Record<Band, …>>`, so every (mode, band) resolves —
  * the return is always a defined color (impl F4: no dead optional chaining). */
 export function legendColor(mode: Mode, band: Band): string {
   return RAMPS[mode][band].line;
 }
-
-/** Which band(s) the map displays (task 024). All three rings are always
- * FETCHED (one provider call, cached); the filter only drives layer visibility.
- * The filter is band-keyed (position), so it survives a mode switch unchanged. */
-export type RingFilter = "all" | Band;
-
-/** Owner-picked (2026-07-18): a fresh selection shows the inner band only —
- * matching the amenity clip — and widens on demand. Band-keyed, so it is the
- * same default (the smallest/innermost band) in every mode. */
-export const DEFAULT_RING_FILTER: RingFilter = 15;
-
-/** Control order: the narrow-to-wide bands, then the full stack. */
-export const RING_FILTER_OPTIONS: readonly RingFilter[] = [15, 30, 45, "all"];
 
 /**
  * Per-layer visibility for a ring filter, over the per-band layers that

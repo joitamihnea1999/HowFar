@@ -1,4 +1,5 @@
 import type { Amenity, TransitStopMember } from "@/features/amenities/amenities";
+import type { Band } from "@/features/isochrones/bands";
 import { normalizeAmenityName } from "@/features/amenities/server/catalogue-normalize";
 
 /**
@@ -63,19 +64,36 @@ function modesEqual(a: readonly string[] = [], b: readonly string[] = []): boole
 }
 
 /**
- * Fuse coincident transit stops. Non-transit items pass through untouched and
- * keep their order. Input is expected sorted by distance (the catalogue query's
- * ORDER BY), so the nearest member of a cluster is the representative marker.
+ * Fuse coincident transit stops. Non-transit items pass through untouched and keep their
+ * order. Input is expected sorted by distance (the catalogue query's ORDER BY), and the
+ * representative marker is the nearest member **that sits in the innermost band any member
+ * occupies** — not simply the nearest member. (That header used to say "the nearest member
+ * of a cluster is the representative", the pre-fix model whose band/coordinate mismatch
+ * rendered markers outside the shading.)
  *
- * Returns the rewritten list plus `absorbedTransit` = Σ(members−1) over merged
- * groups, for the caller's count adjustment.
+ * Returns the rewritten list, the absorbed-duplicate total (Σ members−1), and
+ * **`transitBandAdjustments`: the NET per-band decrement** the caller must apply to its
+ * per-(category, band) counts (task 065).
+ *
+ * Why a net adjustment rather than "absorbed per band". A merged group is nominally one
+ * physical place (members within `R_CROSS_M`/`R_SAME_M` = 18 m), but 18 m is enough to
+ * straddle a ring boundary, so members can carry DIFFERENT bands — and the surviving
+ * marker adopts the innermost of them. Charging each absorbed member to its own band
+ * then double-punishes the innermost band: it loses the member it counted AND does not
+ * get credit for the marker now standing there, so a stop could be drawn in band 15
+ * while band 15 reported zero. The honest accounting is therefore: every member's band
+ * loses one, and the innermost band gains one back for the surviving place. Net effect
+ * is still Σ(members−1) removed overall, and the per-band totals still sum to the
+ * whole-clip total.
  */
 export function mergeCoincidentTransitStops<T extends Amenity>(
   items: readonly T[],
-): { amenities: T[]; absorbedTransit: number } {
+): { amenities: T[]; absorbedTransit: number; transitBandAdjustments: Map<Band, number> } {
   const transitIdx: number[] = [];
   for (let i = 0; i < items.length; i++) if (items[i].category === "transit") transitIdx.push(i);
-  if (transitIdx.length < 2) return { amenities: [...items], absorbedTransit: 0 };
+  if (transitIdx.length < 2) {
+    return { amenities: [...items], absorbedTransit: 0, transitBandAdjustments: new Map() };
+  }
 
   const nameKeyCache = new Map<number, string>();
   const nameKey = (i: number): string => {
@@ -157,6 +175,9 @@ export function mergeCoincidentTransitStops<T extends Amenity>(
   // Emit in original order. The first (nearest) member of a multi-stop group is
   // its representative marker; later members are skipped.
   let absorbedTransit = 0;
+  const transitBandAdjustments = new Map<Band, number>();
+  const adjust = (band: Band, delta: number) =>
+    transitBandAdjustments.set(band, (transitBandAdjustments.get(band) ?? 0) + delta);
   const emitted = new Set<number>();
   const out: T[] = [];
   for (let i = 0; i < items.length; i++) {
@@ -181,8 +202,36 @@ export function mergeCoincidentTransitStops<T extends Amenity>(
       lng: items[k].lng,
     }));
     absorbedTransit += group.length - 1;
-    out.push({ ...items[i], members, mergedCount: members.length });
+    // The merged marker is the NEAREST MEMBER THAT SITS IN THE INNERMOST BAND — its
+    // coordinates, name, distance and identity, not just its band id.
+    //
+    // Overriding only the `band` field reintroduced, one layer up, the defect the SQL
+    // clip fixes: a marker tagged band 15 while still
+    // carrying the outer member's COORDINATES renders outside the 15-minute shading. The
+    // band and the point have to come from the same row, so the representative itself
+    // moves rather than being relabelled. Members are within 18-24m, so which one
+    // represents the group is cosmetic — but band/coords agreement is not.
+    const bandOf = (k: number): number => items[k].band ?? Number.POSITIVE_INFINITY;
+    // `ordered` is ascending by index, i.e. by distance (the query's ORDER BY), so the
+    // first row at the innermost band is also the nearest such row.
+    const repIndex = ordered.reduce((best, k) => (bandOf(k) < bandOf(best) ? k : best), ordered[0]!);
+    const innermost = items[repIndex].band;
+    // Every member's band loses the row it contributed; the innermost band then gains
+    // one back for the marker that survives there. A member with no band (malformed row)
+    // is skipped rather than guessed at: the whole-clip total still drops and no band's
+    // chip is corrupted by an invented attribution.
+    for (const k of ordered) {
+      const band = items[k].band;
+      if (band !== undefined) adjust(band, 1);
+    }
+    if (innermost !== undefined) adjust(innermost, -1);
+    // Emitted at THIS position (the nearest member's slot). The payload is the chosen
+    // representative's row, which may be a farther one, so the caller re-sorts the final
+    // list by distance — see the re-sort in `catalogue.ts`. This comment used to claim the
+    // emission "keeps the input's distance ordering", which is the belief the re-sort
+    // exists to correct.
+    out.push({ ...items[repIndex], members, mergedCount: members.length });
   }
 
-  return { amenities: out, absorbedTransit };
+  return { amenities: out, absorbedTransit, transitBandAdjustments };
 }

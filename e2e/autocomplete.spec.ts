@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { emptyAmenities } from "./amenity-fixtures";
 
 // Autocomplete slice, providers STUBBED on their exact paths (never /api/**,
 // which would swallow /api/tiles). Exercises the dropdown, selection, and the
@@ -51,7 +52,7 @@ async function waitForMap(page: Page) {
   // Every selection now also fetches amenities — stub it so CI never hits live
   // Overpass/ORS (this suite asserts nothing about amenities).
   await page.route("**/api/amenities**", (route) =>
-    route.fulfill({ json: { origin: { lat: 44.428, lng: 26.1025 }, walkMinutes: 15, amenities: [] } }),
+    route.fulfill({ json: emptyAmenities({ lat: 44.428, lng: 26.1025 }) }),
   );
   await page.goto("/");
   const map = page.getByTestId("app-map");

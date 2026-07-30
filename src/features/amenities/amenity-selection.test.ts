@@ -201,3 +201,62 @@ describe("amenityDistanceSort", () => {
     expect(amenityDistanceSort(300, 5000)).toBeLessThan(amenityDistanceSort(301, 0));
   });
 });
+
+describe("band visibility rides the DATA path, not a layer filter (task 065)", () => {
+  const place = (name: string, category: "groceries" | "parks", band?: 15 | 30 | 45) => ({
+    lat: 44.4,
+    lng: 26.1,
+    name,
+    category,
+    ...(band === undefined ? {} : { band }),
+  });
+  const items = [
+    place("Inner Shop", "groceries", 15),
+    place("Mid Shop", "groceries", 30),
+    place("Outer Shop", "groceries", 45),
+    place("Inner Park", "parks", 15),
+    place("Outer Park", "parks", 45),
+  ];
+
+  it("returns only places in the visible bands, cumulatively", () => {
+    const names = (bands: (15 | 30 | 45)[]) =>
+      filterAmenityItems(items, ["groceries", "parks"], "", bands).map((i) => i.name);
+    // Filter 15 → inner only.
+    expect(names([15])).toEqual(["Inner Shop", "Inner Park"]);
+    // Filter 30 shades 15+30, so the inner places STAY (the cumulative rule).
+    expect(names([15, 30])).toEqual(["Inner Shop", "Mid Shop", "Inner Park"]);
+    // All bands → everything.
+    expect(names([15, 30, 45])).toHaveLength(5);
+  });
+
+  it("composes band ∩ category ∩ text query in one pass", () => {
+    expect(
+      filterAmenityItems(items, ["groceries"], "shop", [15, 30]).map((i) => i.name),
+    ).toEqual(["Inner Shop", "Mid Shop"]);
+    // A hidden category is still hidden regardless of band.
+    expect(filterAmenityItems(items, ["parks"], "", [30]).map((i) => i.name)).toEqual([]);
+  });
+
+  it("treats an omitted or empty band list as 'no band restriction'", () => {
+    // Keeps the browse list and popup callers working unchanged.
+    expect(filterAmenityItems(items, ["groceries", "parks"])).toHaveLength(5);
+    expect(filterAmenityItems(items, ["groceries", "parks"], "", [])).toHaveLength(5);
+  });
+
+  it("keeps a place with NO band visible rather than hiding it", () => {
+    // A malformed payload must not make a populated area look empty; the place is
+    // still real, so it renders.
+    const withUnbanded = [...items, place("Unknown Band Shop", "groceries")];
+    expect(
+      filterAmenityItems(withUnbanded, ["groceries"], "", [15]).map((i) => i.name),
+    ).toEqual(["Inner Shop", "Unknown Band Shop"]);
+  });
+
+  it("scopes the capped-total note to the counts it was given", () => {
+    // `counts` reaching the UI is ALREADY band-scoped, so the note can never quote
+    // a total for bands the user cannot see.
+    const bandScoped = { groceries: 2, pharmacies: 0, parks: 1, schools: 0, transit: 0 };
+    expect(cappedAmenityTotal(bandScoped, 3, ["groceries", "parks"])).toBeNull();
+    expect(cappedAmenityTotal(bandScoped, 2, ["groceries", "parks"])).toBe(3);
+  });
+});

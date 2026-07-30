@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { AMENITY_CATEGORIES, MAX_PER_CATEGORY } from "@/features/amenities/amenities";
+import { AMENITY_CATEGORIES, MAX_PER_CATEGORY_PER_BAND } from "@/features/amenities/amenities";
+import { LEGEND_BANDS } from "@/features/isochrones/bands";
 import { MAP_MAX_ZOOM } from "@/features/amenities/amenity-cluster";
 
 import {
@@ -122,12 +123,12 @@ describe("leavesToAmenities", () => {
 
   it("bounds the requested leaf count above the server's OWN ceiling, not a guessed number", () => {
     // Was `> 150`, which a cap of 151 would satisfy while a real cluster can hold
-    // MAX_PER_CATEGORY x every category = 750 (review: the the absorbed-pin case paging fix was
+    // MAX_PER_CATEGORY_PER_BAND x every category x every band = 1500 (task 065; review: the absorbed-pin paging fix was
     // protected by an assertion that could not fail). Tied to the two constants
     // that actually decide the ceiling, so raising either fails here instead of
     // silently truncating a list.
     expect(MAX_CLUSTER_LEAVES).toBeGreaterThanOrEqual(
-      MAX_PER_CATEGORY * AMENITY_CATEGORIES.length,
+      MAX_PER_CATEGORY_PER_BAND * AMENITY_CATEGORIES.length * LEGEND_BANDS.length,
     );
   });
 });
@@ -159,7 +160,7 @@ describe("collectClusterLeaves", () => {
   it("reaches every leaf of a cluster at the server's real ceiling", async () => {
     // 750 coincident places is legal (150 per category x 5). Before paging, leaf
     // 251 onward was unreachable while the popup still implied it was listed.
-    const TOTAL = MAX_PER_CATEGORY * AMENITY_CATEGORIES.length;
+    const TOTAL = MAX_PER_CATEGORY_PER_BAND * AMENITY_CATEGORIES.length * LEGEND_BANDS.length;
     const out = await collectClusterLeaves(
       [1],
       async (_id, limit, offset) => page(Math.max(0, Math.min(limit, TOTAL - offset)), `p${offset}`),

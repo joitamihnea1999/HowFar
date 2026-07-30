@@ -5,7 +5,9 @@
  * ## The load-bearing idea
  *
  * The owner's complaint was density: in a dense district up to 750 markers
- * (`MAX_PER_CATEGORY` × 5 categories) land inside one 15-min walk ring, and no
+ * (the then-current per-category cap × 5 categories) landed inside one 15-min walk
+ * ring — task 065 widened the clip to the whole reach area and moved the cap to
+ * `MAX_PER_CATEGORY_PER_BAND`, so the worst case is now ~1,050 marks — and no
  * amount of icon polish makes 8 places readable inside 20px. So instead of
  * *reducing* crowding, this module's constants make readable-overlap
  * **structurally impossible**: the source clusters anything closer than

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { innerBandCounts, WALK_CLIP } from "./amenity-fixtures";
 
 function ring(minutes: number, distance: number) {
   return {
@@ -24,20 +25,20 @@ const ISOCHRONE = {
 };
 
 const AMENITIES = {
-  counts: { groceries: 12, pharmacies: 8, parks: 5, schools: 7, transit: 14 },
+  clip: WALK_CLIP,
+  countsByBand: innerBandCounts({ groceries: 12, pharmacies: 8, parks: 5, schools: 7, transit: 14 }),
   amenities: [
-    { lat: 44.4268, lng: 26.1085, name: "Mega Image Unirii", category: "groceries" },
-    { lat: 44.428, lng: 26.101, name: "Farmacia Tei", category: "pharmacies" },
-    { lat: 44.426, lng: 26.104, name: "Parcul Unirii", category: "parks" },
-    { lat: 44.429, lng: 26.1, name: "Școala Gimnazială 79", category: "schools" },
+    { lat: 44.4268, lng: 26.1085, name: "Mega Image Unirii", category: "groceries", band: 15 },
+    { lat: 44.428, lng: 26.101, name: "Farmacia Tei", category: "pharmacies", band: 15 },
+    { lat: 44.426, lng: 26.104, name: "Parcul Unirii", category: "parks", band: 15 },
+    { lat: 44.429, lng: 26.1, name: "Școala Gimnazială 79", category: "schools", band: 15 },
     {
       lat: 44.425,
       lng: 26.102,
       name: "Piața Unirii 2",
       category: "transit",
       osmType: "node",
-      osmId: 582555685,
-    },
+      osmId: 582555685, band: 15 },
   ],
 };
 

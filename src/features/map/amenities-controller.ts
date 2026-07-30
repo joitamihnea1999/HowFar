@@ -2,45 +2,67 @@ import type maplibregl from "maplibre-gl";
 
 import {
   buildAmenityFeatures,
-  countByCategory,
   type Amenity,
   type AmenityCategoryKey,
+  countsForBands,
   type AmenityCounts,
+  type AmenityCountsByBand,
 } from "@/features/amenities/amenities";
-import { amenityMapCategoryFilter, filterAmenityItems } from "@/features/amenities/amenity-selection";
+import {
+  ALL_AMENITY_CATEGORY_KEYS,
+  amenityMapCategoryFilter,
+  filterAmenityItems,
+} from "@/features/amenities/amenity-selection";
 import {
   AMENITY_RETRY_DELAY_MS,
   classifyAmenityFailure,
   isNewAmenityOrigin,
-  originKey,
+  amenityFetchKey,
 } from "@/features/amenities/amenities-flow";
 import { type Pace } from "@/features/isochrones/pace";
+import { type TimeContext } from "@/features/isochrones/time-context";
+import { amenityBandsForFilter, LEGEND_BANDS, type RingFilter } from "@/features/isochrones/bands";
+import { type Mode } from "@/features/map/selection-flow";
 import type { LoadState } from "@/features/map/load-state";
 import { EMPTY_FC } from "@/features/map/map-setup";
 import type { Origin } from "@/features/map/selection-flow";
 
-/** Amenity-fetch identity: address (rounded origin) + pace, since the counting
- * radius (the ORS 15-min walk ring) is pace-dependent. A pace change ⇒ new key
- * ⇒ refetch; a mode-toggle / time-only change keeps the key ⇒ markers persist. */
-function amenityKey(origin: Origin, pace: Pace): string {
-  return `${originKey(origin.lat, origin.lng)}:${pace}`;
+/** Amenity-fetch identity — see `amenityFetchKey`. Task 065: the clip follows the
+ * MODE and its time context, so those are part of the identity too. A mode, pace or
+ * crowded/quiet change ⇒ new key ⇒ CLEAR + REFETCH. Only a ring-filter change is local
+ * (all three bands arrive in one response). The trailing half of this comment used to
+ * say "a mode-toggle / time-only change keeps the key ⇒ markers persist" — the retired
+ * pre-065 rule, left behind when the first half was corrected. */
+function amenityKey(origin: Origin, pace: Pace, mode: Mode, timeContext: TimeContext): string {
+  return amenityFetchKey({ origin, mode, pace, timeContext });
 }
 
-/** Amenities are a property of the resolved address, independent of the travel
- * mode — so they live outside the selection state machine, in their own UI slice. */
+/** The amenity UI slice. Amenities live outside the selection state machine, but they
+ * are NOT independent of the travel mode any more (task 065): the clip is the current
+ * mode's reach area at the current departure context, so the fetch identity includes
+ * both — see `amenityFetchKey`. */
 export type AmenityUi = {
   status: "idle" | "loading" | "ready" | "error";
+  /** Per-category totals for the bands currently SHADED — already band-scoped, so
+   * the chips can render it directly and can never claim places outside the visible
+   * rings (task 065). Derived from `countsByBand`; recomputed on a ring-filter change. */
   counts: AmenityCounts | null;
+  /** The server's raw pre-cap totals per (category, band) — the source `counts` is
+   * derived from, kept so a ring-filter change needs no refetch. */
+  countsByBand: AmenityCountsByBand | null;
   items: Amenity[];
 };
 
 /**
- * The amenities UI slice (task 023/024/042): fetch (with one auto-retry on a
- * transient failure), render markers as a single GeoJSON write, filter map +
- * browser by category via MapLibre `setFilter` on markers+glyphs (the list
- * shares the same selection array — no per-tile data rebuild), and clear on a
- * genuinely-new selection. Keyed by rounded origin so a Walk↔Transit toggle
- * persists the markers with no refetch; a generation guards stale responses. The
+ * The amenities UI slice (tasks 023/024/042/061/065): fetch (with one auto-retry on a
+ * transient failure), render markers as a single GeoJSON write, filter map + browser by
+ * category AND by visible ring band through the RECLUSTER path (`writeVisibleAmenities`,
+ * not `setFilter` — cluster totals freeze at index time, so a layer filter would leave
+ * hidden places inside donut counts), and clear on a genuinely-new selection or any
+ * key-changing recompute. Keyed by origin + mode + effective pace + departure context
+ * (`amenityFetchKey`), so a Walk↔Transit or crowded↔quiet toggle REFETCHES — task 065
+ * made the clip mode-dependent, retiring the old "keyed by rounded origin, a toggle
+ * persists the markers with no refetch" rule. A generation guards stale responses. The
  * retry-vs-surface decision is the pure `classifyAmenityFailure`. `dispose`
  * aborts the in-flight fetch and clears the pending retry timer.
  */
@@ -58,6 +80,19 @@ export interface AmenityClusterVisibility {
   absorbedPinIds: () => number[];
 }
 
+/** Does this payload carry a usable per-(category, band) count block? */
+function isCountsByBand(value: unknown): value is AmenityCountsByBand {
+  if (!value || typeof value !== "object") return false;
+  const byBand = value as Record<string, unknown>;
+  return LEGEND_BANDS.every((band) => {
+    const inBand = byBand[String(band)];
+    if (!inBand || typeof inBand !== "object") return false;
+    return ALL_AMENITY_CATEGORY_KEYS.every(
+      (key: string) => typeof (inBand as Record<string, unknown>)[key] === "number",
+    );
+  });
+}
+
 export function createAmenitiesController({
   map,
   el,
@@ -66,8 +101,10 @@ export function createAmenitiesController({
   amenityRef,
   amenityOriginRef,
   selectedCategoriesRef,
+  ringFilterRef,
   resetAmenityHover,
   getPopupCategory,
+  getPopupBand,
   closeStopPopup,
   invalidateClusters,
   closeSpider,
@@ -80,8 +117,16 @@ export function createAmenitiesController({
   amenityRef: { current: AmenityUi };
   amenityOriginRef: { current: Origin | null };
   selectedCategoriesRef: { current: AmenityCategoryKey[] };
+  /** The live ring filter. Amenity visibility follows the SHADING: only places in the
+   * bands currently painted are drawn and counted (task 065). A ref (not a value) for
+   * the same reason as `selectedCategoriesRef` — every filter application must read
+   * the current value, so a late fetch cannot repaint against a stale filter. */
+  ringFilterRef: { current: RingFilter };
   resetAmenityHover: () => void;
   getPopupCategory: () => AmenityCategoryKey | null;
+  /** The band of the place an open POI popup describes, so narrowing the ring filter can
+   * close a popup for a place that is no longer shaded (task 065). */
+  getPopupBand: () => number | null;
   closeStopPopup: () => void;
   /** Bumps the popup controller's cluster generation + closes an open cluster list
    * whenever the source is re-indexed (the absorbed-pin case). */
@@ -116,6 +161,11 @@ export function createAmenitiesController({
   let spiderView = false;
   /** Are amenity marks currently suppressed, by either surface? */
   const decluttered = () => reachView || spiderView;
+
+  /** The bands whose places are currently shaded — CUMULATIVE, because a ring layer
+   * paints the whole reach polygon for its band rather than an annulus (see
+   * `amenityBandsForFilter`). Read live, never snapshotted. */
+  const visibleBands = () => amenityBandsForFilter(ringFilterRef.current);
 
   /** Every amenity layer, and which half of the clustered source it draws. A
    * clustered source serves clusters AND individual points from one source, so
@@ -220,7 +270,7 @@ export function createAmenitiesController({
    * different place.
    */
   function writeVisibleAmenities(items: Amenity[], categories: AmenityCategoryKey[]): Amenity[] {
-    const visibleItems = filterAmenityItems(items, categories);
+    const visibleItems = filterAmenityItems(items, categories, "", visibleBands());
     // FIRST, so the filter application at the end of this function is the final word
     // on visibility (closing the fan re-applies it too).
     closeSpider();
@@ -266,22 +316,28 @@ export function createAmenitiesController({
     return visibleItems;
   }
 
-  function renderAmenities(items: Amenity[], counts: AmenityCounts) {
+  /** Per-category totals for the bands currently shaded. */
+  function scopedCounts(byBand: AmenityCountsByBand): AmenityCounts {
+    return countsForBands(byBand, visibleBands());
+  }
+
+  function renderAmenities(items: Amenity[], countsByBand: AmenityCountsByBand) {
+    const counts = scopedCounts(countsByBand);
     // Buffer until the style (and the amenities source) exist — an amenity
     // response can land before `load`, exactly like the isochrone.
     if (!loadState.styleLoaded) {
-      loadState.pendingAmenities = { items, counts };
-      setAmenity({ status: "ready", counts, items });
+      loadState.pendingAmenities = { items, countsByBand };
+      setAmenity({ status: "ready", counts, countsByBand, items });
       return;
     }
     const visibleItems = writeVisibleAmenities(items, selectedCategoriesRef.current);
     el.dataset.amenityCount = String(visibleItems.length);
-    setAmenity({ status: "ready", counts, items });
+    setAmenity({ status: "ready", counts, countsByBand, items });
   }
 
   function applyAmenitySelection(categories: AmenityCategoryKey[]) {
     if (amenityRef.current.status !== "ready") return;
-    let visibleItems = filterAmenityItems(amenityRef.current.items, categories);
+    let visibleItems = filterAmenityItems(amenityRef.current.items, categories, "", visibleBands());
     if (loadState.styleLoaded) {
       // Recluster, not just re-filter — see writeVisibleAmenities. This also
       // drops hover + popup affordances for a now-hidden category.
@@ -290,11 +346,43 @@ export function createAmenitiesController({
     el.dataset.amenityCount = String(visibleItems.length);
     const popupCategory = getPopupCategory();
     if (popupCategory && !categories.includes(popupCategory)) closeStopPopup();
+    closePopupOutsideVisibleBands();
   }
 
-  // Drop amenity markers/counts and supersede any in-flight fetch or pending
-  // retry. Called only on a genuinely-new selection — NOT on a mode toggle
-  // (which must persist).
+  /**
+   * Re-apply amenity visibility after a RING-FILTER change (task 065).
+   *
+   * Goes through the same recluster chokepoint as a category toggle — never a layer
+   * filter — so the donut totals, the chips and `data-amenity-count` all move
+   * together. No refetch: every band came in one response.
+   */
+  /** Close an open POI popup whose place sits in a band that is no longer shaded. Without
+   * this, `All → inspect an outer-band place → narrow to 15 min` leaves a popup describing
+   * somewhere outside the visible area — the same "shown thing is outside the shading"
+   * inconsistency the band filter exists to prevent. */
+  function closePopupOutsideVisibleBands() {
+    const band = getPopupBand();
+    if (band === null) return;
+    if (!visibleBands().includes(band as never)) closeStopPopup();
+  }
+
+  function applyRingFilterToAmenities() {
+    const current = amenityRef.current;
+    if (current.status !== "ready" || !current.countsByBand) return;
+    const visibleItems = loadState.styleLoaded
+      ? writeVisibleAmenities(current.items, selectedCategoriesRef.current)
+      : filterAmenityItems(current.items, selectedCategoriesRef.current, "", visibleBands());
+    el.dataset.amenityCount = String(visibleItems.length);
+    // Chips must shrink with the shading, or they claim places outside the rings.
+    setAmenity({ ...current, counts: scopedCounts(current.countsByBand) });
+    closePopupOutsideVisibleBands();
+  }
+
+  // Drop amenity markers/counts and supersede any in-flight fetch or pending retry.
+  // Called on a genuinely-new selection AND on any key-changing recompute — a mode or
+  // crowded/quiet change included, since task 065 made the clip mode-dependent so those
+  // markers describe an area the user is no longer looking at. (It used to say "NOT on a
+  // mode toggle (which must persist)", which is the retired contract.)
   function clearAmenities() {
     closeSpider();
     abort?.abort();
@@ -312,7 +400,7 @@ export function createAmenitiesController({
     clustersRef.current?.clear();
     invalidateClusters();
     delete el.dataset.amenityCount;
-    setAmenity({ status: "idle", counts: null, items: [] });
+    setAmenity({ status: "idle", counts: null, countsByBand: null, items: [] });
   }
 
   // One amenity fetch attempt. On a transient failure the first attempt schedules
@@ -320,41 +408,71 @@ export function createAmenitiesController({
   // would self-heal. Any failure that DOES surface clears the origin key — an
   // error must never pin the key, or the review's Retry button and a mode-toggle
   // recompute would be swallowed by the isNewAmenityOrigin guard.
-  function fetchAmenities(origin: Origin, attempt: number, pace: Pace) {
-    key = amenityKey(origin, pace);
+  function fetchAmenities(
+    origin: Origin,
+    attempt: number,
+    pace: Pace,
+    mode: Mode,
+    timeContext: TimeContext,
+  ) {
+    key = amenityKey(origin, pace, mode, timeContext);
     amenityOriginRef.current = origin;
     const reqGen = (gen += 1);
     abort?.abort();
     const controller = new AbortController();
     abort = controller;
-    setAmenity({ status: "loading", counts: null, items: [] });
+    setAmenity({ status: "loading", counts: null, countsByBand: null, items: [] });
 
     const failWith = (httpStatus: number | null) => {
       if (classifyAmenityFailure(httpStatus, attempt) === "retry") {
         retryTimer = setTimeout(() => {
           if (reqGen !== gen) return; // superseded meanwhile
-          fetchAmenities(origin, attempt + 1, pace);
+          fetchAmenities(origin, attempt + 1, pace, mode, timeContext);
         }, AMENITY_RETRY_DELAY_MS);
         return;
       }
       // A surfaced error clears the origin key so Retry / a toggle recompute can
       // refetch the same origin (an error must never pin the key).
       key = null;
-      setAmenity({ status: "error", counts: null, items: [] });
+      setAmenity({ status: "error", counts: null, countsByBand: null, items: [] });
     };
 
-    fetch(`/api/amenities?lat=${origin.lat}&lng=${origin.lng}&pace=${pace}`, { signal: controller.signal })
+    // `mode` is REQUIRED by the route (task 065): a missing one is a 400, never a
+    // silent walk clip. `preset` rides along in every mode so the server resolves the
+    // same departure/traffic context the rings were drawn at.
+    fetch(
+      `/api/amenities?lat=${origin.lat}&lng=${origin.lng}&pace=${pace}&mode=${mode}&preset=${timeContext.preset}`,
+      { signal: controller.signal },
+    )
       .then(async (res) => {
         if (reqGen !== gen) return;
         if (!res.ok) return void failWith(res.status);
-        const data = (await res.json()) as { amenities?: unknown; counts?: AmenityCounts };
+        const data = (await res.json()) as {
+          amenities?: unknown;
+          countsByBand?: unknown;
+        };
         if (reqGen !== gen) return;
         // A valid-but-wrong-shape body (no array) is an error, not "no
         // amenities" — and deterministic, so it reports the real (non-5xx)
         // status and is never auto-retried.
         if (!Array.isArray(data.amenities)) return void failWith(res.status);
+        // Per-band totals are REQUIRED now, and a missing/malformed block is an error
+        // rather than something to paper over. The old code fell back to recounting the
+        // returned rows, which would silently turn a stale or wrong-shaped payload into
+        // chips that undercount every capped category — precisely the kind of quiet lie
+        // this task exists to remove. Deterministic, so it is never auto-retried.
+        if (!isCountsByBand(data.countsByBand)) return void failWith(res.status);
         const items = data.amenities as Amenity[];
-        renderAmenities(items, data.counts ?? countByCategory(items));
+        // Every row must carry a legal band. Band visibility is what keeps markers inside
+        // the shaded area, so a row without one would be drawn under EVERY ring filter —
+        // including out beyond the shading, which the server-side clip is careful to
+        // prevent. The server always sends it (`band` is
+        // required on `CatalogueAmenity`), so a missing one means a stale or malformed
+        // payload: deterministic, and reported rather than rendered.
+        if (!items.every((a) => LEGEND_BANDS.includes(a.band as never))) {
+          return void failWith(res.status);
+        }
+        renderAmenities(items, data.countsByBand);
       })
       .catch((err) => {
         if ((err as Error)?.name === "AbortError" || reqGen !== gen) return;
@@ -362,15 +480,27 @@ export function createAmenitiesController({
       });
   }
 
-  // Fetch amenities for a resolved origin at the active pace, in parallel with
-  // the isochrone. A mode-toggle or time-only change resolves the SAME
-  // origin+pace ⇒ no refetch (markers persist). A PACE change resolves the same
-  // origin but a NEW pace-scoped key ⇒ refetch (the walk-ring radius changed, so
-  // counts must). A failure cleared the key, so the same origin+pace refetches.
-  function maybeFetchAmenities(origin: Origin, pace: Pace) {
-    const nextKey = amenityKey(origin, pace);
+  // Fetch amenities for a resolved origin, in parallel with the isochrone.
+  //
+  // Task 065 inverted the old rule. The clip is the CURRENT mode's reach area at the
+  // CURRENT departure context, so a mode toggle or a crowded/quiet change genuinely
+  // changes which places are in range and MUST refetch — where previously they were
+  // deliberately persisted. A ring-filter change still does not refetch: all three
+  // bands come in one response and visibility is applied client-side. A failure
+  // cleared the key, so the same selection can refetch.
+  function maybeFetchAmenities(
+    origin: Origin,
+    pace: Pace,
+    mode: Mode,
+    timeContext: TimeContext,
+  ) {
+    const nextKey = amenityKey(origin, pace, mode, timeContext);
     if (!isNewAmenityOrigin(key, nextKey)) return;
-    fetchAmenities(origin, 0, pace);
+    // A key-changing fetch replaces a marker set that described a DIFFERENT area, so
+    // the old markers must go now rather than linger over the new shading while the
+    // request is in flight (and stay forever if it fails).
+    clearAmenities();
+    fetchAmenities(origin, 0, pace, mode, timeContext);
   }
 
   return {
@@ -378,6 +508,7 @@ export function createAmenitiesController({
     reapplyFilter: () => applyAmenityLayerFilter(selectedCategoriesRef.current),
     renderAmenities,
     applyAmenitySelection,
+    applyRingFilterToAmenities,
     clearAmenities,
     fetchAmenities,
     maybeFetchAmenities,

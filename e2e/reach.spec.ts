@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { emptyAmenities } from "./amenity-fixtures";
 
 // Right-click "how do I get there?" (task 052 D). Provider calls stubbed by EXACT
 // path. Walk reach is answered client-side (point-in-ring on the drawn rings);
@@ -49,7 +50,7 @@ const PLAN = {
 async function setup(page: Page) {
   const reachCalls: string[] = [];
   await page.route("**/api/amenities**", (route) =>
-    route.fulfill({ json: { origin: { lat: 44.4268, lng: 26.1025 }, walkMinutes: 15, amenities: [] } }),
+    route.fulfill({ json: emptyAmenities({ lat: 44.4268, lng: 26.1025 }) }),
   );
   await page.route("**/api/geocode**", (route) =>
     route.fulfill({ json: { lat: 44.4268, lng: 26.1025, label: "Piața Unirii, București" } }),
@@ -166,7 +167,7 @@ test("directions DOCK in the result sheet — selection/filters block hidden, no
 test("public-transport mode: a point outside the drawn rings STILL plans the trip (task 060 — the no-fetch T1 gate is gone)", async ({ page }) => {
   const reachCalls: string[] = [];
   await page.route("**/api/amenities**", (route) =>
-    route.fulfill({ json: { origin: { lat: 44.4268, lng: 26.1025 }, walkMinutes: 15, amenities: [] } }),
+    route.fulfill({ json: emptyAmenities({ lat: 44.4268, lng: 26.1025 }) }),
   );
   await page.route("**/api/geocode**", (route) => route.fulfill({ json: { lat: 44.4268, lng: 26.1025, label: "Piața Unirii" } }));
   await page.route("**/api/suggest**", (route) => route.fulfill({ json: { suggestions: [] } }));
@@ -195,7 +196,7 @@ test("public-transport mode: a point outside the drawn rings STILL plans the tri
 
 test("public-transport mode: no route found is reported", async ({ page }) => {
   await page.route("**/api/amenities**", (route) =>
-    route.fulfill({ json: { origin: { lat: 44.4268, lng: 26.1025 }, walkMinutes: 15, amenities: [] } }),
+    route.fulfill({ json: emptyAmenities({ lat: 44.4268, lng: 26.1025 }) }),
   );
   await page.route("**/api/geocode**", (route) =>
     route.fulfill({ json: { lat: 44.4268, lng: 26.1025, label: "Piața Unirii" } }),

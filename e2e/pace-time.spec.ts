@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { innerBandCounts, WALK_CLIP, withBands } from "./amenity-fixtures";
 
 // Pace + time-context selectors (task 051). Providers are stubbed by EXACT path.
 // The mock cannot prove the server ring→count coupling (that lives in unit +
@@ -70,9 +71,9 @@ async function stubBase(page: Page): Promise<Captured> {
     route.fulfill({
       json: {
         origin: { lat: 44.4268, lng: 26.1025 },
-        walkMinutes: 15,
-        counts: { groceries: n, pharmacies: 0, parks: 0, schools: 0, transit: 0 },
-        amenities,
+        clip: WALK_CLIP,
+        countsByBand: innerBandCounts({ groceries: n, pharmacies: 0, parks: 0, schools: 0, transit: 0 }),
+        amenities: withBands(amenities),
       },
     });
   });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  amenityFetchKey,
   AMENITY_MAX_AUTO_RETRIES,
   classifyAmenityFailure,
   isNewAmenityOrigin,
@@ -21,7 +22,7 @@ describe("isNewAmenityOrigin", () => {
     expect(isNewAmenityOrigin(null, originKey(44.4, 26.1))).toBe(true);
   });
 
-  it("is false for the same origin (a mode toggle → persist, no refetch)", () => {
+  it("is false for an unchanged KEY (⇒ persist; the key itself now carries mode/time)", () => {
     const key = originKey(44.4, 26.1);
     expect(isNewAmenityOrigin(key, key)).toBe(false);
   });
@@ -75,5 +76,65 @@ describe("classifyAmenityFailure", () => {
   it("honours an explicit maxRetries override", () => {
     expect(classifyAmenityFailure(500, 1, 2)).toBe("retry");
     expect(classifyAmenityFailure(500, 2, 2)).toBe("surface");
+  });
+});
+
+describe("amenityFetchKey — what does and does not trigger a refetch (task 065)", () => {
+  const origin = { lat: 44.4268, lng: 26.1025 };
+  const crowded = { kind: "preset", preset: "crowded" } as const;
+  const quiet = { kind: "preset", preset: "quiet" } as const;
+  const base = { origin, mode: "walk", pace: "normal", timeContext: crowded } as const;
+
+  it("changes on a MODE toggle — the clip follows the mode, so the place set really differs", () => {
+    // This is the contract task 065 REVERSED. Before it, a Walk↔Transit toggle
+    // deliberately kept the same key so markers persisted; now they must refetch.
+    const walk = amenityFetchKey(base);
+    const transit = amenityFetchKey({ ...base, mode: "transit" });
+    const car = amenityFetchKey({ ...base, mode: "car" });
+    expect(new Set([walk, transit, car]).size).toBe(3);
+  });
+
+  it("changes on a crowded↔quiet toggle in the time-aware modes", () => {
+    expect(amenityFetchKey({ ...base, mode: "transit", timeContext: crowded })).not.toBe(
+      amenityFetchKey({ ...base, mode: "transit", timeContext: quiet }),
+    );
+    expect(amenityFetchKey({ ...base, mode: "car", timeContext: crowded })).not.toBe(
+      amenityFetchKey({ ...base, mode: "car", timeContext: quiet }),
+    );
+  });
+
+  it("changes on a walking-pace change in walk mode", () => {
+    expect(amenityFetchKey({ ...base, pace: "slow" })).not.toBe(amenityFetchKey(base));
+  });
+
+  it("is UNCHANGED by a pace change outside walk (effectivePace forces Normal)", () => {
+    // A Slow pace left over from Walk must not fragment the transit cache, and must
+    // not disagree with the pace the server will actually clip at.
+    expect(amenityFetchKey({ ...base, mode: "transit", pace: "slow" })).toBe(
+      amenityFetchKey({ ...base, mode: "transit", pace: "normal" }),
+    );
+    expect(amenityFetchKey({ ...base, mode: "car", pace: "slow" })).toBe(
+      amenityFetchKey({ ...base, mode: "car", pace: "normal" }),
+    );
+  });
+
+  it("changes on a new origin, and is stable for the same origin pre/post rounding", () => {
+    expect(amenityFetchKey({ ...base, origin: { lat: 44.5, lng: 26.2 } })).not.toBe(
+      amenityFetchKey(base),
+    );
+    expect(amenityFetchKey({ ...base, origin: { lat: 44.426801, lng: 26.102499 } })).toBe(
+      amenityFetchKey({ ...base, origin: { lat: 44.4268, lng: 26.1025 } }),
+    );
+  });
+
+  it("carries NO ring-filter term — widening or narrowing the rings must not refetch", () => {
+    // All three bands arrive in one response and band visibility is applied
+    // client-side, so the ring filter is a free local toggle. If a ring-filter term
+    // ever leaks into this key, every toggle becomes a request.
+    const key = amenityFetchKey(base);
+    expect(key).toBe("44.42680,26.10250:walk:normal:crowded");
+    for (const filter of [15, 30, 45, "all"]) {
+      expect(key).not.toContain(String(filter));
+    }
   });
 });

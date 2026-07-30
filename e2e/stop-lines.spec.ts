@@ -1,4 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { innerBandCounts, WALK_CLIP ,
+  withBands,
+} from "./amenity-fixtures";
 
 // Transit-stop line popup (task 021). A click on a transit marker opens a popup
 // listing the lines that serve it — and must NOT start a new isochrone
@@ -40,6 +43,8 @@ function amenities(
     lng: number;
     name: string;
     category: string;
+    /** Ring band (task 065) — required by the client, see amenity-fixtures.ts. */
+    band?: number;
     osmType?: string;
     osmId?: number;
     members?: Member[];
@@ -48,9 +53,9 @@ function amenities(
 ) {
   return {
     origin: ORIGIN,
-    walkMinutes: 15,
-    counts: { groceries: 0, pharmacies: 0, parks: 0, schools: 0, transit: 0 },
-    amenities: items,
+    clip: WALK_CLIP,
+    countsByBand: innerBandCounts({ groceries: 0, pharmacies: 0, parks: 0, schools: 0, transit: 0 }),
+    amenities: withBands(items),
   };
 }
 
@@ -134,7 +139,7 @@ test("clicking a transit stop shows its lines WITHOUT starting a selection", asy
     route.fulfill({ json: WALK });
   });
   await page.route("**/api/amenities**", (route) =>
-    route.fulfill({ json: amenities([{ ...STOP, name: "Piața Romană", category: "transit", osmType: "node", osmId: 444384784 }]) }),
+    route.fulfill({ json: amenities([{ ...STOP, name: "Piața Romană", category: "transit", osmType: "node", osmId: 444384784, band: 15 }]) }),
   );
   await page.route("**/api/stop-lines**", (route) =>
     route.fulfill({
@@ -176,7 +181,7 @@ test("clicking a transit stop shows its lines WITHOUT starting a selection", asy
 test("a stop that serves no mapped routes shows an honest empty state (loading clears)", async ({ page }) => {
   await stubBase(page);
   await page.route("**/api/amenities**", (route) =>
-    route.fulfill({ json: amenities([{ ...STOP, name: "Lonely Stop", category: "transit", osmType: "node", osmId: 7 }]) }),
+    route.fulfill({ json: amenities([{ ...STOP, name: "Lonely Stop", category: "transit", osmType: "node", osmId: 7, band: 15 }]) }),
   );
   await page.route("**/api/stop-lines**", (route) => route.fulfill({ json: { name: "Lonely Stop", lines: [] } }));
 
@@ -190,7 +195,7 @@ test("a stop that serves no mapped routes shows an honest empty state (loading c
 test("a stop-lines failure shows an error state, not a stuck spinner", async ({ page }) => {
   await stubBase(page);
   await page.route("**/api/amenities**", (route) =>
-    route.fulfill({ json: amenities([{ ...STOP, name: "Broken Stop", category: "transit", osmType: "node", osmId: 9 }]) }),
+    route.fulfill({ json: amenities([{ ...STOP, name: "Broken Stop", category: "transit", osmType: "node", osmId: 9, band: 15 }]) }),
   );
   await page.route("**/api/stop-lines**", (route) =>
     route.fulfill({ status: 502, json: { error: "Upstream provider error" } }),
@@ -213,7 +218,7 @@ test("clicking a NON-transit marker opens its info popup WITHOUT starting a sele
     route.fulfill({ json: { lat: GROCERY.lat, lng: GROCERY.lng, label: "Should not happen" } });
   });
   await page.route("**/api/amenities**", (route) =>
-    route.fulfill({ json: amenities([{ ...GROCERY, name: "Mega Image", category: "groceries", osmType: "node", osmId: 5 }]) }),
+    route.fulfill({ json: amenities([{ ...GROCERY, name: "Mega Image", category: "groceries", osmType: "node", osmId: 5, band: 15 }]) }),
   );
   await page.route("**/api/stop-lines**", (route) => route.fulfill({ json: { name: "", lines: [] } }));
 
@@ -240,7 +245,7 @@ test("a click in a marker-free gap still starts a normal selection", async ({ pa
     route.fulfill({ json: { lat: ORIGIN.lat - 0.006, lng: ORIGIN.lng, label: "A fresh spot" } });
   });
   await page.route("**/api/amenities**", (route) =>
-    route.fulfill({ json: amenities([{ ...STOP, name: "East Stop", category: "transit", osmType: "node", osmId: 111 }]) }),
+    route.fulfill({ json: amenities([{ ...STOP, name: "East Stop", category: "transit", osmType: "node", osmId: 111, band: 15 }]) }),
   );
 
   const map = await loadAndSearch(page);
@@ -258,7 +263,7 @@ test("an amenity sitting exactly on the searched origin is still clickable (orig
   await stubBase(page);
   await page.route("**/api/amenities**", (route) =>
     route.fulfill({
-      json: amenities([{ ...ORIGIN, name: "Origin Stop", category: "transit", osmType: "node", osmId: 33 }]),
+      json: amenities([{ ...ORIGIN, name: "Origin Stop", category: "transit", osmType: "node", osmId: 33, band: 15 }]),
     }),
   );
   await page.route("**/api/stop-lines**", (route) =>
@@ -278,7 +283,7 @@ test("an amenity sitting exactly on the searched origin is still clickable (orig
 test("a transit stop with no OSM identity falls back to the info popup (never silence)", async ({ page }) => {
   await stubBase(page);
   await page.route("**/api/amenities**", (route) =>
-    route.fulfill({ json: amenities([{ ...STOP, name: "Ghost Stop", category: "transit" }]) }),
+    route.fulfill({ json: amenities([{ ...STOP, name: "Ghost Stop", category: "transit", band: 15 }]) }),
   );
 
   const map = await loadAndSearch(page);
@@ -388,7 +393,7 @@ test("opening a merged marker from the keyboard browser unions the same lines", 
 test("hovering near a marker arms the hover state; leaving clears it", async ({ page }) => {
   await stubBase(page);
   await page.route("**/api/amenities**", (route) =>
-    route.fulfill({ json: amenities([{ ...STOP, name: "East Stop", category: "transit", osmType: "node", osmId: 111 }]) }),
+    route.fulfill({ json: amenities([{ ...STOP, name: "East Stop", category: "transit", osmType: "node", osmId: 111, band: 15 }]) }),
   );
 
   const map = await loadAndSearch(page);
@@ -423,7 +428,7 @@ async function stubRouteScene(page: Page) {
   await stubBase(page);
   await page.route("**/api/amenities**", (route) =>
     route.fulfill({
-      json: amenities([{ ...STOP, name: "Piața Romană", category: "transit", osmType: "node", osmId: 444384784 }]),
+      json: amenities([{ ...STOP, name: "Piața Romană", category: "transit", osmType: "node", osmId: 444384784, band: 15 }]),
     }),
   );
   await page.route("**/api/stop-lines**", (route) =>
@@ -579,8 +584,8 @@ test("a slow first stop's response never paints under a second stop's popup (sta
   await page.route("**/api/amenities**", (route) =>
     route.fulfill({
       json: amenities([
-        { ...STOP, name: "East Stop", category: "transit", osmType: "node", osmId: 111 },
-        { ...SOUTH, name: "South Stop", category: "transit", osmType: "node", osmId: 222 },
+        { ...STOP, name: "East Stop", category: "transit", osmType: "node", osmId: 111, band: 15 },
+        { ...SOUTH, name: "South Stop", category: "transit", osmType: "node", osmId: 222, band: 15 },
       ]),
     }),
   );

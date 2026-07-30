@@ -1,5 +1,11 @@
-import type { Amenity, AmenityCategoryKey } from "@/features/amenities/amenities";
+import {
+  AMENITY_CATEGORIES,
+  MAX_PER_CATEGORY_PER_BAND,
+  type Amenity,
+  type AmenityCategoryKey,
+} from "@/features/amenities/amenities";
 import { SPIDER_MAX_LEAVES } from "@/features/amenities/amenity-spider";
+import { LEGEND_BANDS } from "@/features/isochrones/bands";
 
 /**
  * Pure decisions for expanding an amenity cluster (task 061).
@@ -140,11 +146,16 @@ export function leavesToAmenities(leaves: readonly LeafFeature[]): Amenity[] {
     const category = typeof props.category === "string" ? (props.category as AmenityCategoryKey) : null;
     if (!category) continue;
 
+    // Band rides through so a popup opened from a cluster's leaves list can still be
+    // closed when the ring filter narrows past it — every popup path must carry the band,
+    // or the close only works for direct pin clicks.
+    const band = LEGEND_BANDS.find((b) => b === props.band);
     const amenity: Amenity = {
       lat,
       lng,
       name: typeof props.name === "string" ? props.name : "",
       category,
+      ...(band === undefined ? {} : { band }),
     };
     if (typeof props.osmType === "string") amenity.osmType = props.osmType;
     const osmId = Number(props.osmId);
@@ -198,12 +209,19 @@ export function dedupeAmenities(items: readonly Amenity[]): Amenity[] {
   return out;
 }
 
-/** Hard upper bound across all pages: above the server's own ceiling of
- * `MAX_PER_CATEGORY` x `AMENITY_CATEGORIES.length` returned amenities, so it can
- * never truncate a real cluster — it exists only as a runaway guard. The unit test
- * asserts it against those two constants rather than a hand-written number, so
- * raising the per-category cap cannot silently reintroduce truncation. */
-export const MAX_CLUSTER_LEAVES = 800;
+/** Hard upper bound across all pages: above the server's own ceiling of returned
+ * amenities, so it can never truncate a real cluster — it exists only as a runaway
+ * guard. The unit test asserts it against the server constants rather than a
+ * hand-written number, so raising a cap cannot silently reintroduce truncation.
+ *
+ * Task 065 re-derived it: the server cap became per (category, BAND), so the
+ * ceiling gained a ×3 factor (5 categories × 3 bands × 100 = 1500, up from 150 × 5
+ * = 750) and the old 800 would have started cutting the leaves list — quietly
+ * breaking the "every place in this mark is reachable" guarantee the resolution
+ * ladder makes. Derived from the constants, not restated, precisely so the next cap
+ * change fails the test instead of the user. */
+export const MAX_CLUSTER_LEAVES =
+  MAX_PER_CATEGORY_PER_BAND * AMENITY_CATEGORIES.length * LEGEND_BANDS.length;
 
 /** Leaves fetched per `getClusterLeaves` call; `collectClusterLeaves` pages by
  * offset up to `MAX_CLUSTER_LEAVES`. Paging matters because a cluster can hold

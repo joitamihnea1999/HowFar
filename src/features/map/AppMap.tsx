@@ -3,7 +3,7 @@
 import maplibregl from "maplibre-gl";
 import { Protocol } from "pmtiles";
 import type { ReactNode } from "react";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import "maplibre-gl/dist/maplibre-gl.css";
 
@@ -15,12 +15,14 @@ import {
 import {
   ALL_AMENITY_CATEGORY_KEYS,
   AMENITY_PREFERENCE_KEY,
+  filterAmenityItems,
   normalizeAmenitySelection,
   parseAmenitySelection,
   serializeAmenitySelection,
 } from "@/features/amenities/amenity-selection";
 import { BUCHAREST_MAX_BOUNDS } from "@/lib/bounds";
 import { DEFAULT_RING_FILTER, type RingFilter } from "@/features/isochrones/isochrone-view";
+import { amenityBandsForFilter, amenityScopeLabel } from "@/features/isochrones/bands";
 import AmenityPanel from "@/features/map/AmenityPanel";
 import { clusterMarkerSizePx, DONUT_HOVER_SCALE, MAP_MAX_ZOOM } from "@/features/amenities/amenity-cluster";
 import AttributionBadge from "@/features/map/AttributionBadge";
@@ -178,16 +180,19 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
   // resize by one tick and drop the dock padding (found in review).
   const reachActiveRef = useRef(false);
 
-  // Amenities: keyed by rounded origin (NOT the selection token, which a mode
-  // toggle bumps) so a Walk↔Transit toggle persists the markers with no refetch;
-  // a generation guards stale responses. A transient failure auto-retries once
+  // Amenities: keyed by `amenityFetchKey` — origin + mode + effective pace + departure
+  // context (NOT the selection token, which every recompute bumps). Task 065 made the
+  // clip mode-dependent, so a Walk↔Transit or crowded↔quiet toggle now CLEARS and
+  // refetches; a generation guards stale responses. A transient failure auto-retries once
   // (task 024: the public-Overpass race flakes and recovers seconds later), and
   // the last origin is kept so the review's Retry button can refetch it.
   // Kept so the review's Retry button (component scope) can refetch the last
   // origin; the fetch's abort/gen/key/timer state is internal to the controller.
   const amenityOriginRef = useRef<Origin | null>(null);
   const clearAmenitiesRef = useRef<(() => void) | null>(null);
-  const fetchAmenitiesRef = useRef<((origin: Origin, attempt: number, pace: Pace) => void) | null>(null);
+  const fetchAmenitiesRef = useRef<
+    ((origin: Origin, attempt: number, pace: Pace, mode: Mode, timeContext: TimeContext) => void) | null
+  >(null);
   const inspectAmenityRef = useRef<((item: Amenity) => void) | null>(null);
   // Holder for the donut-cluster controller: it is built after the amenities
   // controller (whose source it reads), but the amenities controller's visibility
@@ -196,7 +201,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
   const amenityClustersRef = useRef<AmenityClusterController | null>(null);
   const amenityClusterDisposeRef = useRef<(() => void) | null>(null);
   const applyAmenitySelectionRef = useRef<((categories: AmenityCategoryKey[]) => void) | null>(null);
-  const [amenity, setAmenity] = useState<AmenityUi>({ status: "idle", counts: null, items: [] });
+  const [amenity, setAmenity] = useState<AmenityUi>({ status: "idle", counts: null, countsByBand: null, items: [] });
   const [selectedAmenityCategories, setSelectedAmenityCategories] = useState<AmenityCategoryKey[]>(
     ALL_AMENITY_CATEGORY_KEYS,
   );
@@ -257,6 +262,10 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
   const [ringFilter, setRingFilter] = useState<RingFilter>(DEFAULT_RING_FILTER);
   const ringFilterRef = useRef<RingFilter>(DEFAULT_RING_FILTER);
   const applyRingFilterRef = useRef<((filter: RingFilter) => void) | null>(null);
+  // Amenity visibility follows the SHADING (task 065): widening or narrowing the rings
+  // re-applies the marker/count subset through the recluster chokepoint. No refetch —
+  // all three bands arrived in one response.
+  const applyRingFilterToAmenitiesRef = useRef<(() => void) | null>(null);
 
   function selectRingFilter(next: RingFilter) {
     // No-op re-clicks of the active filter must not cancel an in-flight staged
@@ -265,6 +274,9 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
     ringFilterRef.current = next;
     setRingFilter(next);
     applyRingFilterRef.current?.(next);
+    // Marker + chip visibility must move WITH the shading, or the map shows places
+    // outside the painted area (or hides places inside it).
+    applyRingFilterToAmenitiesRef.current?.();
   }
 
   // --- Mobile shell state (task 062): dock pill + sheet peek. The user flags
@@ -463,8 +475,10 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       amenityRef,
       amenityOriginRef,
       selectedCategoriesRef: selectedAmenityCategoriesRef,
+      ringFilterRef,
       resetAmenityHover,
       getPopupCategory: popup.getPopupCategory,
+      getPopupBand: popup.getPopupBand,
       closeStopPopup,
       clustersRef: amenityClustersRef,
       invalidateClusters: () => popup.invalidateClusters(),
@@ -537,6 +551,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
     clearAmenitiesRef.current = clearAmenities;
     fetchAmenitiesRef.current = fetchAmenities;
     applyAmenitySelectionRef.current = applyAmenitySelection;
+    applyRingFilterToAmenitiesRef.current = amenities.applyRingFilterToAmenities;
     const selectionRender = createSelectionRender({
       map,
       el,
@@ -662,7 +677,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       if (loadState.pendingAmenities) {
         const a = loadState.pendingAmenities;
         loadState.pendingAmenities = null;
-        renderAmenities(a.items, a.counts);
+        renderAmenities(a.items, a.countsByBand);
       }
       reachJourney.flushPending(); // replay a right-click journey that raced `load`
       // A journey replayed from a pre-load right-click was buffered without a
@@ -944,6 +959,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
           () => document.removeEventListener("keydown", onKeyDown),
           () => {
             applyAmenitySelectionRef.current = null;
+            applyRingFilterToAmenitiesRef.current = null;
             clearAmenitiesRef.current = null;
             fetchAmenitiesRef.current = null;
             inspectAmenityRef.current = null;
@@ -1004,9 +1020,10 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
 
   // Recompute the current point after a pace / departure-context change, exactly
   // like switchMode: abort any in-flight request, snapshot the new setting via
-  // the reducer (which bumps the token), then re-issue. A pace change re-runs
-  // rings AND amenities (new radius); a time change re-runs transit rings only
-  // (amenities dedupe on same origin+pace). With no resolved selection yet, a
+  // the reducer (which bumps the token), then re-issue. A pace change re-runs rings AND
+  // amenities; since task 065 a TIME change re-runs the amenities too (the clip is the
+  // mode's reach area at that departure context, so crowded↔quiet changes which places
+  // are in range — `amenityFetchKey` includes the preset). With no resolved selection yet, a
   // still-loading first request is re-issued from its pending input so the
   // change is not lost (finding G); otherwise there's nothing to recompute.
   function recomputeCurrent() {
@@ -1042,7 +1059,15 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
     const origin = amenityOriginRef.current;
     // Same effective-pace rule as the main fetch (task 052 P4): a retry in a
     // non-walk mode must use Normal, not a pace remembered from Walk.
-    if (origin) fetchAmenitiesRef.current?.(origin, 0, effectivePace(selRef.current.mode, selRef.current.pace));
+    if (origin) {
+      fetchAmenitiesRef.current?.(
+        origin,
+        0,
+        effectivePace(selRef.current.mode, selRef.current.pace),
+        selRef.current.mode,
+        selRef.current.timeContext,
+      );
+    }
   }
 
   function onSubmit(e: React.FormEvent) {
@@ -1075,6 +1100,15 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
   const sel = selState;
   const combo = comboState;
   const amenityCounts = amenity.counts;
+  // The Browse list must show the SAME places as the map: those in the bands currently
+  // shaded (task 065). `amenity.items` is the raw all-band payload — kept whole so a
+  // ring-filter change needs no refetch — so the band restriction is applied here, at
+  // the one place the list is handed its data. Without this the chips and the map would
+  // narrow with the rings while the list kept listing places outside them.
+  const amenityVisibleItems = useMemo(
+    () => filterAmenityItems(amenity.items, ALL_AMENITY_CATEGORY_KEYS, "", amenityBandsForFilter(ringFilter)),
+    [amenity.items, ringFilter],
+  );
   const reachActive = reachView !== null;
   // The reach directions dock counts as a result surface (task 058): the sheet
   // renders — and camera padding holds — whenever there's a selection OR reach.
@@ -1322,20 +1356,25 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
               </div>
               <div ref={amenityBlockRef}>
               <AmenityPanel
-                // Key on amenity IDENTITY (resolved origin + pace) — the only
-                // things that change the amenity set — NOT sel.token. A mode
-                // toggle or a transit time change keeps the same origin+pace, so
-                // the review no longer remounts and lose its open Browse list /
-                // text filter (review finding); a new origin or pace change
-                // still remounts to reset that transient state. Keyed on the
-                // EFFECTIVE pace (task 052 P4) so it matches the pace the amenities
-                // were actually fetched at — the common Normal-pace toggle keeps
-                // the review mounted; only a Slow-walk→transit toggle
-                // remounts, which is correct since the amenity set changed.
-                key={`${sel.lastSelection?.lat ?? "x"},${sel.lastSelection?.lng ?? "x"}:${effectivePace(sel.mode, sel.pace)}`}
+                // Key on resolved origin + MODE + effective pace, NOT sel.token.
+                //
+                // Task 065 added `mode`: the clip is now the current mode's reach
+                // area, so a Walk↔Transit toggle genuinely replaces the place set and
+                // remounting to reset the open Browse list / text filter is CORRECT —
+                // that transient state described places that are no longer shown.
+                //
+                // The time context is deliberately NOT in this key even though it IS
+                // in the fetch key. Remounting on every crowded↔quiet tap would wipe
+                // the Browse list and filter mid-comparison, reversing the task-051
+                // rationale this key exists for — and task 069 is about to make that
+                // toggle a one-tap mobile control. The contents swap in place instead.
+                // Keyed on the EFFECTIVE pace (task 052 P4) so it matches the pace the
+                // amenities were actually fetched at.
+                key={`${sel.lastSelection?.lat ?? "x"},${sel.lastSelection?.lng ?? "x"}:${sel.mode}:${effectivePace(sel.mode, sel.pace)}`}
                 status={amenity.status}
                 counts={amenityCounts}
-                items={amenity.items}
+                scopeLabel={amenityScopeLabel(sel.mode, ringFilter)}
+                items={amenityVisibleItems}
                 selectedCategories={selectedAmenityCategories}
                 onSelectedCategoriesChange={selectAmenityCategories}
                 onRetry={retryAmenities}

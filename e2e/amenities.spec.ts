@@ -1,8 +1,12 @@
 import { expect, test, type Page } from "@playwright/test";
+import { innerBandCounts, WALK_CLIP } from "./amenity-fixtures";
 
 // Amenities slice (M2 slice 3). Providers STUBBED by EXACT path (never /api/**,
-// which would swallow /api/tiles). Amenities are mode-independent: fetched once
-// per resolved address and preserved across a Walk↔Transit toggle.
+// which would swallow /api/tiles). Amenity fetch identity is origin × mode ×
+// effectivePace × timeContext (task 065): the clip is the selected mode's reach area, so
+// a Walk↔Transit or crowded↔quiet toggle REFETCHES. Only a ring-filter change is local.
+// (Pre-065 this read "amenities are mode-independent … preserved across a toggle" — the
+// retired contract, which the tests below now assert against.)
 
 function ring(minutes: number, d: number) {
   return {
@@ -25,16 +29,16 @@ const WALK = { origin: { lat: 44.4268, lng: 26.1025 }, rings: [ring(15, 0.01), r
 const TRANSIT = { origin: { lat: 44.4268, lng: 26.1025 }, rings: [ring(15, 0.03), ring(30, 0.06), ring(45, 0.09)] };
 const AMENITIES = {
   origin: { lat: 44.4268, lng: 26.1025 },
-  walkMinutes: 15,
+  clip: WALK_CLIP,
   // Parks count (200) deliberately exceeds the rendered markers (5) — the chip
   // must show the TRUE server count, not a recount of the capped markers.
-  counts: { groceries: 62, pharmacies: 35, parks: 200, schools: 38, transit: 91 },
+  countsByBand: innerBandCounts({ groceries: 62, pharmacies: 35, parks: 200, schools: 38, transit: 91 }),
   amenities: [
-    { lat: 44.427, lng: 26.103, name: "Mega Image", category: "groceries" },
-    { lat: 44.428, lng: 26.101, name: "Catena", category: "pharmacies" },
-    { lat: 44.426, lng: 26.104, name: "Parcul Unirii", category: "parks" },
-    { lat: 44.429, lng: 26.1, name: "Școala 1", category: "schools" },
-    { lat: 44.425, lng: 26.102, name: "Stație RATB", category: "transit" },
+    { lat: 44.427, lng: 26.103, name: "Mega Image", category: "groceries", band: 15 },
+    { lat: 44.428, lng: 26.101, name: "Catena", category: "pharmacies", band: 15 },
+    { lat: 44.426, lng: 26.104, name: "Parcul Unirii", category: "parks", band: 15 },
+    { lat: 44.429, lng: 26.1, name: "Școala 1", category: "schools", band: 15 },
+    { lat: 44.425, lng: 26.102, name: "Stație RATB", category: "transit", band: 15 },
   ],
 };
 
@@ -59,7 +63,7 @@ async function search(page: Page) {
   await page.getByRole("button", { name: "Go" }).click();
 }
 
-test("a selection renders amenity markers + five category counts, preserved across a mode toggle", async ({
+test("a selection renders amenity markers + five category counts, and a mode toggle REFETCHES them", async ({
   page,
 }) => {
   const errors: string[] = [];
@@ -90,12 +94,16 @@ test("a selection renders amenity markers + five category counts, preserved acro
   await expect(map).toHaveAttribute("data-amenity-count", "5");
   await expect(page.getByText("200")).toBeVisible();
 
-  // Toggle to Transit: rings change, amenities PERSIST with no refetch.
+  // Toggle to Transit. Task 065 REVERSED the old contract here: the clip is now the
+  // current mode's reach area, so the set of places in range genuinely changes and the
+  // markers must be REFETCHED rather than persisted. The old assertion (one fetch per
+  // address, markers preserved) described the 15-minute-walk-in-every-mode clip.
   await page.getByRole("button", { name: "Public transport", exact: true }).click();
   await expect(map).toHaveAttribute("data-mode", "transit");
+  await expect(async () => {
+    expect(amenityCalls).toBe(2); // one per (address, mode) — the clip differs
+  }).toPass({ timeout: 10_000 });
   await expect(map).toHaveAttribute("data-amenity-count", "5");
-  await expect(page.getByText("Within a 15-min walk")).toBeVisible();
-  expect(amenityCalls).toBe(1); // one fetch for the address, not one per mode
 
   expect(errors).toEqual([]);
 });
@@ -176,7 +184,9 @@ test("category tiles filter map and browser locally, close hidden popups, and pe
   expect(amenityCalls).toBe(2); // one per searched page, never per toggle
 });
 
-test("a slow amenity response is not lost when the user toggles mode mid-flight", async ({ page }) => {
+test("a mode toggle mid-flight supersedes the in-flight amenity fetch and paints the new one", async ({
+  page,
+}) => {
   let amenityCalls = 0;
   await stubBase(page);
   await page.route("**/api/amenities**", async (route) => {
@@ -189,14 +199,18 @@ test("a slow amenity response is not lost when the user toggles mode mid-flight"
   await search(page);
   await expect(map).toHaveAttribute("data-isochrone-rings", "3");
 
-  // Toggle before amenities resolve — the origin is unchanged, so the in-flight
-  // fetch must survive (a toggle must not invalidate the amenity generation).
+  // Toggle before the amenities resolve. Task 065: the toggle changes the CLIP, so the
+  // in-flight walk request is now for the wrong area — it is superseded and a transit
+  // request replaces it. Before 065 the right answer was the opposite (keep the
+  // in-flight fetch, since every mode shared one walk clip).
   await page.getByRole("button", { name: "Public transport", exact: true }).click();
   await expect(map).toHaveAttribute("data-mode", "transit");
 
-  // The delayed response lands and paints, with no second request.
-  await expect(map).toHaveAttribute("data-amenity-count", "5", { timeout: 5000 });
-  expect(amenityCalls).toBe(1);
+  // The transit response paints, and a second request was made.
+  await expect(map).toHaveAttribute("data-amenity-count", "5", { timeout: 10_000 });
+  await expect(async () => {
+    expect(amenityCalls).toBe(2);
+  }).toPass({ timeout: 10_000 });
 });
 
 test("a later amenities failure clears the prior count and shows an error, keeping the isochrone", async ({

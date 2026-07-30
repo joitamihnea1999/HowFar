@@ -70,6 +70,13 @@ export function createPopupController({
 }) {
   let currentPopup: maplibregl.Popup | null = null;
   let popupCategory: AmenityCategoryKey | null = null;
+  // The ring band of the place an open POI popup describes (task 065). Tracked for the
+  // same reason as `popupCategory`: when the user narrows the ring filter, a popup for a
+  // place in a now-unshaded band must close, or it describes somewhere outside the area
+  // the map is claiming to show. Null for surfaces that are not one banded place
+  // (a cluster spans bands, so it stays null). Set by `openPoiPopup` from the feature and
+  // by `openStopPopup` from the band its caller threads in.
+  let popupBand: number | null = null;
   let stopLinesAbort: AbortController | null = null;
   let stopLinesGen = 0;
   // Invalidates in-flight async cluster expansion (see openClusterPopup).
@@ -194,9 +201,11 @@ export function createPopupController({
       .addTo(map);
     currentPopup = popup;
     popupCategory = normalizeAmenitySelection([category])[0] ?? null;
+    popupBand = typeof props.band === "number" ? props.band : null;
     popup.on("close", () => {
       if (currentPopup === popup) currentPopup = null;
       popupCategory = null;
+      popupBand = null;
     });
   }
 
@@ -242,7 +251,12 @@ export function createPopupController({
     const name = typeof props.name === "string" ? props.name : "";
     if (props.category === "transit") {
       const stops = transitStopsOf(props, coords);
-      if (stops.length) return openStopPopup(stops, stopPopupTitle(stops, name), coords);
+      // Thread the band in: transit stops are the category most likely to sit far out, so
+      // this is the popup the ring-filter close matters MOST for. `openPoiPopup` reads the
+      // band off the feature; the stop path has to be told explicitly because it takes
+      // members, not a feature.
+      const band = typeof props.band === "number" ? props.band : null;
+      if (stops.length) return openStopPopup(stops, stopPopupTitle(stops, name), coords, band);
     }
     openPoiPopup(feature, coords);
   }
@@ -416,7 +430,8 @@ export function createPopupController({
     try {
       // PAGED (found in review): one `getClusterLeaves` call returns at most
       // `CLUSTER_LEAF_PAGE` leaves, but a cluster can legally hold up to
-      // MAX_PER_CATEGORY x 5 = 750. Fetching a single page silently made leaf 251+
+      // `MAX_CLUSTER_LEAVES` (cap x 5 categories x 3 bands). Fetching a single page
+      // silently made later leaves
       // unreachable while the popup still claimed to list the place — so walk the
       // offsets until the cluster's own `point_count` is covered.
       const raw = await collectClusterLeaves(
@@ -514,6 +529,7 @@ export function createPopupController({
       .addTo(map);
     currentPopup = popup;
     popupCategory = null;
+    popupBand = null;
     // Same lifecycle marker discipline as the list, so a recluster closes this too.
     el.dataset.amenityClusterError = String(total);
     popup.on("close", () => {
@@ -542,6 +558,7 @@ export function createPopupController({
     // null so a category toggle cannot half-close it (the amenity controller's
     // hidden-category close only applies to single-category popups).
     popupCategory = null;
+    popupBand = null;
     popup.on("close", () => {
       if (currentPopup === popup) currentPopup = null;
     });
@@ -603,6 +620,9 @@ export function createPopupController({
         category: item.category,
         osmType: item.osmType,
         osmId: item.osmId,
+        // Band must survive the keyboard/Browse path too, or a popup opened from the list
+        // cannot be closed when the ring filter narrows past its band.
+        ...(item.band === undefined ? {} : { band: item.band }),
         // Merged transit marker (task 047): pass members through so the keyboard
         // path unions the same lines as a WebGL-marker click. Raw array here;
         // parseAmenityMembers accepts array or the WebGL JSON string alike.
@@ -681,6 +701,7 @@ export function createPopupController({
     currentPopup?.remove();
     currentPopup = null;
     popupCategory = null;
+    popupBand = null;
     delete el.dataset.amenityClusterList;
   }
 
@@ -706,12 +727,15 @@ export function createPopupController({
     stops: TransitStopMember[],
     title: string,
     coords: [number, number],
+    band: number | null = null,
   ) {
     closeStopPopup();
     // No usable identity ⇒ can't look up lines. Bail with no popup — but the
     // caller has ALREADY decided this is a transit hit, so we never fall through
     // to a reselection that would wipe the user's markers (task 021).
     if (stops.length === 0) return;
+    // Set AFTER `closeStopPopup()` above, which nulls it.
+    popupBand = band;
 
     const gen = stopLinesGen;
     const controller = new AbortController();
@@ -730,6 +754,7 @@ export function createPopupController({
     popup.on("close", () => {
       if (currentPopup === popup) currentPopup = null;
       popupCategory = null;
+    popupBand = null;
     });
 
     // ONE client deadline for the whole batch: transition to error (and abort
@@ -785,6 +810,7 @@ export function createPopupController({
     /** The category of the currently-open popup, so a hidden-category filter can
      * close it (amenities-controller reads this — never the private field). */
     getPopupCategory: () => popupCategory,
+    getPopupBand: () => popupBand,
     dispose() {
       closeStopPopup();
     },

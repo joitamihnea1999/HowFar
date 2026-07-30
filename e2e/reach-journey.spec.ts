@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { innerBandCounts, WALK_CLIP } from "./amenity-fixtures";
 
 // Visual right-click journey (task 054; unified to public-transport-only in
 // task 060): a right-click in ANY mode auto-switches to Public transport and
@@ -159,11 +160,11 @@ async function setup(page: Page) {
     route.fulfill({
       json: {
         origin: { lat: 44.4268, lng: 26.1025 },
-        walkMinutes: 15,
-        counts: { groceries: 1, pharmacies: 1, parks: 0, schools: 0, transit: 0 },
+        clip: WALK_CLIP,
+        countsByBand: innerBandCounts({ groceries: 1, pharmacies: 1, parks: 0, schools: 0, transit: 0 }),
         amenities: [
-          { name: "Mega Image", category: "groceries", lat: 44.427, lng: 26.103, osmType: "node", osmId: 1 },
-          { name: "Farmacia Tei", category: "pharmacies", lat: 44.4265, lng: 26.1015, osmType: "node", osmId: 2 },
+          { name: "Mega Image", category: "groceries", lat: 44.427, lng: 26.103, osmType: "node", osmId: 1, band: 15 },
+          { name: "Farmacia Tei", category: "pharmacies", lat: 44.4265, lng: 26.1015, osmType: "node", osmId: 2, band: 15 },
         ],
       },
     }),

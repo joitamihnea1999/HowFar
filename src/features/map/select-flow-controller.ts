@@ -1,5 +1,5 @@
 import { type Pace } from "@/features/isochrones/pace";
-import { timeContextSummary } from "@/features/isochrones/time-context";
+import { timeContextSummary, type TimeContext } from "@/features/isochrones/time-context";
 import {
   effectivePace,
   isochroneUrl,
@@ -55,7 +55,9 @@ interface IsoResponse {
  *  - a map click's reverse 422 is **fatal** — no rings, no amenities (out of
  *    area); reverse ∥ isochrone so the label RTT never blocks ring start;
  *  - amenity markers **never** render without rings (every failed reach clears
- *    amenities); a mode-toggle recompute preserves the persisted markers.
+ *    amenities); since task 065 a mode/time recompute CHANGES the amenity fetch key, so
+ *    it clears and refetches rather than preserving the markers (the clip is that
+ *    mode's reach area). A recompute that lands on the same key still keeps them.
  * The mode/endpoint decision (`isochronePath`) and the fatal-reverse rule
  * (`reverseIsFatal`) are pure and unit-tested in selection-flow.
  */
@@ -75,7 +77,7 @@ export function createSelectFlowController({
   abortRef: { current: AbortController | null };
   clearSelection: () => void;
   clearAmenities: () => void;
-  maybeFetchAmenities: (origin: Origin, pace: Pace) => void;
+  maybeFetchAmenities: (origin: Origin, pace: Pace, mode: Mode, timeContext: TimeContext) => void;
   renderSelection: (origin: Origin, label: string, rings: Ring[], mode: Mode) => void;
 }) {
   async function select(input: SelectInput, opts?: { recompute?: boolean }) {
@@ -104,8 +106,13 @@ export function createSelectFlowController({
     const stale = () => token !== selRef.current.token;
 
     clearSelection(); // drop the previous marker/rings the moment a new selection starts
-    // A genuinely-new selection also drops the old amenities; a mode toggle
-    // (recompute) leaves them so they persist across Walk↔Transit.
+    // A genuinely-new selection drops the old amenities immediately. A RECOMPUTE
+    // (mode/pace/time change) does not clear here — `maybeFetchAmenities` clears only
+    // when the fetch key actually changes, so a recompute that lands on the same key
+    // keeps its markers, while one that changes the clip drops them before the new
+    // request. Task 065 retired the old blanket "a mode toggle leaves them so they
+    // persist across Walk↔Transit": the clip now follows the mode, so those markers
+    // would describe an area the user is no longer looking at.
     if (!opts?.recompute) clearAmenities();
 
     try {
@@ -154,7 +161,7 @@ export function createSelectFlowController({
         }
         // Amenities only after reverse is known non-fatal (422 must not start ORS/PostGIS).
         if (stale()) return; // a newer selection landed during revRes.json()
-        maybeFetchAmenities(origin, pace);
+        maybeFetchAmenities(origin, pace, mode, timeContext);
         if (!isoRes.ok) {
           clearAmenities();
           return void dispatchSel({ type: "failed", token, stage: "isochrone", httpStatus: isoRes.status });
@@ -168,7 +175,7 @@ export function createSelectFlowController({
 
       // Search / suggestion paths: origin is known; amenities ∥ isochrone.
       if (stale()) return; // a newer selection landed during geocode res.json()
-      maybeFetchAmenities(origin, pace);
+      maybeFetchAmenities(origin, pace, mode, timeContext);
 
       const isoRes = await fetch(isochroneUrl(mode, origin, pace, timeContext), { signal });
       if (stale()) return;

@@ -1,4 +1,4 @@
-import type { Amenity, AmenityCounts } from "@/features/amenities/amenities";
+import type { Amenity, AmenityCountsByBand } from "@/features/amenities/amenities";
 import type { ReachLeg } from "@/features/isochrones/server/transit-plan";
 import type { Mode, Origin, Ring } from "@/features/map/selection-flow";
 
@@ -13,7 +13,7 @@ import type { Mode, Origin, Ring } from "@/features/map/selection-flow";
 export interface LoadState {
   styleLoaded: boolean;
   pending: { origin: Origin; label: string; rings: Ring[]; mode: Mode } | null;
-  pendingAmenities: { items: Amenity[]; counts: AmenityCounts } | null;
+  pendingAmenities: { items: Amenity[]; countsByBand: AmenityCountsByBand } | null;
   /** A right-click journey whose draw arrived before `load` (task 054); replayed
    * once the reach-path source exists. Cleared on draw/clear. */
   pendingJourney: ReachLeg[] | null;

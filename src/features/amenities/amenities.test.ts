@@ -8,6 +8,9 @@ import {
   parseAmenityMembers,
   type Amenity,
   type TransitStopMember,
+  AMENITY_CATEGORIES,
+  countsForBands,
+  emptyCountsByBand,
 } from "./amenities";
 
 describe("categoryForTags", () => {
@@ -151,5 +154,46 @@ describe("parseAmenityMembers", () => {
     expect(parseAmenityMembers("not json")).toEqual([]);
     expect(parseAmenityMembers(undefined)).toEqual([]);
     expect(parseAmenityMembers(42)).toEqual([]);
+  });
+});
+
+describe("per-band count helpers (task 065)", () => {
+  it("emptyCountsByBand zero-fills every band and category", () => {
+    const empty = emptyCountsByBand();
+    expect(Object.keys(empty).map(Number).sort((a, b) => a - b)).toEqual([15, 30, 45]);
+    for (const band of [15, 30, 45] as const) {
+      for (const { key } of AMENITY_CATEGORIES) expect(empty[band][key]).toBe(0);
+    }
+  });
+
+  it("countsForBands sums only the bands asked for — the honest chip figure", () => {
+    const byBand = {
+      15: { groceries: 1, pharmacies: 2, parks: 0, schools: 0, transit: 3 },
+      30: { groceries: 10, pharmacies: 0, parks: 5, schools: 0, transit: 0 },
+      45: { groceries: 100, pharmacies: 0, parks: 0, schools: 7, transit: 0 },
+    };
+    // Default view (inner band only) must NOT include the outer bands' places.
+    expect(countsForBands(byBand, [15])).toEqual({
+      groceries: 1, pharmacies: 2, parks: 0, schools: 0, transit: 3,
+    });
+    // Cumulative widening adds them.
+    expect(countsForBands(byBand, [15, 30])).toEqual({
+      groceries: 11, pharmacies: 2, parks: 5, schools: 0, transit: 3,
+    });
+    expect(countsForBands(byBand, [15, 30, 45])).toEqual({
+      groceries: 111, pharmacies: 2, parks: 5, schools: 7, transit: 3,
+    });
+    // No bands visible → all zeros, never a leftover total.
+    expect(countsForBands(byBand, [])).toEqual({
+      groceries: 0, pharmacies: 0, parks: 0, schools: 0, transit: 0,
+    });
+  });
+
+  it("tolerates a malformed payload missing a band or a category", () => {
+    // A bad response must degrade to an undercount, never throw or produce NaN in a chip.
+    const partial = { 15: { groceries: 4 } } as unknown as Parameters<typeof countsForBands>[0];
+    expect(countsForBands(partial, [15, 30, 45])).toEqual({
+      groceries: 4, pharmacies: 0, parks: 0, schools: 0, transit: 0,
+    });
   });
 });

@@ -263,8 +263,14 @@ T&C above); a live TomTom layer would require an owner decision on a paid Permit
   share resources fairly" → configured fallback host.
 - No key. One bounded, sequential-host, full-Bucharest `out geom` request runs weekly at
   Sunday 03:00 UTC, validates and atomically publishes into the isolated `osm_catalogue` schema.
-  Runtime map selections perform no amenity Overpass request: ORS supplies the 15-minute ring and
-  PostGIS intersects it with the active point/polygon dataset. The last good snapshot survives
+  Runtime map selections perform no amenity Overpass request: the **reach rings of the selected
+  travel mode** bound the query and PostGIS intersects them with the active point/polygon dataset.
+  Since the amenity set follows the shaded area rather than a fixed short walk, the ring provider
+  is mode-dependent — ORS `foot-walking` for walking, **MOTIS one-to-all for public transport**,
+  ORS `driving-car` (traffic-adjusted) for driving — and the same cached ring response the map
+  paints is reused, so a selection costs no extra upstream request. **A ring-provider failure
+  fails the amenity request** (the UI offers a retry) rather than falling back to a walking ring:
+  showing places for the wrong area would be a quieter, worse error than an honest retry. The last good snapshot survives
   fetch, validation, or publication failure; `/api/catalogue-status` becomes 503 after 10 days.
 - The importer excludes lifecycle/private park features and unnamed generic gardens, then
   conservatively deduplicates contained and overlapping representations. Full polygon geometry is

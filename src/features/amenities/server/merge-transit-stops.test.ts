@@ -207,7 +207,7 @@ describe("mergeCoincidentTransitStops — conservative guardrails", () => {
 describe("mergeCoincidentTransitStops — clustering (Kruskal + diameter cap)", () => {
   it("does not let a bridge over-extend a component past MAX_SPAN, and a good tight pair survives", () => {
     // Colinear A(0m) — B(18m) — C(36m), all cross-mode so every hop is an edge.
-    // A–C = 36m > MAX_SPAN(35): the far edge is DROPPED (not the whole component
+    // A–C = 36m > MAX_SPAN_M (24): the far edge is DROPPED (not the whole component
     // dissolved), so exactly ONE tight pair merges and the third stays separate.
     const m = (i: number, modes: string[]) => ({
       name: `S${i}`,

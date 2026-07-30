@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { emptyAmenities } from "./amenity-fixtures";
 
 // Car travel mode (task 053). Car uses the ORS driving-car profile at 10/20/30-min
 // bands (owner decision — they fit the Bucharest map, unlike 15/30/45). Car has
@@ -35,7 +36,7 @@ async function setup(page: Page, carBody: unknown = CAR) {
   const reachCalls: string[] = [];
   const carCalls: string[] = [];
   await page.route("**/api/amenities**", (route) =>
-    route.fulfill({ json: { origin: { lat: 44.4268, lng: 26.1025 }, walkMinutes: 15, amenities: [] } }),
+    route.fulfill({ json: emptyAmenities({ lat: 44.4268, lng: 26.1025 }) }),
   );
   await page.route("**/api/geocode**", (route) =>
     route.fulfill({ json: { lat: 44.4268, lng: 26.1025, label: "Piața Unirii, București" } }),
@@ -130,7 +131,7 @@ test("Car time-of-day actually changes reach: Crowded rings are strictly smaller
   const carCalls: string[] = [];
   const small = { origin: { lat: 44.4268, lng: 26.1025 }, rings: [polyRing(10, 0.03), polyRing(20, 0.05), polyRing(30, 0.07)], car: { basis: "estimate", slotId: "am-peak", slotLabel: "weekday morning rush" } };
   const large = { origin: { lat: 44.4268, lng: 26.1025 }, rings: [polyRing(10, 0.12), polyRing(20, 0.18), polyRing(30, 0.24)], car: { basis: "estimate", slotId: "midday", slotLabel: "weekday midday" } };
-  await page.route("**/api/amenities**", (route) => route.fulfill({ json: { origin: { lat: 44.4268, lng: 26.1025 }, walkMinutes: 15, amenities: [] } }));
+  await page.route("**/api/amenities**", (route) => route.fulfill({ json: emptyAmenities({ lat: 44.4268, lng: 26.1025 }) }));
   await page.route("**/api/geocode**", (route) => route.fulfill({ json: { lat: 44.4268, lng: 26.1025, label: "Piața Unirii" } }));
   await page.route("**/api/suggest**", (route) => route.fulfill({ json: { suggestions: [] } }));
   await page.route("**/api/isochrone**", (route) => route.fulfill({ json: WALK }));

@@ -3,9 +3,10 @@
  * categories (brief §5: groceries, pharmacies, parks/green space, schools,
  * transit stops).
  *
- * Runtime discovery is local PostGIS (`queryCatalogueSummaryInRing`): the walk
- * 15‑min ring comes from ORS, then one catalogue CTE returns pre-cap counts +
- * nearest markers. Predicates here still drive the **weekly bulk import**
+ * Runtime discovery is local PostGIS (`queryCatalogueSummaryInRing`): the reach rings
+ * of the SELECTED travel mode bound the query (task 065 — no longer a fixed 15-minute
+ * walk ring in every mode), then one catalogue CTE returns pre-cap counts per
+ * (category, band) plus the capped markers. Predicates here still drive the **weekly bulk import**
  * (`buildBulkOverpassQuery` + `categoryForTags` during normalize). Client code
  * uses labels/colors + `buildAmenityFeatures` for the map layer only.
  *
@@ -16,6 +17,8 @@
  * brighter than a chart-fill lightness band would allow — deliberate, for pop on
  * the dark basemap. (Per-category icon differentiation is a future polish item.)
  */
+
+import { LEGEND_BANDS, type Band } from "@/features/isochrones/bands";
 
 export type AmenityCategoryKey = "groceries" | "pharmacies" | "parks" | "schools" | "transit";
 
@@ -86,12 +89,28 @@ export const AMENITY_CATEGORIES: AmenityCategory[] = [
   },
 ];
 
-/** Amenity counts/markers are clipped to this walking-isochrone ring (brief §5). */
-export const WALK_CLIP_MINUTES = 15;
-
-/** Per-category cap on rendered markers (SQL ROW_NUMBER in catalogue-query).
- * Counts shown to the user are true in-ring totals (pre-cap). */
-export const MAX_PER_CATEGORY = 150;
+/**
+ * Per-category-PER-BAND cap on rendered markers (SQL `ROW_NUMBER` in
+ * catalogue-query). Counts shown to the user are true in-area totals (pre-cap).
+ *
+ * Task 065 replaced a flat per-category cap of 150. The clip used to be a
+ * 15-minute walk ring, where the cap never actually bound (measured on prod
+ * 2026-07-29: the largest single category at any origin was 62). Now that the clip
+ * is a whole mode's reach area, a flat nearest-first cap would admit only places
+ * hugging the origin and leave the outer overlay empty — the very complaint this
+ * task fixes. So the cap is per (category, band) and admission inside a band is
+ * spatially stratified (see `catalogue-query`).
+ *
+ * The value is a payload-size budget, not a UX preference. Measured on the real
+ * 8.7k-place catalogue (task 065 W5): at a cap of 100 the worst origin returned 1,484
+ * markers and a **325 KB** payload, over the ~300 KB ceiling this task set itself. At
+ * 70 the same worst case is ~1,050 markers and ~235 KB, comfortably inside it, while
+ * distance stratification keeps every distance slice of every band represented — so
+ * the cap trades marker DENSITY, which clustering already manages, and not marker
+ * COVERAGE, which is what the owner asked for. Task 066 tunes clustering next against
+ * exactly this field.
+ */
+export const MAX_PER_CATEGORY_PER_BAND = 70;
 
 /** A single resolved POI — the canonical flat shape the route returns and the
  * client renders/counts. `osmType`/`osmId` carry the OSM identity so a transit
@@ -113,6 +132,13 @@ export interface Amenity {
   members?: TransitStopMember[];
   /** `members.length` — present only on a merged marker (≥ 2). */
   mergedCount?: number;
+  /** Which ring band this place belongs to (task 065) — the INNERMOST band its
+   * geometry reaches into, so a park straddling a boundary is attributed to the
+   * band the user can already see it in. Drives client-side band visibility: the
+   * markers shown are those whose band is currently shaded
+   * (`amenityBandsForFilter`). Optional because a malformed payload must still
+   * render as a plain marker. */
+  band?: Band;
   /** Walking distance from the origin, in metres. Already computed server-side
    * (`catalogue-query`: `ST_Distance(display_point, origin)`) and already sent
    * over the wire — this declaration just stops the client from throwing it away.
@@ -134,6 +160,47 @@ export interface TransitStopMember {
 }
 
 export type AmenityCounts = Record<AmenityCategoryKey, number>;
+
+/**
+ * TRUE pre-cap totals per category, broken down by ring band (task 065).
+ *
+ * A flat per-category total is no longer enough to be honest: the default ring
+ * filter shades ONE band (`DEFAULT_RING_FILTER`), so chips summed over the whole
+ * clip would claim places the user can neither see nor reach in the shaded area.
+ * The client sums the bands that are actually visible
+ * (`amenityBandsForFilter(ringFilter)`), which is why this is keyed by band and
+ * not just a grand total.
+ *
+ * Still PRE-cap: it counts everything the query matched, not the capped rows that
+ * were returned — that gap is what the cap note beside the chips explains. (The note no
+ * longer says "nearest": admission is distance-stratified, so the rendered set is a
+ * spread across the area rather than the closest N.)
+ */
+export type AmenityCountsByBand = Record<Band, AmenityCounts>;
+
+/** Zero-filled per-band counts (every band and category present). */
+export function emptyCountsByBand(): AmenityCountsByBand {
+  const out = {} as AmenityCountsByBand;
+  for (const band of LEGEND_BANDS) {
+    out[band] = Object.fromEntries(AMENITY_CATEGORIES.map((c) => [c.key, 0])) as AmenityCounts;
+  }
+  return out;
+}
+
+/** Per-category totals over a chosen set of bands — the honest chip figure for
+ * whatever the ring filter is currently shading. */
+export function countsForBands(
+  byBand: AmenityCountsByBand,
+  bands: readonly Band[],
+): AmenityCounts {
+  const out = Object.fromEntries(AMENITY_CATEGORIES.map((c) => [c.key, 0])) as AmenityCounts;
+  for (const band of bands) {
+    const inBand = byBand[band];
+    if (!inBand) continue;
+    for (const { key } of AMENITY_CATEGORIES) out[key] += inBand[key] ?? 0;
+  }
+  return out;
+}
 
 const COLOR_BY_KEY = Object.fromEntries(
   AMENITY_CATEGORIES.map((c) => [c.key, c.color]),
@@ -286,6 +353,11 @@ export function buildAmenityFeatures(items: Amenity[]): GeoJSON.Feature[] {
     if (typeof a.distanceMeters === "number" && Number.isFinite(a.distanceMeters)) {
       properties.distanceMeters = a.distanceMeters;
     }
+    // The ring band this place sits in (task 065). Band VISIBILITY is applied in the
+    // data path before this runs, so the property is not what filters the map — it
+    // rides along so rendered state can be asserted (e2e reads it back off the source)
+    // and so a popup or future band-aware affordance has it without a lookup.
+    if (a.band !== undefined) properties.band = a.band;
     if (a.osmType) properties.osmType = a.osmType;
     if (typeof a.osmId === "number") properties.osmId = a.osmId;
     // Merged transit marker (task 047): stringify members so the flat-prop

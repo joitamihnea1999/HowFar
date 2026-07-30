@@ -16,6 +16,23 @@ import { DEFAULT_PACE, type Pace } from "@/features/isochrones/pace";
 import { DEFAULT_TIME_CONTEXT, type TimeContext } from "@/features/isochrones/time-context";
 
 export type Mode = "walk" | "transit" | "car";
+export const MODES = ["walk", "transit", "car"] as const;
+
+/**
+ * Parse a travel mode from a query string — fail-loud, and **required** (task 065).
+ *
+ * Unlike `parsePaceStrict`, an ABSENT value is rejected rather than defaulted. The
+ * amenity clip is now mode-dependent, so a missing `mode` from an un-updated client
+ * would silently reproduce exactly the pre-065 walk-clip bug this task removes: a
+ * transit map with markers covering only a 15-minute walk, and nothing anywhere
+ * reporting a problem. A 400 makes that impossible to miss. Same house rule as task
+ * 059's retired pace/preset ids — no live users, so no silent-alias shim.
+ */
+export function parseModeStrict(raw: string | null | undefined): Mode | null {
+  if (raw === null || raw === undefined || raw === "") return null;
+  return (MODES as readonly string[]).includes(raw) ? (raw as Mode) : null;
+}
+
 export type SelectionStatus = "idle" | "loading" | "error";
 export type Stage = "geocode" | "reverse" | "isochrone";
 

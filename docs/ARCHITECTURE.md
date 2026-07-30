@@ -28,7 +28,7 @@ map click   ──► /api/reverse ──► Nominatim    (label only — the cl
 /api/car      ──► OpenRouteService driving-car   (car rings, 10/20/30 min — free-flow ÷ per-time-of-day
                                                   congestion factor = traffic-aware estimate, task 058)
 /api/transit  ──► Transitous one-to-all ──► transit-grid (rings built in-process)
-/api/amenities ──► ORS walk ring ∥ active PostGIS snapshot ──► spatial intersection
+/api/amenities ──► reach rings of the selected mode ∥ active PostGIS snapshot ──► banded intersection
      │
      ▼
 AppMap renders {origin, rings[]} + amenity markers — staged rings, color + category glyphs,
@@ -74,8 +74,8 @@ server code only.
 | `src/features/isochrones/car-traffic.ts` | Pure Bucharest traffic model (task 058): time-of-day → congestion factor, and the free-flow-range scaler; `CAR_FACTOR_REVISION` feeds the car cache key |
 | `src/features/isochrones/server/transit-grid.ts` | Pure geometry: reachability grid + marching-squares contours |
 | `src/features/amenities/amenities.ts` | Shared category config/classifier for importer, API DTOs and UI |
-| `src/features/amenities/amenity-selection.ts` | Versioned selectable-category state and category+text filtering |
-| `src/features/amenities/amenities-flow.ts` | Client fetch-decision logic (origin keying and retry behavior) |
+| `src/features/amenities/amenity-selection.ts` | Versioned selectable-category state and category + ring-band + text filtering (the single data-path chokepoint, so cluster totals cannot disagree with what is drawn) |
+| `src/features/amenities/amenities-flow.ts` | Client fetch-decision logic (fetch identity = origin + mode + effective pace + departure context; retry behavior) |
 | `src/features/amenities/server/merge-transit-stops.ts` | Read-time fuse of coincident transit-stop markers (one physical place tagged as several OSM nodes) into one marker carrying its members; conservative, distance+mode+name calibrated |
 | `src/features/amenities/server/catalogue-{import,normalize,store,query,status,export}.ts` | Weekly ingestion/quality, immutable publication, spatial runtime reads and operational/ODbL surfaces |
 | `src/features/amenities/server/bulk-overpass.ts` | Weekly-only bounded sequential Overpass snapshot transport |
@@ -91,8 +91,9 @@ server code only.
 | `e2e/` | Playwright specs against the production build, including desktop Chromium and a real-touch Pixel project (see Testing) |
 
 **Deliberate cross-feature edges** (documented so nobody "fixes" them):
-amenities → isochrones (`server/catalogue.ts` calls `server/ors.ts` for the §5
-"within the walking isochrone" geometry); isochrones → map (`isochrone-view.ts`
+amenities → isochrones (`server/catalogue.ts` calls the mode's ring provider —
+`server/ors.ts` or `server/transit.ts` — for the §5 "inside the reach area"
+geometry, and shares the pure band primitives in `bands.ts`); isochrones → map (`isochrone-view.ts`
 imports the `Mode`/`Ring` types from `selection-flow.ts`, type-only — they stay
 with the selection machine until the isochrone contract grows its own types
 module); every feature → `lib/`. `features/map` is the **composition root**: it

@@ -25,6 +25,10 @@ const CATEGORY_COLOR = Object.fromEntries(
 interface AmenityPanelProps {
   status: "idle" | "loading" | "ready" | "error";
   counts: AmenityCounts | null;
+  /** Which area these places cover — follows the SHADED bands, not the fetched clip
+   * (task 065). Passed in so the panel stays presentational and the phrase has one
+   * source (`amenityScopeLabel`). */
+  scopeLabel: string;
   items: Amenity[];
   selectedCategories: AmenityCategoryKey[];
   onSelectedCategoriesChange: (categories: AmenityCategoryKey[]) => void;
@@ -60,6 +64,7 @@ function CategoryIcon({ category, className = "size-4" }: { category: AmenityCat
 export default function AmenityPanel({
   status,
   counts,
+  scopeLabel,
   items,
   selectedCategories,
   onSelectedCategoriesChange,
@@ -75,7 +80,7 @@ export default function AmenityPanel({
     [items, query, selectedCategories],
   );
   // The cap note describes the SELECTED categories only — both sides of its
-  // "nearest N of M" must be scoped the same way, or hiding a category leaves the
+  // The cap note must be scoped the same way, or hiding a category leaves the
   // note quoting places the user cannot see (found in review). The text query is
   // deliberately excluded: the note is about what the server returned versus what
   // is in range, not about the list's current search.
@@ -102,7 +107,7 @@ export default function AmenityPanel({
           <h2 id="nearby-title" className="text-sm font-semibold tracking-[-0.02em] text-[#f4f7f2]">
             Nearby essentials
           </h2>
-          <p className="mt-0.5 text-[0.68rem] text-[#78857b]">Within a 15-min walk</p>
+          <p className="mt-0.5 text-[0.68rem] text-[#78857b]">{scopeLabel}</p>
         </div>
         {status === "ready" && items.length > 0 ? (
           <button
@@ -197,15 +202,22 @@ export default function AmenityPanel({
             })}
           </div>
           {/* Truncation honesty (task 061), shown BESIDE THE CHIPS rather than inside the
-              browser panel. The chips report the server's TRUE in-ring totals while the
-              payload is capped at MAX_PER_CATEGORY per category, so donut sums on the map
+              browser panel. The chips report the server's TRUE pre-cap totals for the
+              SHADED bands while the payload is capped per (category, band), so donut sums
               are legitimately smaller. Hiding the explanation behind "Browse places" left
               the default view showing chips that claim hundreds against donuts covering
-              only the capped set, with no way to know why (found in review). */}
+              only the capped set, with no way to know why (found in review).
+
+              Task 065 corrected the WORDING: it used to say the map shows "the nearest of
+              them", which stopped being true when admission became distance-stratified
+              (`AMENITY_DISTANCE_STRATA` round-robin). Under the cap the map holds a
+              spread across the whole area, deliberately including far places, so
+              "nearest" would be exactly the kind of quiet inaccuracy this note exists to
+              prevent. */}
           {cappedTotal !== null ? (
             <p data-testid="amenity-cap-note" className="px-0.5 pt-2 text-[0.62rem] text-[#78857b]">
-              Chips count every place in range ({cappedTotal}); the map shows only the
-              nearest of them.
+              Chips count every place in range ({cappedTotal}); the map shows a selection
+              spread across the area.
             </p>) : null}
         </div>
       ) : null}

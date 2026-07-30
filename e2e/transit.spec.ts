@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { emptyAmenities } from "./amenity-fixtures";
 
 // Transit slice: Walk/Transit toggle. Provider calls STUBBED by EXACT path
 // (never `/api/**`, which would swallow `/api/tiles` and break the basemap).
@@ -32,7 +33,7 @@ async function waitForMap(page: Page) {
   // Every selection now also fetches amenities — stub it so CI never hits live
   // Overpass/ORS (this suite asserts nothing about amenities).
   await page.route("**/api/amenities**", (route) =>
-    route.fulfill({ json: { origin: { lat: 44.4268, lng: 26.1025 }, walkMinutes: 15, amenities: [] } }),
+    route.fulfill({ json: emptyAmenities({ lat: 44.4268, lng: 26.1025 }) }),
   );
   await page.goto("/");
   const map = page.getByTestId("app-map");
