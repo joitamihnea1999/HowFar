@@ -19,6 +19,16 @@ Runtime provider responses are cached in PostgreSQL with expiry (brief §10), so
 cost 0 external calls. Amenities use a shared weekly city snapshot rather than per-address cache
 entries. Go/no-go bar: ≥100 fresh addresses/day headroom on every provider. **All picks clear it.**
 
+> **⚠ Superseded for the commercial target (2026-08, owner pivot).** The provider
+> picks and the "non-commercial / cached / Bucharest-only" acceptability
+> reasoning below reflect the original **portfolio** project. Under the paid,
+> self-hosted, multi-city direction (self-host the OSM/MOTIS stack; each city's
+> GTFS licence is a per-city go/no-go), Transitous ("not for commercial") and
+> Open-Meteo's free tier are no longer usable as-is. This document has NOT yet
+> been re-argued for that target — a dedicated commercial-provider-docs pass owns
+> that. Until then, treat the acceptability verdicts here as the legacy
+> public-default rationale, not the commercial plan.
+
 ---
 
 ## Verified evidence
@@ -92,7 +102,7 @@ entries. Go/no-go bar: ≥100 fresh addresses/day headroom on every provider. **
   deliberately stays at the default, matching the rings' own ingress. Values are capped
   server-side by Transitous's `street_routing_max_prepost_transit_seconds` (≥2700 as of
   2026-07-29). Load note: this widens each `/plan` search slightly and a zero-itinerary answer
-  is retried once; both stay behind the same per-host 1.5 s rate spacing (no added concurrency).
+  is retried once; both stay behind the same `transit`-bucket rate spacing (default 1.5 s, config-driven since task 009; no added concurrency).
 - Fallback if Transitous asks us to stop: TravelTime (docs.traveltime.com) — after 2-week trial,
   "a limit of 5 hits per minute applies"; isochrone detail capped at Medium on free; Romania
   transit coverage listed only behind account login — **unverified**. Kept as plan B, not the pick.
@@ -290,7 +300,7 @@ T&C above); a live TomTom layer would require an owner decision on a paid Permit
   `treatEmptyAsFailure:false` — a stop with no mapped routes legitimately returns `[]`, and the race
   prefers a non-empty host so a fast degraded mirror's `[]` can't cache a false "no lines". The
   `/api/stop-lines` route rejects out-of-Bucharest coordinates (keeps casual off-area traffic off the
-  community servers) but the real fair-use bound is the per-host rate limiter + single-flight + TTL'd
+  community servers) but the real fair-use bound is the per-provider (`provider@host`) rate limiter + single-flight + TTL'd
   cache, not the geo-guard (which doesn't bind id→coords).
 
 ### Air quality + climate — Open-Meteo ✅ PICKED
@@ -346,8 +356,23 @@ T&C above); a live TomTom layer would require an owner decision on a paid Permit
 
 | Var | Needed | Secret? |
 | --- | --- | --- |
-| `ORS_API_KEY` | walking isochrones | yes — server only |
+| `ORS_API_KEY` | walking/car isochrones — **only when `ORS_BASE_URL` is the public default**; a self-hosted ORS is keyless (task 009) | yes — server only |
 | (none) | Nominatim, Overpass, Open-Meteo, Transitous, tiles | keyless (UA/Referer set in code) |
+
+> **Self-host provider knobs (task 009).** Beyond the `*_BASE_URL` / pool /
+> extent vars (task 007), each provider's rate-limit spacing is tunable via
+> `NOMINATIM_MIN_INTERVAL_MS` / `PHOTON_MIN_INTERVAL_MS` / `ORS_MIN_INTERVAL_MS` /
+> `TRANSIT_MIN_INTERVAL_MS` / `OVERPASS_MIN_INTERVAL_MS` (default = each client's
+> historical spacing — ToS-derived for Nominatim/ORS, conservative fair-use for
+> Photon/Overpass/Transit; `0` disables throttling on a box you own — but a BELOW-default interval
+> is rejected at startup, surfacing as an `/api/ready` 503, unless that provider's
+> base/pool is off the public host, so a stray edit can't fair-use-ban the live
+> deployment; the public-host check is a best-effort allowlist of the known
+> defaults — another public mirror is operator responsibility), and `PROVIDER_DATA_REVISION`
+> is an optional token folded into the cache namespace — bump it when you rebuild
+> a self-hosted ORS/MOTIS graph from a newer OSM extract so stale rings aren't
+> served (no auto-purge of the old generation yet — see `.env.example`). All
+> default to today's behavior, so an unset environment is byte-identical.
 
 ## Action items arising
 

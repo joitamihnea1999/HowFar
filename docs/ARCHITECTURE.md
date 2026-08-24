@@ -5,7 +5,7 @@ data-provider clients live in one repo and deploy as one Railway app service bac
 by PostgreSQL/PostGIS, plus one short-lived weekly importer using the same code. Two rules shape everything:
 
 1. **No external data call from the browser, ever.** Every provider request
-   runs server-side, is rate-limited per host, and is cached in PostgreSQL where appropriate — the
+   runs server-side, is rate-limited per provider (bucket `provider@host`), and is cached in PostgreSQL where appropriate — the
    browser talks to `/api/*` for all data. The only secret is the
    OpenRouteService key. (Sole exception today: the basemap's font glyphs and
    sprite are keyless static files fetched from `protomaps.github.io`;
@@ -83,7 +83,7 @@ server code only.
 | `src/features/auth/auth-view.ts` | Pure auth decision: what the sign-in/out control renders |
 | `src/features/auth/server/auth-config.ts` | Which OAuth providers are configured (reads env — server-only) |
 | `src/features/auth/server/AuthControl.tsx` | Server component: session-aware sign-in/out |
-| `src/lib/provider-http.ts` | Shared provider plumbing: per-host rate limiter, abortable timeout, `ProviderError`, cache-key helpers |
+| `src/lib/provider-http.ts` | Shared provider plumbing: per-provider (`provider@host`) rate limiter, abortable timeout, `ProviderError`, cache-key helpers |
 | `src/lib/api-cache.ts` | PostgreSQL-backed external-provider cache; strict accessors + best-effort `*Safe` variants |
 | `src/lib/api-util.ts` | Route helpers: param parsing, geofence guard, error→status mapping |
 | `src/lib/{env,db,health,timeout,bounds,byte-range}.ts` | Env validation, Prisma pool, DB probe, deadline helper, launch bbox, Range parsing |
@@ -108,8 +108,14 @@ The interactive clients (nominatim, photon, ors, transit and stop/route Overpass
 route's Range serving as a degenerate case) share one shape — read
 `src/features/isochrones/server/ors.ts` once and the rest follow:
 
-1. A constants block: endpoint, host, `MIN_INTERVAL_MS`, `TIMEOUT_MS`, cache
-   TTL. The values live in code, next to the client they throttle.
+1. A constants block: `TIMEOUT_MS` and cache TTL live in code, next to the
+   client. The endpoint/host and the rate-limit interval are CONFIG-driven —
+   `providerConfig()` in `src/lib/env.ts` (`*_BASE_URL` / pools since task 007,
+   the per-provider `intervals` map / `*_MIN_INTERVAL_MS` since task 009, each
+   defaulting to today's public value). The client passes `provider` +
+   `new URL(base).host` + the configured interval to `providerFetch`, whose
+   bucket is keyed `provider@host` (so providers behind one self-hosted domain
+   don't serialize together; interval `0` disables the throttle).
 2. Typed interfaces for the provider's raw response (only the fields we read).
 3. A pure `normalize` function that defensively validates every field it
    touches — coordinates coerced to finite numbers, geometry shape checked,

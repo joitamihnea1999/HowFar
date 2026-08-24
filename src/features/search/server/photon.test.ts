@@ -127,10 +127,25 @@ describe("config-driven host (task 007)", () => {
   it("defaults to today's public Photon host, byte-exact (URL + rateHost + focus)", async () => {
     providerFetch.mockResolvedValue(res([]));
     await suggest("default host");
-    const [url, opts] = providerFetch.mock.calls[0] as [string, { rateHost: string }];
+    const [url, opts] = providerFetch.mock.calls[0] as [string, { rateHost: string; provider: string; minIntervalMs: number }];
     expect(url.startsWith("https://photon.komoot.io/api?")).toBe(true);
     expect(url).toContain("lat=44.43&lon=26.10"); // focus kept byte-identical in P1
     expect(opts.rateHost).toBe("photon.komoot.io");
+    // task 009: labelled bucket + config-driven interval (default 300)
+    expect(opts.provider).toBe("photon");
+    expect(opts.minIntervalMs).toBe(300);
+  });
+
+  it("reads the interval from config, not a hardcoded constant (non-default, above floor)", async () => {
+    vi.stubEnv("PHOTON_MIN_INTERVAL_MS", "9999");
+    try {
+      providerFetch.mockResolvedValue(res([]));
+      await suggest("interval from config");
+      const opts = providerFetch.mock.calls[0][1] as { minIntervalMs: number };
+      expect(opts.minIntervalMs).toBe(9999);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("routes both the request URL and the rate-limit host to an override", async () => {

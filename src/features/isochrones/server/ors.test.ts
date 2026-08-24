@@ -1,10 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+type OrsCfg = { orsBase: string; intervals: { ors: number } };
+const PUBLIC_ORS = "https://api.openrouteservice.org";
 const { store, providerFetch, serverEnv, providerConfig } = vi.hoisted(() => ({
   store: new Map<string, unknown>(),
   providerFetch: vi.fn(),
   serverEnv: vi.fn(() => ({ orsApiKey: "test-key" }) as { orsApiKey?: string }),
-  providerConfig: vi.fn(() => ({ orsBase: "https://api.openrouteservice.org" }) as { orsBase: string }),
+  providerConfig: vi.fn(
+    () => ({ orsBase: "https://api.openrouteservice.org", intervals: { ors: 1500 } }) as OrsCfg,
+  ),
 }));
 
 vi.mock("@/lib/api-cache", () => ({
@@ -45,7 +49,7 @@ beforeEach(() => {
   store.clear();
   providerFetch.mockReset();
   serverEnv.mockReturnValue({ orsApiKey: "test-key" });
-  providerConfig.mockReturnValue({ orsBase: "https://api.openrouteservice.org" });
+  providerConfig.mockReturnValue({ orsBase: PUBLIC_ORS, intervals: { ors: 1500 } });
 });
 
 describe("walkingIsochrone", () => {
@@ -221,7 +225,7 @@ describe("drivingIsochrone (car, tasks 053/058)", () => {
   });
 
   it("routes the request URL and rate-limit host to an ORS_BASE_URL override (task 007)", async () => {
-    providerConfig.mockReturnValue({ orsBase: "https://ors.internal" });
+    providerConfig.mockReturnValue({ orsBase: "https://ors.internal", intervals: { ors: 1500 } });
     providerFetch.mockResolvedValue(orsResponse(MIDDAY_RANGES.map(poly)));
     await drivingIsochrone(44.4268, 26.1025, midday);
     const [url, opts] = providerFetch.mock.calls[0] as [string, { rateHost: string }];
@@ -235,7 +239,7 @@ describe("drivingIsochrone (car, tasks 053/058)", () => {
     // leave the key untagged and fail this.
     vi.stubEnv("ORS_BASE_URL", "https://ors.internal");
     try {
-      providerConfig.mockReturnValue({ orsBase: "https://ors.internal" });
+      providerConfig.mockReturnValue({ orsBase: "https://ors.internal", intervals: { ors: 1500 } });
       providerFetch.mockResolvedValue(orsResponse(MIDDAY_RANGES.map(poly)));
       await drivingIsochrone(44.4, 26.1, midday);
       expect([...store.keys()].every((k) => /^[0-9a-f]{8}:iso:car:/.test(k))).toBe(true);
@@ -267,5 +271,93 @@ describe("drivingIsochrone (car, tasks 053/058)", () => {
   it("rejects a driving response echoing the wrong (e.g. free-flow) ranges — the bijection is load-bearing", async () => {
     providerFetch.mockResolvedValue(orsResponse([poly(600), poly(1200), poly(1800)]));
     await expect(drivingIsochrone(44.4, 26.1, midday)).rejects.toThrow(/requested ranges/i);
+  });
+});
+
+describe("ORS API key policy — public vs keyless self-host (task 009)", () => {
+  const authOf = () =>
+    (providerFetch.mock.calls[0][1] as { init: { headers: Record<string, string> } }).init.headers
+      .Authorization;
+
+  it("PUBLIC default + key present → sends Authorization", async () => {
+    providerConfig.mockReturnValue({ orsBase: PUBLIC_ORS, intervals: { ors: 1500 } });
+    serverEnv.mockReturnValue({ orsApiKey: "test-key" });
+    providerFetch.mockResolvedValue(orsResponse([poly(861), poly(1744), poly(2633)]));
+    await walkingIsochrone(44.4, 26.1);
+    expect(authOf()).toBe("test-key");
+  });
+
+  it("PUBLIC default + NO key → throws, no network (the public-no-key matrix leg)", async () => {
+    providerConfig.mockReturnValue({ orsBase: PUBLIC_ORS, intervals: { ors: 1500 } });
+    serverEnv.mockReturnValue({});
+    await expect(walkingIsochrone(44.4, 26.1)).rejects.toThrow(/ORS_API_KEY/);
+    expect(providerFetch).not.toHaveBeenCalled();
+  });
+
+  it("SELF-HOST base + NO key → no Authorization header, no throw", async () => {
+    providerConfig.mockReturnValue({ orsBase: "https://ors.internal", intervals: { ors: 1500 } });
+    serverEnv.mockReturnValue({});
+    providerFetch.mockResolvedValue(orsResponse([poly(861), poly(1744), poly(2633)]));
+    await walkingIsochrone(44.4, 26.1);
+    expect(authOf()).toBeUndefined();
+  });
+
+  it("SELF-HOST base + STALE public key → key must NOT leak to the self-host", async () => {
+    providerConfig.mockReturnValue({ orsBase: "https://ors.internal", intervals: { ors: 1500 } });
+    serverEnv.mockReturnValue({ orsApiKey: "leftover-public-key" });
+    providerFetch.mockResolvedValue(orsResponse([poly(861), poly(1744), poly(2633)]));
+    await walkingIsochrone(44.4, 26.1);
+    expect(authOf()).toBeUndefined();
+  });
+
+  // IT1: public-host detection must be canonical, not raw-string — a case or
+  // default-port variant still points at the PUBLIC ORS and must keep the key.
+  it.each([
+    ["uppercase host", "https://API.openrouteservice.org"],
+    ["explicit :443", "https://api.openrouteservice.org:443"],
+  ])("PUBLIC host written as %s is still recognized public → key required + sent", async (_label, base) => {
+    providerConfig.mockReturnValue({ orsBase: base, intervals: { ors: 1500 } });
+    serverEnv.mockReturnValue({ orsApiKey: "test-key" });
+    providerFetch.mockResolvedValue(orsResponse([poly(861), poly(1744), poly(2633)]));
+    await walkingIsochrone(44.4, 26.1);
+    expect(authOf()).toBe("test-key");
+  });
+
+  it("PUBLIC host written with a case variant + NO key still throws (not silently keyless)", async () => {
+    providerConfig.mockReturnValue({ orsBase: "https://API.openrouteservice.org", intervals: { ors: 1500 } });
+    serverEnv.mockReturnValue({});
+    await expect(walkingIsochrone(44.4, 26.1)).rejects.toThrow(/ORS_API_KEY/);
+    expect(providerFetch).not.toHaveBeenCalled();
+  });
+
+  // RI2: the ORS key is a SECRET — it must never ride cleartext HTTP. An
+  // `http://` public host is NOT the key-bearing public default (origin differs
+  // by scheme), so no Authorization header is attached.
+  it("PUBLIC host over http:// does NOT send the key (no plaintext secret leak)", async () => {
+    providerConfig.mockReturnValue({ orsBase: "http://api.openrouteservice.org", intervals: { ors: 1500 } });
+    serverEnv.mockReturnValue({ orsApiKey: "test-key" });
+    providerFetch.mockResolvedValue(orsResponse([poly(861), poly(1744), poly(2633)]));
+    await walkingIsochrone(44.4, 26.1);
+    expect(authOf()).toBeUndefined();
+  });
+
+  it("a trailing-dot https public ORS host is still recognized public → key sent (canonicalized)", async () => {
+    providerConfig.mockReturnValue({ orsBase: "https://api.openrouteservice.org.", intervals: { ors: 1500 } });
+    serverEnv.mockReturnValue({ orsApiKey: "test-key" });
+    providerFetch.mockResolvedValue(orsResponse([poly(861), poly(1744), poly(2633)]));
+    await walkingIsochrone(44.4, 26.1);
+    expect(authOf()).toBe("test-key");
+  });
+
+  // IT5: the ORS call site must carry its `provider` label AND the CONFIGURED
+  // interval (not a hardcoded 1500) — a wrong label re-collapses the bucket.
+  it("passes provider:'ors' and the configured (non-default) interval to providerFetch", async () => {
+    providerConfig.mockReturnValue({ orsBase: "https://ors.internal", intervals: { ors: 42 } });
+    serverEnv.mockReturnValue({});
+    providerFetch.mockResolvedValue(orsResponse([poly(861), poly(1744), poly(2633)]));
+    await walkingIsochrone(44.4, 26.1);
+    const opts = providerFetch.mock.calls[0][1] as { provider: string; minIntervalMs: number };
+    expect(opts.provider).toBe("ors");
+    expect(opts.minIntervalMs).toBe(42);
   });
 });

@@ -24,7 +24,10 @@ import { providerFetch, ProviderError, USER_AGENT } from "@/lib/provider-http";
 // variable (fast, or 504 under load); kumi is a third hedge (was down when
 // probed, may recover). Racing means a currently-dead host costs nothing — it
 // simply never wins. The per-host rate-limit key is derived from each URL.
-const MIN_INTERVAL_MS = 1100; // be a good fair-use citizen (per host)
+// Interval is config-driven (task 009, `intervals.overpass`, default 1100 ms =
+// fair-use per host). Bucket = `overpass@${host}`, so the interactive pool
+// stays per-host; the weekly BULK importer (bulk-overpass.ts) uses a separate
+// direct-fetch path and is deliberately NOT in this bucket.
 const ENDPOINT_TIMEOUT_MS = 18_000; // per-host abort; the race isn't sequential so this is the whole budget
 
 export interface OverpassElement {
@@ -75,6 +78,7 @@ async function fetchFromHost(
   endpoint: { url: string; host: string },
   query: string,
   raceSignal: AbortSignal,
+  minIntervalMs: number,
   treatEmptyAsFailure: boolean,
 ): Promise<OverpassElement[]> {
   // A per-attempt deadline that stays armed THROUGH body parsing. providerFetch's
@@ -86,8 +90,9 @@ async function fetchFromHost(
   const timer = setTimeout(() => deadline.abort(), ENDPOINT_TIMEOUT_MS);
   try {
     const res = await providerFetch(endpoint.url, {
+      provider: "overpass",
       rateHost: endpoint.host,
-      minIntervalMs: MIN_INTERVAL_MS,
+      minIntervalMs,
       timeoutMs: ENDPOINT_TIMEOUT_MS,
       signal: AbortSignal.any([deadline.signal, raceSignal]),
       init: {
@@ -135,9 +140,10 @@ export async function raceOverpass(
 ): Promise<OverpassElement[]> {
   const treatEmptyAsFailure = opts.treatEmptyAsFailure ?? true;
   const controller = new AbortController();
-  const endpoints = providerConfig().overpassEndpoints.map((url) => ({ url, host: new URL(url).host }));
+  const cfg = providerConfig();
+  const endpoints = cfg.overpassEndpoints.map((url) => ({ url, host: new URL(url).host }));
   const attempts = endpoints.map((ep) =>
-    fetchFromHost(ep, query, controller.signal, treatEmptyAsFailure),
+    fetchFromHost(ep, query, controller.signal, cfg.intervals.overpass, treatEmptyAsFailure),
   );
   try {
     // First NON-EMPTY success wins (empties threw, so Promise.any skips them).

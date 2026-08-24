@@ -20,7 +20,8 @@ import { providerFetch, ProviderError, roundCoord, USER_AGENT } from "@/lib/prov
 // shared with one-to-all (transit.ts). The plan path is version-specific and
 // stays in code; only the base moves.
 const PLAN_PATH = "/api/v1/plan";
-const MIN_INTERVAL_MS = 1500; // community-run; be a good citizen (shared with one-to-all's host)
+// Interval is config-driven (task 009, `intervals.transit`, default 1500 ms);
+// shares the `provider:"transit"` bucket with one-to-all (transit.ts).
 /** END-TO-END budget for resolving one trip plan: rate-limiter queue wait +
  * first attempt + the bounded retry, all under ONE absolute deadline (an
  * AbortController armed at entry — a fixed per-attempt timeout would start
@@ -31,8 +32,11 @@ const MIN_INTERVAL_MS = 1500; // community-run; be a good citizen (shared with o
  * client deadline is asserted in transit-plan.test.ts; the overrun path
  * throws a ProviderError and caches nothing. */
 export const PLAN_BUDGET_MS = 10_000;
-/** Don't bother retrying unless at least this much of the budget remains —
- * a retry needs the 1.5s host spacing plus a realistic response window. */
+/** Don't bother retrying unless at least this much of the budget remains — a
+ * retry needs the configured transit spacing (default 1.5 s — the interval is
+ * config-driven since task 009) plus a realistic response window. Tuned for the
+ * default; a self-host that sets a very different TRANSIT_MIN_INTERVAL_MS may
+ * want this derived from the interval (parked follow-up). */
 const RETRY_MIN_REMAINING_MS = 3_000;
 // Schedules are stable within a day and the departure is in the cache key, so a
 // few hours of reuse is safe and keeps repeat right-clicks instant.
@@ -327,12 +331,18 @@ export async function planTrip(
   }
 }
 
-async function fetchPlanBody(url: string, host: string, budgetSignal: AbortSignal): Promise<MotisPlanBody> {
+async function fetchPlanBody(
+  url: string,
+  host: string,
+  minIntervalMs: number,
+  budgetSignal: AbortSignal,
+): Promise<MotisPlanBody> {
   let body: MotisPlanBody;
   try {
     const res = await providerFetch(url, {
+      provider: "transit",
       rateHost: host,
-      minIntervalMs: MIN_INTERVAL_MS,
+      minIntervalMs,
       // The per-attempt timeout is a ceiling only — the ABSOLUTE budget signal
       // is what bounds queue+attempts end-to-end (see PLAN_BUDGET_MS).
       timeoutMs: PLAN_BUDGET_MS,
@@ -358,7 +368,7 @@ async function fetchAndParse(
   key: string,
   maxSeconds?: number,
 ): Promise<ReachPlan> {
-  const { transitBase } = providerConfig();
+  const { transitBase, intervals } = providerConfig();
   const host = new URL(transitBase).host;
   const url =
     `${transitBase}${PLAN_PATH}?fromPlace=${roundCoord(from.lat)},${roundCoord(from.lng)}` +
@@ -388,7 +398,7 @@ async function fetchAndParse(
     (Array.isArray(b.direct) ? b.direct : []).some((it) => it && durationSeconds(it.duration) > 0);
   let plan: ReachPlan;
   try {
-    const body = await fetchPlanBody(url, host, budget.signal);
+    const body = await fetchPlanBody(url, host, intervals.transit, budget.signal);
     plan = bestPlan(body, { maxSeconds });
     // One bounded retry when the response yields NO public-transport answer AND
     // no direct (walk/bike) answer either — an effectively-empty response is
@@ -399,7 +409,7 @@ async function fetchAndParse(
     // NEVER let a failed retry discard the first, determinate answer (review).
     if (!isTransitAnswer(plan) && !usableDirect(body) && Date.now() + RETRY_MIN_REMAINING_MS < deadline) {
       try {
-        const second = bestPlan(await fetchPlanBody(url, host, budget.signal), { maxSeconds });
+        const second = bestPlan(await fetchPlanBody(url, host, intervals.transit, budget.signal), { maxSeconds });
         if (isTransitAnswer(second)) plan = second;
       } catch {
         // The first response already answers "no transit here" — a failed

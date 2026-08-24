@@ -34,7 +34,9 @@ import { withTimeout } from "@/lib/timeout";
 // Transitous host is config-driven (task 007) — default = today's public MOTIS.
 // The one-to-all path is version-specific and stays in code; only the base moves.
 const ONE_TO_ALL_PATH = "/api/v6/one-to-all";
-const MIN_INTERVAL_MS = 1500; // community-run; be a good citizen
+// Interval is config-driven (task 009, `intervals.transit`, default 1500 ms;
+// community-run — be a good citizen). Shared with transit-plan via the same
+// `provider:"transit"` bucket, so the two MOTIS paths keep one chain.
 const TIMEOUT_MS = 20_000; // one-to-all is heavy (~1.5–3 s live)
 const TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_TRAVEL_MIN = THRESHOLDS[THRESHOLDS.length - 1]; // 45
@@ -228,7 +230,7 @@ async function fetchAndBuild(
       return null;
     });
 
-  const { transitBase } = providerConfig();
+  const { transitBase, intervals } = providerConfig();
 
   // A stalled/unreachable/garbled upstream is a provider error (→ 502), not a 500.
   let body: OneToAllBody;
@@ -238,8 +240,9 @@ async function fetchAndBuild(
       `&transitModes=TRANSIT&time=${encodeURIComponent(departure)}` +
       `&pedestrianSpeed=${paceModel.pedestrianSpeedMs}&useRoutedTransfers=true`;
     const res = await providerFetch(url, {
+      provider: "transit",
       rateHost: new URL(transitBase).host,
-      minIntervalMs: MIN_INTERVAL_MS,
+      minIntervalMs: intervals.transit,
       timeoutMs: TIMEOUT_MS,
       init: { headers: { "User-Agent": USER_AGENT } },
     });

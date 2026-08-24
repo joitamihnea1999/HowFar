@@ -330,9 +330,12 @@ describe("planTrip", () => {
   it("defaults to today's public plan host, and a TRANSIT_BASE_URL override moves URL + rateHost (task 007)", async () => {
     providerFetch.mockResolvedValue(planResponse([FAST]));
     await planTrip(FROM, TO, DEP);
-    const [defUrl, defOpts] = providerFetch.mock.calls[0] as [string, { rateHost: string }];
+    const [defUrl, defOpts] = providerFetch.mock.calls[0] as [string, { rateHost: string; provider: string; minIntervalMs: number }];
     expect(defUrl.startsWith("https://api.transitous.org/api/v1/plan?")).toBe(true);
     expect(defOpts.rateHost).toBe("api.transitous.org");
+    // task 009: MUST share the `transit` bucket with one-to-all (same upstream)
+    expect(defOpts.provider).toBe("transit");
+    expect(defOpts.minIntervalMs).toBe(1500);
 
     vi.stubEnv("TRANSIT_BASE_URL", "https://motis.internal/");
     try {
@@ -345,6 +348,18 @@ describe("planTrip", () => {
       expect(opts.rateHost).toBe("motis.internal");
       // Cache key config-namespaced under the override (guards the wrapper).
       expect([...store.keys()].every((k) => /^[0-9a-f]{8}:reach:plan:/.test(k))).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("reads the interval from config, not a hardcoded constant (non-default, above floor)", async () => {
+    vi.stubEnv("TRANSIT_MIN_INTERVAL_MS", "9999");
+    try {
+      providerFetch.mockResolvedValue(planResponse([FAST]));
+      await planTrip({ lat: 44.31, lng: 26.06 }, { lat: 44.48, lng: 26.18 }, DEP);
+      const opts = providerFetch.mock.calls[0][1] as { minIntervalMs: number };
+      expect(opts.minIntervalMs).toBe(9999);
     } finally {
       vi.unstubAllEnvs();
     }

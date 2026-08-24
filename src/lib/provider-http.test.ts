@@ -41,6 +41,29 @@ describe("withRateLimit", () => {
       "recovered",
     );
   });
+
+  it("bypasses the serialize-chain at interval 0 — concurrent callers do NOT queue (task 009)", async () => {
+    // Self-host "no throttle": three same-bucket calls at interval 0 must all
+    // start before any resolves, i.e. run concurrently rather than one-at-a-time.
+    const starts: number[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const task = () => {
+      starts.push(Date.now());
+      return gate.then(() => "ok");
+    };
+    const all = Promise.all([
+      withRateLimit("zero-bucket", 0, task),
+      withRateLimit("zero-bucket", 0, task),
+      withRateLimit("zero-bucket", 0, task),
+    ]);
+    // Let microtasks settle; with a bypass all three fn()s have started already.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(starts).toHaveLength(3); // would be 1 if the chain still serialized
+    release();
+    await all;
+  });
 });
 
 describe("timedFetch", () => {
@@ -96,6 +119,7 @@ describe("providerFetch", () => {
       return Promise.resolve(new Response("composed"));
     });
     const res = await providerFetch("http://example.test", {
+      provider: "nominatim",
       rateHost: "compose.test",
       minIntervalMs: 0,
       timeoutMs: 1000,
@@ -104,5 +128,65 @@ describe("providerFetch", () => {
     expect(await res.text()).toBe("composed");
     expect(seen[0]?.signal).toBeInstanceOf(AbortSignal); // timeout wiring reached fetch
     expect((seen[0]?.headers as Record<string, string>)["User-Agent"]).toBe("test-agent");
+  });
+
+  it("keys the rate-limit bucket per PROVIDER, so two providers on ONE host don't serialize (task 009)", async () => {
+    // The self-host bug this fixes: with all providers behind one domain, a
+    // host-only bucket collapsed them into one chain (a slow MOTIS call blocked
+    // a fast autocomplete). Bucket = `${provider}@${host}`, so distinct
+    // providers on the SAME host run concurrently.
+    const INTERVAL = 120;
+    const starts: number[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    vi.stubGlobal("fetch", () => {
+      starts.push(Date.now());
+      return gate.then(() => new Response("ok"));
+    });
+    const shared = "one.domain.test";
+    const both = Promise.all([
+      providerFetch("http://one.domain.test/a", { provider: "transit", rateHost: shared, minIntervalMs: INTERVAL, timeoutMs: 5000 }),
+      providerFetch("http://one.domain.test/b", { provider: "photon", rateHost: shared, minIntervalMs: INTERVAL, timeoutMs: 5000 }),
+    ]);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(starts).toHaveLength(2); // both started; a shared chain would show 1
+    release();
+    await both;
+  });
+
+  it("collapses case/trailing-dot host aliases into ONE bucket (no 2× race on one server)", async () => {
+    // A hand-written pool could hold `overpass-api.de` and `overpass-api.de.`
+    // (or a case variant): same server, so they MUST share one serialized bucket.
+    const INTERVAL = 120;
+    const starts: number[] = [];
+    vi.stubGlobal("fetch", () => {
+      starts.push(Date.now());
+      return Promise.resolve(new Response("ok"));
+    });
+    await Promise.all([
+      providerFetch("http://overpass-api.de/a", { provider: "overpass", rateHost: "overpass-api.de", minIntervalMs: INTERVAL, timeoutMs: 5000 }),
+      providerFetch("http://overpass-api.de./b", { provider: "overpass", rateHost: "overpass-api.de.", minIntervalMs: INTERVAL, timeoutMs: 5000 }),
+      providerFetch("http://OVERPASS-API.DE/c", { provider: "overpass", rateHost: "OVERPASS-API.DE", minIntervalMs: INTERVAL, timeoutMs: 5000 }),
+    ]);
+    expect(starts).toHaveLength(3);
+    // one shared bucket ⇒ each spaced ≥ interval (a split would start them together)
+    expect(starts[1] - starts[0]).toBeGreaterThanOrEqual(INTERVAL - 20);
+    expect(starts[2] - starts[1]).toBeGreaterThanOrEqual(INTERVAL - 20);
+  });
+
+  it("still serializes two calls of the SAME provider+host with >= interval spacing", async () => {
+    const INTERVAL = 120;
+    const starts: number[] = [];
+    vi.stubGlobal("fetch", () => {
+      starts.push(Date.now());
+      return Promise.resolve(new Response("ok"));
+    });
+    await Promise.all([
+      providerFetch("http://h/a", { provider: "ors", rateHost: "h", minIntervalMs: INTERVAL, timeoutMs: 5000 }),
+      providerFetch("http://h/b", { provider: "ors", rateHost: "h", minIntervalMs: INTERVAL, timeoutMs: 5000 }),
+    ]);
+    expect(starts).toHaveLength(2);
+    expect(starts[1] - starts[0]).toBeGreaterThanOrEqual(INTERVAL - 20);
   });
 });

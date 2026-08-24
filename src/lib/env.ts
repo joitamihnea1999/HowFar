@@ -134,6 +134,28 @@ export const PROVIDER_DEFAULTS = {
 /** Default tile archive location, relative to cwd, joined server-side. */
 export const TILES_PATH_DEFAULT_SEGMENTS = ["data", "tiles", "bucharest.pmtiles"] as const;
 
+/**
+ * Per-provider rate-limit spacing (min ms between upstream calls to the same
+ * provider bucket), lifted out of the client modules (task 009) so a self-host
+ * operator — who owns the box and has no public ToS — can retune or disable
+ * throttling per provider. Each default is the client's original value and the
+ * rationale that used to sit next to it:
+ *   - nominatim 1100 → OSM ToS ≤1 req/s, with margin
+ *   - photon    300  → komoot public; gentle spacing
+ *   - ors       1500 → free tier ~40 isochrone req/min ⇒ ≥1.5 s (PROVIDERS.md)
+ *   - transit   1500 → community-run MOTIS; be a good citizen (one-to-all + plan share it)
+ *   - overpass  1100 → fair-use per host (interactive pool)
+ * `0` disables the throttle entirely (see `withRateLimit`: it bypasses the
+ * serialize-chain at ≤0). Unset ⇒ these exact defaults ⇒ byte-identical to pre-lift.
+ */
+export const PROVIDER_INTERVAL_DEFAULTS = {
+  nominatim: 1100,
+  photon: 300,
+  ors: 1500,
+  transit: 1500,
+  overpass: 1100,
+} as const;
+
 export interface ProviderConfig {
   /** Base URL (no trailing slash); the client appends provider-version paths. */
   nominatimBase: string;
@@ -143,6 +165,15 @@ export interface ProviderConfig {
   transitBase: string;
   overpassEndpoints: string[];
   bulkOverpassEndpoints: string[];
+  /** Per-provider rate-limit spacing in ms (0 = no throttle). Timing only —
+   *  deliberately NOT part of `configCacheTag` (it never changes response content). */
+  intervals: {
+    nominatim: number;
+    photon: number;
+    ors: number;
+    transit: number;
+    overpass: number;
+  };
 }
 
 /** Validate a single base URL: trailing slash stripped, must parse as an
@@ -195,9 +226,129 @@ function endpointPool(source: EnvSource, name: string, fallback: readonly string
   return parts.map((p) => validateBaseUrl(name, p));
 }
 
+/** A non-negative integer count of milliseconds. ABSENT → default;
+ *  PRESENT-but-blank → EnvError; non-integer or negative → EnvError; `0` is
+ *  allowed and means "no throttle" (a self-host with no ToS limit). Fail-closed
+ *  like `baseUrl` — a typo becomes a startup error, never a silent bad interval. */
+function intervalMs(source: EnvSource, name: string, fallback: number): number {
+  const raw = source[name];
+  if (raw === undefined) return fallback;
+  const trimmed = raw.trim();
+  if (trimmed === "") {
+    throw new EnvError(name, "is set but blank — unset it entirely to use the default");
+  }
+  const n = Number(trimmed);
+  // Upper bound = Node's max setTimeout delay (2^31−1 ms). A larger value would
+  // be silently CLAMPED to 1 ms by setTimeout (defeating the throttle), so reject
+  // it loudly instead (task 009). ~24.8 days is already absurd for
+  // a rate-limit interval, so the ceiling costs no real config range.
+  const MAX_TIMER_MS = 2_147_483_647;
+  if (!Number.isInteger(n) || n < 0 || n > MAX_TIMER_MS) {
+    throw new EnvError(
+      name,
+      `must be an integer between 0 and ${MAX_TIMER_MS} milliseconds (got "${raw.slice(0, 40)}")`,
+    );
+  }
+  return n;
+}
+
+/** Host in the canonical form used for public-provider detection: lowercased,
+ *  with a single trailing DNS root dot stripped. `EXAMPLE.org`, `example.org`,
+ *  and `example.org.` all resolve to the same service but WHATWG `URL.host`
+ *  keeps them distinct — canonicalize so a case/trailing-dot variant can neither
+ *  evade public-host detection nor split a rate-limit bucket (task 009). */
+export function canonicalHost(rawUrl: string): string {
+  return new URL(rawUrl).host.toLowerCase().replace(/\.$/, "");
+}
+
+/** True when `base` resolves to the same host as `defaultBase` — i.e. it still
+ *  points at the public provider (case-, port-, and trailing-dot-insensitive). */
+function isPublicHost(base: string, defaultBase: string): boolean {
+  return canonicalHost(base) === canonicalHost(defaultBase);
+}
+
+/**
+ * Fail closed when a single-base provider still points at a PUBLIC host but over
+ * cleartext `http:` (task 009). For ORS this would transmit the secret key in
+ * the clear; for all four it is a misconfiguration that otherwise degrades
+ * silently (keyless/blocked request → runtime 502 while `/api/ready` stays
+ * green). Rejecting at parse turns it into a loud healthcheck failure. A
+ * self-hosted host (not a public default) may use http on a trusted network.
+ */
+function assertNoHttpOnPublicHost(cfg: ProviderConfig): void {
+  const singleBases: Array<[string, string, string]> = [
+    ["NOMINATIM_BASE_URL", cfg.nominatimBase, PROVIDER_DEFAULTS.nominatimBase],
+    ["PHOTON_BASE_URL", cfg.photonBase, PROVIDER_DEFAULTS.photonBase],
+    ["ORS_BASE_URL", cfg.orsBase, PROVIDER_DEFAULTS.orsBase],
+    ["TRANSIT_BASE_URL", cfg.transitBase, PROVIDER_DEFAULTS.transitBase],
+  ];
+  for (const [name, base, dflt] of singleBases) {
+    if (canonicalHost(base) === canonicalHost(dflt) && new URL(base).protocol !== "https:") {
+      throw new EnvError(name, "must use https:// for the public provider host (http would send/expose over cleartext)");
+    }
+  }
+  // Same rule for the Overpass pools (sibling-path class): an http endpoint whose
+  // canonical host is a known public Overpass host must also fail closed.
+  const publicOverpassHosts = new Set(
+    [...PROVIDER_DEFAULTS.overpassEndpoints, ...PROVIDER_DEFAULTS.bulkOverpassEndpoints].map(canonicalHost),
+  );
+  for (const [name, pool] of [
+    ["OVERPASS_ENDPOINTS", cfg.overpassEndpoints],
+    ["OVERPASS_BULK_ENDPOINTS", cfg.bulkOverpassEndpoints],
+  ] as const) {
+    for (const ep of pool) {
+      if (publicOverpassHosts.has(canonicalHost(ep)) && new URL(ep).protocol !== "https:") {
+        throw new EnvError(name, `must use https:// for the public Overpass host "${canonicalHost(ep)}" (http would expose traffic over cleartext)`);
+      }
+    }
+  }
+}
+
+/**
+ * Safety guard (task 009): you may only RELAX a provider's rate
+ * limit below its ToS-safe default when you actually self-host that provider.
+ * Setting e.g. `NOMINATIM_MIN_INTERVAL_MS=0` while `NOMINATIM_BASE_URL` is still
+ * the public default would let the LIVE deployment exceed OSM's ≤1 req/s and get
+ * the product's IP blocked — with no other warning. Fail closed: throw so the
+ * operator must ALSO point the base at their own instance. Raising the interval
+ * (more throttle) is always allowed; overpass keys off its interactive pool.
+ */
+function assertPublicThrottleFloor(cfg: ProviderConfig): void {
+  // Overpass shares ONE interval across a POOL: the floor must apply if the pool
+  // contains ANY public host (pinning/reordering/subsetting the default mirrors
+  // must NOT bypass it), so key off per-endpoint membership, not whole-list
+  // equality — matching one surviving public host is enough to hit fair-use.
+  // Membership is tested over the INTERACTIVE `overpassEndpoints` only — the
+  // interval governs just that client; the weekly bulk importer uses raw fetch
+  // (no bucket/interval), so a public `bulkOverpassEndpoints` is intentionally
+  // irrelevant to this floor (the http-on-public guard above still covers bulk).
+  const defaultOverpassHosts = new Set(
+    [...PROVIDER_DEFAULTS.overpassEndpoints, ...PROVIDER_DEFAULTS.bulkOverpassEndpoints].map(canonicalHost),
+  );
+  const overpassTouchesPublic = cfg.overpassEndpoints.some((u) =>
+    defaultOverpassHosts.has(canonicalHost(u)),
+  );
+  const checks: Array<[string, boolean, number, number]> = [
+    ["NOMINATIM_MIN_INTERVAL_MS", isPublicHost(cfg.nominatimBase, PROVIDER_DEFAULTS.nominatimBase), cfg.intervals.nominatim, PROVIDER_INTERVAL_DEFAULTS.nominatim],
+    ["PHOTON_MIN_INTERVAL_MS", isPublicHost(cfg.photonBase, PROVIDER_DEFAULTS.photonBase), cfg.intervals.photon, PROVIDER_INTERVAL_DEFAULTS.photon],
+    ["ORS_MIN_INTERVAL_MS", isPublicHost(cfg.orsBase, PROVIDER_DEFAULTS.orsBase), cfg.intervals.ors, PROVIDER_INTERVAL_DEFAULTS.ors],
+    ["TRANSIT_MIN_INTERVAL_MS", isPublicHost(cfg.transitBase, PROVIDER_DEFAULTS.transitBase), cfg.intervals.transit, PROVIDER_INTERVAL_DEFAULTS.transit],
+    ["OVERPASS_MIN_INTERVAL_MS", overpassTouchesPublic, cfg.intervals.overpass, PROVIDER_INTERVAL_DEFAULTS.overpass],
+  ];
+  for (const [name, onPublic, interval, floor] of checks) {
+    if (onPublic && interval < floor) {
+      throw new EnvError(
+        name,
+        `${interval} is below the public provider's fair-use floor of ${floor} ms — ` +
+          `point the matching *_BASE_URL / pool at a self-hosted instance before relaxing it`,
+      );
+    }
+  }
+}
+
 /** Parse provider config from a source. Pure (no process.env), so tests inject. */
 export function parseProviderConfig(source: EnvSource = process.env): ProviderConfig {
-  return {
+  const cfg: ProviderConfig = {
     nominatimBase: baseUrl(source, "NOMINATIM_BASE_URL", PROVIDER_DEFAULTS.nominatimBase),
     photonBase: baseUrl(source, "PHOTON_BASE_URL", PROVIDER_DEFAULTS.photonBase),
     orsBase: baseUrl(source, "ORS_BASE_URL", PROVIDER_DEFAULTS.orsBase),
@@ -208,7 +359,17 @@ export function parseProviderConfig(source: EnvSource = process.env): ProviderCo
       "OVERPASS_BULK_ENDPOINTS",
       PROVIDER_DEFAULTS.bulkOverpassEndpoints,
     ),
+    intervals: {
+      nominatim: intervalMs(source, "NOMINATIM_MIN_INTERVAL_MS", PROVIDER_INTERVAL_DEFAULTS.nominatim),
+      photon: intervalMs(source, "PHOTON_MIN_INTERVAL_MS", PROVIDER_INTERVAL_DEFAULTS.photon),
+      ors: intervalMs(source, "ORS_MIN_INTERVAL_MS", PROVIDER_INTERVAL_DEFAULTS.ors),
+      transit: intervalMs(source, "TRANSIT_MIN_INTERVAL_MS", PROVIDER_INTERVAL_DEFAULTS.transit),
+      overpass: intervalMs(source, "OVERPASS_MIN_INTERVAL_MS", PROVIDER_INTERVAL_DEFAULTS.overpass),
+    },
   };
+  assertNoHttpOnPublicHost(cfg);
+  assertPublicThrottleFloor(cfg);
+  return cfg;
 }
 
 /** Provider config accessor. NON-memoized on purpose: call it INSIDE request
@@ -251,9 +412,21 @@ function sameList(a: readonly string[], b: readonly string[]): boolean {
  * provider caches together; config changes are rare deploy events and a cold
  * cache is "slower but correct" — the degradation posture the app already
  * commits to.
+ *
+ * `PROVIDER_DATA_REVISION` (task 009) is an OPTIONAL free-form token (e.g. an
+ * OSM-extract date) folded into the tag — mirroring `CAR_FACTOR_REVISION` one
+ * level up. Self-hosted ORS/MOTIS keep byte-identical URLs after a graph rebuild
+ * from a newer extract, so nothing else in the tag would change and stale rings
+ * would be served until each key's TTL; bump this token on a rebuild to cold the
+ * namespace. NOTE the blast radius is UNIFORM: a bump colds EVERY provider cache
+ * (geocode/suggest/stop-lines/route-path/catalogue too), not only routing rings.
+ * NOTE also that the previous generation's rows are not deleted — there is no
+ * expiry sweep (see api-cache.ts) — so a bump leaves them resident until a
+ * manual `DELETE FROM "ApiCache"`.
  */
 export function configCacheTag(source: EnvSource = process.env): string {
   const cfg = parseProviderConfig(source);
+  const dataRevision = optionalEnv(source, "PROVIDER_DATA_REVISION");
   const bboxIsDefault =
     BUCHAREST_BBOX.minLng === DEFAULT_BBOX.minLng &&
     BUCHAREST_BBOX.minLat === DEFAULT_BBOX.minLat &&
@@ -266,6 +439,7 @@ export function configCacheTag(source: EnvSource = process.env): string {
     cfg.transitBase === PROVIDER_DEFAULTS.transitBase &&
     sameList(cfg.overpassEndpoints, PROVIDER_DEFAULTS.overpassEndpoints) &&
     sameList(cfg.bulkOverpassEndpoints, PROVIDER_DEFAULTS.bulkOverpassEndpoints) &&
+    !dataRevision &&
     bboxIsDefault;
   if (isDefault) return "";
   const canonical = JSON.stringify({
@@ -276,6 +450,7 @@ export function configCacheTag(source: EnvSource = process.env): string {
     ov: cfg.overpassEndpoints,
     bo: cfg.bulkOverpassEndpoints,
     b: [BUCHAREST_BBOX.minLng, BUCHAREST_BBOX.minLat, BUCHAREST_BBOX.maxLng, BUCHAREST_BBOX.maxLat],
+    r: dataRevision ?? "",
   });
   return createHash("sha256").update(canonical).digest("hex").slice(0, 8);
 }

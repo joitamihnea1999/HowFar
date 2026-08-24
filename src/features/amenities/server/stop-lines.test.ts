@@ -126,4 +126,19 @@ describe("stopLines — direct-first, stop_area fallback", () => {
     const fullExpiry = store.get("stop-lines:v2:node/8::expires") as Date;
     expect(fullExpiry.getTime() - Date.now()).toBeGreaterThan(2 * 24 * 60 * 60 * 1000);
   });
+
+  it("config-namespaces the cache key under a PROVIDER_DATA_REVISION bump (guards the taggedCacheKey wrapper)", async () => {
+    // Proves this call site flows through taggedCacheKey — so the documented
+    // "a revision bump colds EVERY provider cache" claim holds here too (task 009).
+    vi.stubEnv("PROVIDER_DATA_REVISION", "r1");
+    try {
+      raceOverpass.mockResolvedValueOnce([routeRel({ route: "bus", ref: "1", to: "X" })]);
+      await stopLines("node", 77);
+      const keys = [...store.keys()].filter((k) => !k.endsWith("::expires"));
+      expect(keys.length).toBeGreaterThan(0);
+      expect(keys.every((k) => /^[0-9a-f]{8}:stop-lines:v2:/.test(k))).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });

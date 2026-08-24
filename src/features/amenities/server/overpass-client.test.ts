@@ -69,6 +69,24 @@ describe("config-driven endpoint pool (task 007)", () => {
     ]);
     const hosts = providerFetch.mock.calls.map((c) => (c[1] as { rateHost: string }).rateHost);
     expect(hosts).toEqual(["maps.mail.ru", "overpass-api.de", "overpass.kumi.systems"]);
+    // task 009: every interactive-pool call is labelled `overpass` (kept per-host)
+    // with the config-driven interval (default 1100) — the bulk importer is a
+    // separate direct-fetch path, deliberately NOT in this bucket.
+    const opts = providerFetch.mock.calls.map((c) => c[1] as { provider: string; minIntervalMs: number });
+    expect(opts.every((o) => o.provider === "overpass")).toBe(true);
+    expect(opts.every((o) => o.minIntervalMs === 1100)).toBe(true);
+  });
+
+  it("reads the interval from config, not a hardcoded constant (non-default, above floor)", async () => {
+    vi.stubEnv("OVERPASS_MIN_INTERVAL_MS", "9999");
+    try {
+      providerFetch.mockResolvedValue(resp([el]));
+      await raceOverpass("q", { treatEmptyAsFailure: false });
+      const opts = providerFetch.mock.calls.map((c) => c[1] as { minIntervalMs: number });
+      expect(opts.every((o) => o.minIntervalMs === 9999)).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("uses an OVERPASS_ENDPOINTS override (URL + derived rateHost)", async () => {

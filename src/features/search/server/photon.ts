@@ -14,7 +14,7 @@ import { providerFetch, ProviderError, sha256Hex, USER_AGENT } from "@/lib/provi
 
 // Host/base are config-driven (task 007) — default = today's public Photon.
 // Read inside the fetch function; the rate-limit host derives from the base.
-const MIN_INTERVAL_MS = 300;
+// Interval is config-driven too (task 009, `intervals.photon`, default 300 ms).
 const TIMEOUT_MS = 6_000;
 const TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // Photon bbox is minLon,minLat,maxLon,maxLat.
@@ -92,14 +92,15 @@ export async function suggest(query: string): Promise<Suggestion[]> {
 async function fetchAndCacheSuggestions(key: string, q: string): Promise<Suggestion[]> {
   let body: { features?: PhotonFeature[] };
   try {
-    const { photonBase } = providerConfig();
+    const { photonBase, intervals } = providerConfig();
     // `/api` is Photon's search path (kept in code so PHOTON_BASE_URL is a bare
     // host like the other providers). The lat/lon focus is a ranking bias only,
     // kept unchanged here; deriving it from the bbox centre is a later follow-up.
     const url = `${photonBase}/api?q=${encodeURIComponent(q)}&bbox=${BBOX}&lat=44.43&lon=26.10&limit=8&lang=en`;
     const res = await providerFetch(url, {
+      provider: "photon",
       rateHost: new URL(photonBase).host,
-      minIntervalMs: MIN_INTERVAL_MS,
+      minIntervalMs: intervals.photon,
       timeoutMs: TIMEOUT_MS,
       init: { headers: { "User-Agent": USER_AGENT, Accept: "application/json" } },
     });

@@ -97,9 +97,24 @@ describe("config-driven host (task 007)", () => {
   it("defaults to today's public Nominatim host, byte-exact (URL + rateHost)", async () => {
     providerFetch.mockResolvedValue(jsonResponse([]));
     await geocode("default host");
-    const [url, opts] = providerFetch.mock.calls[0] as [string, { rateHost: string }];
+    const [url, opts] = providerFetch.mock.calls[0] as [string, { rateHost: string; provider: string; minIntervalMs: number }];
     expect(url.startsWith("https://nominatim.openstreetmap.org/search?")).toBe(true);
     expect(opts.rateHost).toBe("nominatim.openstreetmap.org");
+    // task 009: labelled bucket + config-driven interval (default 1100)
+    expect(opts.provider).toBe("nominatim");
+    expect(opts.minIntervalMs).toBe(1100);
+  });
+
+  it("reads the interval from config, not a hardcoded constant (non-default, above floor)", async () => {
+    vi.stubEnv("NOMINATIM_MIN_INTERVAL_MS", "9999");
+    try {
+      providerFetch.mockResolvedValue(jsonResponse([]));
+      await geocode("interval from config");
+      const opts = providerFetch.mock.calls[0][1] as { minIntervalMs: number };
+      expect(opts.minIntervalMs).toBe(9999);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("routes both the request URL and the rate-limit host to an override", async () => {

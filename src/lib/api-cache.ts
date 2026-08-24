@@ -17,10 +17,13 @@ import { db } from "@/lib/db";
  * Read a cached response. A row is a HIT only while it has not expired
  * (`expiresAt > now`); exactly at or after `expiresAt` it is a miss.
  *
- * Expired rows are intentionally NOT deleted here: cleanup is a separate sweep
- * keyed on the `expiresAt` index. Keeping this a pure read avoids a race where
- * a concurrent `setCached` writes a fresh value between another caller's read
- * and delete, and that fresh value gets erased.
+ * Expired rows are intentionally NOT deleted here — keeping this a pure read
+ * avoids a race where a concurrent `setCached` writes a fresh value between
+ * another caller's read and delete, and that fresh value gets erased. NOTE:
+ * no reaper sweep exists yet — the `@@index([expiresAt])` is in place to
+ * support one, but nothing currently deletes expired rows, so they (and any
+ * superseded `configCacheTag`/`PROVIDER_DATA_REVISION` namespace) persist until
+ * a manual `DELETE FROM "ApiCache"`. Adding the sweep is a tracked follow-up.
  *
  * `<T>` is caller-trust — the stored JSON is returned unchecked; provider
  * clients re-validate shape at their seams (the `normalize` functions in

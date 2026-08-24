@@ -17,8 +17,9 @@ const VIEWBOX = `${BUCHAREST_BBOX.minLng},${BUCHAREST_BBOX.maxLat},${BUCHAREST_B
 
 // Host/base are config-driven (task 007) — default = today's public Nominatim.
 // Read inside the request functions (never at module top level) so an override
-// takes effect; the rate-limit host is derived from the configured base.
-const MIN_INTERVAL_MS = 1100; // ToS ≤1 req/s, with margin
+// takes effect; the rate-limit host is derived from the configured base. The
+// rate-limit interval is config-driven too (task 009, `intervals.nominatim`,
+// default 1100 ms = OSM ToS ≤1 req/s with margin — see PROVIDER_INTERVAL_DEFAULTS).
 const TIMEOUT_MS = 8_000;
 const TTL_OK_MS = 30 * 24 * 60 * 60 * 1000;
 const TTL_EMPTY_MS = 24 * 60 * 60 * 1000;
@@ -44,7 +45,12 @@ function normalize(row: NominatimRow | undefined): GeoPoint | null {
   return { lat, lng, label: row.display_name ?? "" };
 }
 
-async function cachedLookup(key: string, url: string, host: string): Promise<GeoPoint | null> {
+async function cachedLookup(
+  key: string,
+  url: string,
+  host: string,
+  minIntervalMs: number,
+): Promise<GeoPoint | null> {
   // Sentinel wrapper: a cached `{ result: null }` is a real "known empty",
   // distinct from a cache miss (getCached returning null).
   const hit = await getCachedSafe<{ result: GeoPoint | null }>(key);
@@ -54,8 +60,9 @@ async function cachedLookup(key: string, url: string, host: string): Promise<Geo
   let data: NominatimRow[] | NominatimRow;
   try {
     const res = await providerFetch(url, {
+      provider: "nominatim",
       rateHost: host,
-      minIntervalMs: MIN_INTERVAL_MS,
+      minIntervalMs,
       timeoutMs: TIMEOUT_MS,
       init: { headers: { "User-Agent": USER_AGENT, Accept: "application/json" } },
     });
@@ -75,17 +82,17 @@ async function cachedLookup(key: string, url: string, host: string): Promise<Geo
 
 /** Forward geocode a free-text address (restricted to Romania; top match). */
 export function geocode(query: string): Promise<GeoPoint | null> {
-  const { nominatimBase } = providerConfig();
+  const { nominatimBase, intervals } = providerConfig();
   const normalized = query.trim().toLowerCase();
   const key = taggedCacheKey(`geo:fwd:${sha256Hex(normalized)}`);
   const url = `${nominatimBase}/search?format=jsonv2&countrycodes=ro&viewbox=${VIEWBOX}&bounded=1&limit=1&q=${encodeURIComponent(query.trim())}`;
-  return cachedLookup(key, url, new URL(nominatimBase).host);
+  return cachedLookup(key, url, new URL(nominatimBase).host, intervals.nominatim);
 }
 
 /** Reverse geocode a point to a human-readable address. */
 export function reverseGeocode(lat: number, lng: number): Promise<GeoPoint | null> {
-  const { nominatimBase } = providerConfig();
+  const { nominatimBase, intervals } = providerConfig();
   const key = taggedCacheKey(`geo:rev:${roundCoord(lat)},${roundCoord(lng)}`);
   const url = `${nominatimBase}/reverse?format=jsonv2&lat=${lat}&lon=${lng}`;
-  return cachedLookup(key, url, new URL(nominatimBase).host);
+  return cachedLookup(key, url, new URL(nominatimBase).host, intervals.nominatim);
 }

@@ -279,9 +279,12 @@ describe("transitIsochrone", () => {
   it("defaults to today's public Transitous host, and a TRANSIT_BASE_URL override moves URL + rateHost (task 007)", async () => {
     providerFetch.mockResolvedValue(oneToAll([]));
     await transitIsochrone(44.4, 26.1);
-    const [defUrl, defOpts] = providerFetch.mock.calls[0] as [string, { rateHost: string }];
+    const [defUrl, defOpts] = providerFetch.mock.calls[0] as [string, { rateHost: string; provider: string; minIntervalMs: number }];
     expect(defUrl.startsWith("https://api.transitous.org/api/v6/one-to-all?")).toBe(true);
     expect(defOpts.rateHost).toBe("api.transitous.org");
+    // task 009: shares the `transit` bucket with transit-plan; interval default 1500
+    expect(defOpts.provider).toBe("transit");
+    expect(defOpts.minIntervalMs).toBe(1500);
 
     vi.stubEnv("TRANSIT_BASE_URL", "https://motis.internal");
     try {
@@ -294,6 +297,18 @@ describe("transitIsochrone", () => {
       expect(opts.rateHost).toBe("motis.internal");
       // Cache key config-namespaced under the override (guards the wrapper).
       expect([...store.keys()].every((k) => /^[0-9a-f]{8}:transit:/.test(k))).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("reads the interval from config, not a hardcoded constant (non-default, above floor)", async () => {
+    vi.stubEnv("TRANSIT_MIN_INTERVAL_MS", "9999");
+    try {
+      providerFetch.mockResolvedValue(oneToAll([]));
+      await transitIsochrone(44.4, 26.1);
+      const opts = providerFetch.mock.calls[0][1] as { minIntervalMs: number };
+      expect(opts.minIntervalMs).toBe(9999);
     } finally {
       vi.unstubAllEnvs();
     }

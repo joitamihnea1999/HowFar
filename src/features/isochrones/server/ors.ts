@@ -5,7 +5,7 @@ import {
 } from "@/features/isochrones/car-traffic";
 import { DEFAULT_PACE, PACE_MODEL, type Pace } from "@/features/isochrones/pace";
 import { getCachedSafe, setCachedSafe } from "@/lib/api-cache";
-import { providerConfig, serverEnv, taggedCacheKey } from "@/lib/env";
+import { PROVIDER_DEFAULTS, canonicalHost, providerConfig, serverEnv, taggedCacheKey } from "@/lib/env";
 import { providerFetch, ProviderError, roundCoord } from "@/lib/provider-http";
 
 /**
@@ -23,7 +23,8 @@ import { providerFetch, ProviderError, roundCoord } from "@/lib/provider-http";
 // inside the fetch function; the rate-limit host derives from the base.
 /** ORS isochrone endpoint for a routing profile (foot-walking | driving-car). */
 const isoUrl = (base: string, profile: string) => `${base}/v2/isochrones/${profile}`;
-const MIN_INTERVAL_MS = 1500; // free tier ~40 isochrone req/min (PROVIDERS.md) ⇒ ≥1.5s spacing
+// Rate-limit interval is config-driven (task 009, `intervals.ors`, default
+// 1500 ms = free tier ~40 isochrone req/min, PROVIDERS.md ⇒ ≥1.5 s spacing).
 const TIMEOUT_MS = 12_000;
 const TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // The requested WALK ranges are CALIBRATED, not nominal, and now PACE-SCALED.
@@ -207,22 +208,43 @@ async function fetchAndCache(
   const lat = Number(roundCoord(latRaw));
   const lng = Number(roundCoord(lngRaw));
 
-  const apiKey = serverEnv().orsApiKey;
-  if (!apiKey) throw new ProviderError("ORS_API_KEY is not configured");
+  const { orsBase, intervals } = providerConfig();
 
-  const { orsBase } = providerConfig();
+  // Task 009: the API key belongs to the PUBLIC ORS only. For the public
+  // default host the key is required and sent as `Authorization`; a self-hosted
+  // ORS (any non-default base) needs no key, so we neither require it nor send
+  // it — a stale `ORS_API_KEY` left in the env must NOT leak to a self-host.
+  // (A self-host that itself requires auth is a parked follow-up: an explicit
+  //  self-host auth var, not this public key.)
+  // Public ⇔ CANONICAL host matches the default AND scheme is https (task 009):
+  //  - canonicalHost lowercases + strips a trailing dot + ignores the default
+  //    port, so case/port/trailing-dot variants of the public host still keep
+  //    the key (a raw-string compare would 403 the live deployment);
+  //  - the explicit https check means the secret key is never sent over cleartext
+  //    to the public host (a host-only compare would leak it over http — and
+  //    `parseProviderConfig` already rejects an http public base, so this is
+  //    defense-in-depth using the SAME public definition as the throttle floor).
+  const isPublicDefault =
+    canonicalHost(orsBase) === canonicalHost(PROVIDER_DEFAULTS.orsBase) &&
+    new URL(orsBase).protocol === "https:";
+  const apiKey = isPublicDefault ? serverEnv().orsApiKey : undefined;
+  if (isPublicDefault && !apiKey) throw new ProviderError("ORS_API_KEY is not configured");
 
   // A stalled/unreachable/garbled upstream is a provider error (→ 502), not a 500.
   let body: { features?: OrsFeature[] };
   try {
     const res = await providerFetch(isoUrl(orsBase, profile), {
+      provider: "ors",
       rateHost: new URL(orsBase).host,
-      minIntervalMs: MIN_INTERVAL_MS,
+      minIntervalMs: intervals.ors,
       timeoutMs: TIMEOUT_MS,
       init: {
         method: "POST",
         // ORS isochrones serves application/geo+json; do NOT send Accept: application/json (→ 406).
-        headers: { Authorization: apiKey, "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(apiKey ? { Authorization: apiKey } : {}),
+        },
         // ORS expects [lng, lat] order.
         body: JSON.stringify({ locations: [[lng, lat]], range: ranges }),
       },
