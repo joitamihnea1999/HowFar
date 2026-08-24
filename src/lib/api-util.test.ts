@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { errorResponse, jsonError, outOfAreaGuard, parseLatLng } from "./api-util";
+import { EnvError } from "./env";
 import { ProviderError } from "./provider-http";
 
 describe("errorResponse", () => {
@@ -11,6 +12,9 @@ describe("errorResponse", () => {
   it("maps ProviderError → 502 and logs route + cause", () => {
     expect(errorResponse(new ProviderError("nominatim responded 503"), "geocode").status).toBe(502);
     expect(logged).toHaveBeenCalledExactlyOnceWith("[api:geocode] ProviderError: nominatim responded 503");
+  });
+  it("maps EnvError → 503 (misconfiguration, not an internal bug) (task 007)", () => {
+    expect(errorResponse(new EnvError("ORS_BASE_URL", "bad"), "isochrone").status).toBe(503);
   });
   it("maps any other error → 500, still logged", () => {
     expect(errorResponse(new Error("boom"), "transit").status).toBe(500);

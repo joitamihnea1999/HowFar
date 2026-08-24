@@ -140,5 +140,7 @@ describe("config-driven host (task 007)", () => {
     const [url, opts] = providerFetch.mock.calls[0] as [string, { rateHost: string }];
     expect(url.startsWith("https://photon.internal/api?")).toBe(true);
     expect(opts.rateHost).toBe("photon.internal");
+    // Cache key config-namespaced under an override (guards the taggedCacheKey wrapper).
+    expect([...store.keys()].every((k) => /^[0-9a-f]{8}:suggest:/.test(k))).toBe(true);
   });
 });

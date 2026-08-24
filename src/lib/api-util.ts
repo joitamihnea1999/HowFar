@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { inBucharest } from "@/lib/bounds";
+import { EnvError } from "@/lib/env";
 import { ProviderError } from "@/lib/provider-http";
 
 /** JSON error body with a status code. */
@@ -44,5 +45,8 @@ export function errorResponse(err: unknown, route: string): NextResponse {
   const message = err instanceof Error ? err.message : String(err);
   console.error(`[api:${route}] ${name}: ${message}`);
   if (err instanceof ProviderError) return jsonError(502, "Upstream provider error");
+  // A misconfigured provider/region env var (task 007) is an operator problem,
+  // not an internal bug — report it as 503 (service misconfigured), not 500.
+  if (err instanceof EnvError) return jsonError(503, "Service misconfigured");
   return jsonError(500, "Internal error");
 }

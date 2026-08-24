@@ -109,6 +109,9 @@ describe("config-driven host (task 007)", () => {
     const [url, opts] = providerFetch.mock.calls[0] as [string, { rateHost: string }];
     expect(url.startsWith("https://nom.example/search?")).toBe(true);
     expect(opts.rateHost).toBe("nom.example");
+    // The cache key must be config-namespaced under an override, else a provider
+    // flip would serve the old provider's cached geocodes (guards the wrapper).
+    expect([...store.keys()].every((k) => /^[0-9a-f]{8}:geo:/.test(k))).toBe(true);
   });
 });
 

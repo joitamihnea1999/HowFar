@@ -10,8 +10,9 @@ import { tilesPmtilesPath } from "@/lib/env";
 // browser-keyed tile providers.
 
 // Path is config-driven (task 007, `TILES_PMTILES_PATH`) — default =
-// <cwd>/data/tiles/bucharest.pmtiles, so an unset env is unchanged.
-const TILES_PATH = tilesPmtilesPath();
+// <cwd>/data/tiles/bucharest.pmtiles, so an unset env is unchanged. Read INSIDE
+// the handlers (never a module-top-level const) so an override takes effect and
+// the accessor stays consistent with providerConfig's non-memoized contract.
 
 // pmtiles range requests are small (header ~16KB, tile batches well under 1MB);
 // the cap keeps a hostile client from turning ranges into whole-archive buffers.
@@ -29,7 +30,7 @@ async function statArchive(): Promise<{ size: number; mtimeMs: number } | null> 
     return { size: cachedStat.size, mtimeMs: cachedStat.mtimeMs };
   }
   try {
-    const stat = await fs.stat(TILES_PATH);
+    const stat = await fs.stat(tilesPmtilesPath());
     cachedStat = { size: stat.size, mtimeMs: stat.mtimeMs, at: now };
     return { size: stat.size, mtimeMs: stat.mtimeMs };
   } catch {
@@ -61,10 +62,11 @@ export async function GET(request: Request) {
     return new Response("tile archive missing — run `npm run tiles:fetch`", { status: 503 });
   }
 
+  const tilesPath = tilesPmtilesPath();
   const rangeHeader = request.headers.get("range");
   if (!rangeHeader) {
     // Whole-archive requests (curl, crawlers) are streamed, never buffered.
-    const stream = Readable.toWeb(createReadStream(TILES_PATH)) as ReadableStream;
+    const stream = Readable.toWeb(createReadStream(tilesPath)) as ReadableStream;
     return new Response(stream, {
       headers: { ...baseHeaders(stat), "Content-Length": String(stat.size) },
     });
@@ -80,7 +82,7 @@ export async function GET(request: Request) {
 
   const length = range.end - range.start + 1;
   // Stream the slice — do not allocate an 8MB buffer per range request.
-  const nodeStream = createReadStream(TILES_PATH, {
+  const nodeStream = createReadStream(tilesPath, {
     start: range.start,
     end: range.end,
   });

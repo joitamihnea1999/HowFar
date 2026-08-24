@@ -8,13 +8,16 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # Pick up config from .env so "point at another city" is a single .env edit that
-# reaches the tile extract too (task 007). Absent .env → today's Bucharest values.
-if [ -f .env ]; then
-  set -a
-  # shellcheck disable=SC1091
-  . ./.env
-  set +a
-fi
+# reaches the tile extract too (task 007). We read ONLY the two public knobs by
+# name — never `source` .env, which would execute secrets (a password with a
+# space or $(...) would break or run under `set -euo pipefail`). An already-set
+# environment variable wins over .env; absent → today's Bucharest default.
+read_env_key() { # $1 = key name; echoes the .env value (unquoted) or nothing
+  [ -f .env ] || return 0
+  grep -E "^$1=" .env | tail -n1 | cut -d= -f2- | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'\$//"
+}
+NEXT_PUBLIC_MAP_BBOX="${NEXT_PUBLIC_MAP_BBOX:-$(read_env_key NEXT_PUBLIC_MAP_BBOX)}"
+TILES_PMTILES_PATH="${TILES_PMTILES_PATH:-$(read_env_key TILES_PMTILES_PATH)}"
 
 BUILD_DATE="${1:-$(date -u -d 'yesterday' +%Y%m%d)}"
 # Extent + output path are the SAME env vars the app reads (bounds.ts /

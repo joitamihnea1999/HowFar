@@ -337,11 +337,14 @@ describe("planTrip", () => {
     vi.stubEnv("TRANSIT_BASE_URL", "https://motis.internal/");
     try {
       providerFetch.mockClear();
+      store.clear();
       providerFetch.mockResolvedValue(planResponse([FAST]));
-      await planTrip({ lat: 44.30, lng: 26.05 }, { lat: 44.49, lng: 26.19 }, DEP); // fresh coords
+      await planTrip({ lat: 44.3, lng: 26.05 }, { lat: 44.49, lng: 26.19 }, DEP); // fresh coords
       const [url, opts] = providerFetch.mock.calls[0] as [string, { rateHost: string }];
       expect(url.startsWith("https://motis.internal/api/v1/plan?")).toBe(true);
       expect(opts.rateHost).toBe("motis.internal");
+      // Cache key config-namespaced under the override (guards the wrapper).
+      expect([...store.keys()].every((k) => /^[0-9a-f]{8}:reach:plan:/.test(k))).toBe(true);
     } finally {
       vi.unstubAllEnvs();
     }

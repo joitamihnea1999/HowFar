@@ -286,11 +286,14 @@ describe("transitIsochrone", () => {
     vi.stubEnv("TRANSIT_BASE_URL", "https://motis.internal");
     try {
       providerFetch.mockClear();
+      store.clear();
       providerFetch.mockResolvedValue(oneToAll([]));
       await transitIsochrone(44.41, 26.11); // fresh coords → not cached
       const [url, opts] = providerFetch.mock.calls[0] as [string, { rateHost: string }];
       expect(url.startsWith("https://motis.internal/api/v6/one-to-all?")).toBe(true);
       expect(opts.rateHost).toBe("motis.internal");
+      // Cache key config-namespaced under the override (guards the wrapper).
+      expect([...store.keys()].every((k) => /^[0-9a-f]{8}:transit:/.test(k))).toBe(true);
     } finally {
       vi.unstubAllEnvs();
     }
