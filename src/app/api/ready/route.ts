@@ -15,18 +15,17 @@ export async function GET() {
   // parseProviderConfig throws EnvError on a SET-but-invalid provider var
   // (bad URL/scheme, empty pool). The extent is validated separately at build
   // (bounds.ts import). Absent vars use the public defaults and never throw.
+  // Failures are logged server-side only — the (possibly value-bearing) message
+  // must not reach an unauthenticated caller, so the response body is unchanged.
   let configOk = true;
-  let configError: string | undefined;
   try {
     parseProviderConfig();
   } catch (err) {
     configOk = false;
-    configError = err instanceof EnvError ? err.message : "invalid provider configuration";
+    const msg = err instanceof EnvError ? err.message : "invalid provider configuration";
+    console.error(`[api:ready] provider configuration invalid: ${msg}`);
   }
 
   const ready = dbUp && configOk;
-  return NextResponse.json(
-    { ready, db: dbUp, config: configOk, ...(configError ? { configError } : {}) },
-    { status: ready ? 200 : 503 },
-  );
+  return NextResponse.json({ ready }, { status: ready ? 200 : 503 });
 }

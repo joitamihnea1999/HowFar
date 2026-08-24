@@ -14,7 +14,10 @@ cd "$(dirname "$0")/.."
 # environment variable wins over .env; absent → today's Bucharest default.
 read_env_key() { # $1 = key name; echoes the .env value (unquoted) or nothing
   [ -f .env ] || return 0
-  grep -E "^$1=" .env | tail -n1 | cut -d= -f2- | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'\$//"
+  # `|| true` on the grep: a no-match exits 1, which under `set -o pipefail`
+  # would abort the whole script at the assignment below (a .env without these
+  # optional keys is normal). Malformed handling still happens downstream.
+  { grep -E "^$1=" .env || true; } | tail -n1 | cut -d= -f2- | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'\$//"
 }
 NEXT_PUBLIC_MAP_BBOX="${NEXT_PUBLIC_MAP_BBOX:-$(read_env_key NEXT_PUBLIC_MAP_BBOX)}"
 TILES_PMTILES_PATH="${TILES_PMTILES_PATH:-$(read_env_key TILES_PMTILES_PATH)}"

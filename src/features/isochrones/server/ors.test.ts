@@ -20,10 +20,12 @@ vi.mock("@/lib/provider-http", async (importOriginal) => ({
   providerFetch,
 }));
 
-vi.mock("@/lib/env", () => ({
+// Keep the REAL taggedCacheKey/configCacheTag (so deleting a wrapper is caught);
+// only serverEnv + providerConfig are stubbed for the API key / base URL.
+vi.mock("@/lib/env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/env")>()),
   serverEnv,
   providerConfig,
-  taggedCacheKey: (key: string) => key, // identity on default config (tag tested in env.test)
 }));
 
 import { carTrafficSlot, scaledCarRangesS } from "@/features/isochrones/car-traffic";
@@ -225,6 +227,21 @@ describe("drivingIsochrone (car, tasks 053/058)", () => {
     const [url, opts] = providerFetch.mock.calls[0] as [string, { rateHost: string }];
     expect(url).toBe("https://ors.internal/v2/isochrones/driving-car");
     expect(opts.rateHost).toBe("ors.internal");
+  });
+
+  it("config-namespaces the cache key under an override (guards the taggedCacheKey wrapper) (task 007)", async () => {
+    // Real configCacheTag reads process.env; stub it to a non-default provider so
+    // the tag is non-empty. Deleting the taggedCacheKey wrapper in ors.ts would
+    // leave the key untagged and fail this.
+    vi.stubEnv("ORS_BASE_URL", "https://ors.internal");
+    try {
+      providerConfig.mockReturnValue({ orsBase: "https://ors.internal" });
+      providerFetch.mockResolvedValue(orsResponse(MIDDAY_RANGES.map(poly)));
+      await drivingIsochrone(44.4, 26.1, midday);
+      expect([...store.keys()].every((k) => /^[0-9a-f]{8}:iso:car:/.test(k))).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("relabels the driving rings to 10/20/30 min, ascending regardless of input order", async () => {

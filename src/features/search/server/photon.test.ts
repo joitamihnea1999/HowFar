@@ -134,7 +134,7 @@ describe("config-driven host (task 007)", () => {
   });
 
   it("routes both the request URL and the rate-limit host to an override", async () => {
-    vi.stubEnv("PHOTON_BASE_URL", "https://photon.internal/api");
+    vi.stubEnv("PHOTON_BASE_URL", "https://photon.internal"); // bare host; client appends /api
     providerFetch.mockResolvedValue(res([]));
     await suggest("override host");
     const [url, opts] = providerFetch.mock.calls[0] as [string, { rateHost: string }];

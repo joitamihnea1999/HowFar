@@ -112,7 +112,9 @@ export function serverEnv(): ServerEnv {
  *  default path against the exact literals (byte-identity is the whole task). */
 export const PROVIDER_DEFAULTS = {
   nominatimBase: "https://nominatim.openstreetmap.org",
-  photonBase: "https://photon.komoot.io/api",
+  // Host base only (the client appends Photon's `/api` search path), so all four
+  // *_BASE_URL vars share one contract: a bare host, paths live in code.
+  photonBase: "https://photon.komoot.io",
   orsBase: "https://api.openrouteservice.org",
   transitBase: "https://api.transitous.org",
   // Interactive Overpass race pool (route/stop queries) — ordered by observed

@@ -93,9 +93,10 @@ async function fetchAndCacheSuggestions(key: string, q: string): Promise<Suggest
   let body: { features?: PhotonFeature[] };
   try {
     const { photonBase } = providerConfig();
-    // Focus (lat/lon) is a ranking bias only; kept byte-identical in P1 —
-    // bbox-centre derivation is a P4 region-UI item (see task Parked).
-    const url = `${photonBase}?q=${encodeURIComponent(q)}&bbox=${BBOX}&lat=44.43&lon=26.10&limit=8&lang=en`;
+    // `/api` is Photon's search path (kept in code so PHOTON_BASE_URL is a bare
+    // host like the other providers). The lat/lon focus is a ranking bias only,
+    // kept unchanged here; deriving it from the bbox centre is a later follow-up.
+    const url = `${photonBase}/api?q=${encodeURIComponent(q)}&bbox=${BBOX}&lat=44.43&lon=26.10&limit=8&lang=en`;
     const res = await providerFetch(url, {
       rateHost: new URL(photonBase).host,
       minIntervalMs: MIN_INTERVAL_MS,

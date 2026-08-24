@@ -10,8 +10,7 @@ test("liveness and readiness report a connected database", async ({ request }) =
 
   const ready = await request.get("/api/ready");
   expect(ready.status()).toBe(200);
-  // Readiness also validates the provider/region config (task 007): db + config.
-  expect(await ready.json()).toEqual({ ready: true, db: true, config: true });
+  expect(await ready.json()).toEqual({ ready: true });
 });
 
 test("auth endpoint serves without OAuth credentials configured", async ({ request }) => {

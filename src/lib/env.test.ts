@@ -84,7 +84,7 @@ describe("parseProviderConfig (region/self-host config lift)", () => {
   it("defaults to today's exact public hosts when nothing is set (byte-identity)", () => {
     const cfg = parseProviderConfig({});
     expect(cfg.nominatimBase).toBe("https://nominatim.openstreetmap.org");
-    expect(cfg.photonBase).toBe("https://photon.komoot.io/api");
+    expect(cfg.photonBase).toBe("https://photon.komoot.io");
     expect(cfg.orsBase).toBe("https://api.openrouteservice.org");
     expect(cfg.transitBase).toBe("https://api.transitous.org");
     expect(cfg.overpassEndpoints).toEqual([
