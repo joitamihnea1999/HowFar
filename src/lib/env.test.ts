@@ -132,6 +132,21 @@ describe("parseProviderConfig (region/self-host config lift)", () => {
     );
   });
 
+  it("FAILS CLOSED on a base URL carrying a query string or fragment (path-concat would break)", () => {
+    expect(() => parseProviderConfig({ NOMINATIM_BASE_URL: "https://nom.example?x=1" })).toThrowError(
+      /query string or fragment/,
+    );
+    expect(() => parseProviderConfig({ ORS_BASE_URL: "https://ors.example#frag" })).toThrowError(
+      /query string or fragment/,
+    );
+  });
+
+  it("allows a path prefix on the base (self-host under a subpath)", () => {
+    expect(parseProviderConfig({ ORS_BASE_URL: "https://osm.internal/ors" }).orsBase).toBe(
+      "https://osm.internal/ors",
+    );
+  });
+
   it("FAILS CLOSED on an endpoint pool whose members are all empty", () => {
     expect(() => parseProviderConfig({ OVERPASS_ENDPOINTS: " , , " })).toThrowError(
       /at least one endpoint/,
@@ -175,8 +190,20 @@ describe("configCacheTag + taggedCacheKey", () => {
     expect(taggedCacheKey("k", src)).toBe(`${tag}:k`);
   });
 
-  it("re-namespaces when the bbox changes", () => {
-    expect(configCacheTag({ NEXT_PUBLIC_MAP_BBOX: "23.4,46.6,23.7,46.9" })).not.toBe("");
+  it("re-namespaces when the resolved extent changes (via a fresh module load)", async () => {
+    // The bbox component comes from the RESOLVED BUCHAREST_BBOX (build-consistent),
+    // not a raw runtime env read — so exercise it by re-importing with a stubbed
+    // extent, which also proves the tag tracks the geofence rather than a var that
+    // may be absent at runtime in a build-ARG container.
+    vi.resetModules();
+    vi.stubEnv("NEXT_PUBLIC_MAP_BBOX", "23.4,46.6,23.7,46.9");
+    try {
+      const fresh = await import("./env");
+      expect(fresh.configCacheTag({})).not.toBe("");
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
   });
 
   it("gives different configs different tags (no collision)", () => {

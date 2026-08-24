@@ -14,6 +14,7 @@ import { DEFAULT_TIME_CONTEXT, type TimeContext } from "@/features/isochrones/ti
 import { effectivePace, type Mode } from "@/features/map/selection-flow";
 import { getCachedSafe, setCachedSafe } from "@/lib/api-cache";
 import { db } from "@/lib/db";
+import { taggedCacheKey } from "@/lib/env";
 import { ProviderError, roundCoord } from "@/lib/provider-http";
 
 /**
@@ -115,7 +116,13 @@ export function amenityResultCacheKey(
   lng: number,
   clipIdentity: string,
 ): string {
-  return `${AMENITY_RESULT_CACHE_PREFIX}${datasetId}:${clipIdentity}:${roundCoord(lat)},${roundCoord(lng)}`;
+  // Config-tagged (task 007): the clipped amenity set is DERIVED from the
+  // config-lifted ORS/transit rings + the geofence bbox, but the key carries
+  // none of that — so a provider/region flip must re-namespace it too, else it
+  // serves places banded by the old provider's rings for the full TTL.
+  return taggedCacheKey(
+    `${AMENITY_RESULT_CACHE_PREFIX}${datasetId}:${clipIdentity}:${roundCoord(lat)},${roundCoord(lng)}`,
+  );
 }
 
 /**

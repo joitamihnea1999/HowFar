@@ -32,7 +32,10 @@ export type Bbox = {
  *  all-Romania (~7°×4°) box that would OOM the transit grid. */
 export const MAX_BBOX_SPAN_DEG = 2;
 
-const DEFAULT_BBOX: Bbox = {
+/** Today's Bucharest+Ilfov box — the byte-identical default when the extent env
+ *  is unset. Exported so the cache-tag can tell "default extent" from "another
+ *  city" off the RESOLVED box (not a raw env string). */
+export const DEFAULT_BBOX: Bbox = {
   minLng: 25.8,
   minLat: 44.2,
   maxLng: 26.4,
@@ -47,8 +50,12 @@ const DEFAULT_BBOX: Bbox = {
  */
 export function parseBbox(raw: string | undefined | null): Bbox | null {
   if (raw == null) return null;
-  const parts = raw.split(",").map((s) => Number(s.trim()));
-  if (parts.length !== 4 || parts.some((n) => !Number.isFinite(n))) return null;
+  const tokens = raw.split(",").map((s) => s.trim());
+  // Reject empty tokens BEFORE Number() — `Number("")` is 0, so "-1,,1,1" would
+  // otherwise slip through as [-1,0,1,1].
+  if (tokens.length !== 4 || tokens.some((t) => t === "")) return null;
+  const parts = tokens.map(Number);
+  if (parts.some((n) => !Number.isFinite(n))) return null;
   const [minLng, minLat, maxLng, maxLat] = parts as [number, number, number, number];
   if (minLng >= maxLng || minLat >= maxLat) return null;
   if (minLng < -180 || maxLng > 180 || minLat < -90 || maxLat > 90) return null;

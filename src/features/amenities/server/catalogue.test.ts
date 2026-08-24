@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   walkingIsochrone,
@@ -666,5 +666,23 @@ describe("nearbyAmenities merges coincident transit stops (task 047 + per-band c
     const result = await nearbyAmenities(44.426801, 26.102499);
     expect(result.countsByBand[15].transit).toBe(0);
     expect(totalFor(result.countsByBand, "transit")).toBe(0);
+  });
+});
+
+describe("amenityResultCacheKey config namespacing (task 007)", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("is byte-identical on default config", () => {
+    expect(amenityResultCacheKey("dataset-1", 44.4268, 26.1025, "walk:normal")).toBe(
+      "amenity:local:v5:dataset-1:walk:normal:44.42680,26.10250",
+    );
+  });
+
+  it("gets a fresh namespace once a ring provider is overridden (amenities are derived from the rings)", () => {
+    const def = amenityResultCacheKey("dataset-1", 44.4268, 26.1025, "walk:normal");
+    vi.stubEnv("ORS_BASE_URL", "https://ors.internal");
+    const overridden = amenityResultCacheKey("dataset-1", 44.4268, 26.1025, "walk:normal");
+    expect(overridden).not.toBe(def);
+    expect(overridden.endsWith(def)).toBe(true); // tag is a prefix; base key unchanged
   });
 });

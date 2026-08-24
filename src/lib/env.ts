@@ -9,6 +9,8 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 
+import { BUCHAREST_BBOX, DEFAULT_BBOX } from "./bounds";
+
 export interface ServerEnv {
   /** PostgreSQL connection string, e.g. postgresql://user:pass@host:5432/db */
   databaseUrl: string;
@@ -154,6 +156,12 @@ function validateBaseUrl(name: string, raw: string): string {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new EnvError(name, `must use http:// or https:// (got "${url.protocol}")`);
   }
+  // A base URL is path-concatenated by clients (`${base}/v2/…`), so a query or
+  // fragment would land in the wrong place (`https://h?x=1` + `/v2` → path `/`,
+  // query `x=1/v2`). Reject them; a path prefix (`https://h/osm`) is fine.
+  if (url.search || url.hash) {
+    throw new EnvError(name, `must not include a query string or fragment (got "${raw.slice(0, 40)}")`);
+  }
   return trimmed;
 }
 
@@ -220,16 +228,26 @@ function sameList(a: readonly string[], b: readonly string[]): boolean {
  * provider host or the city bbox serves a FRESH namespace instead of answers
  * computed against the old provider/region (keys carry no host/bbox themselves).
  *
- * "Default" means the vars are UNSET. Setting `NEXT_PUBLIC_MAP_BBOX` (even to
- * Bucharest's own numbers) is treated as a non-default config and re-namespaces
- * — a superfluous cold cache at worst, never a stale-answer bug. The tag is
- * uniform (one tag for all providers), so any config change colds all provider
- * caches together; config changes are rare deploy events and a cold cache is
- * "slower but correct" — the degradation posture the app already commits to.
+ * "Default" means every provider var is unset AND the resolved extent equals
+ * the Bucharest default. The bbox component is taken from the RESOLVED
+ * `BUCHAREST_BBOX` (imported from bounds.ts), NOT a raw runtime read of
+ * `NEXT_PUBLIC_MAP_BBOX`: that var is build-time inlined, so a dynamic
+ * `process.env` read would be undefined in a build-ARG container and wrongly
+ * yield tag "" for a non-default city — serving city A's cached answers for city
+ * B. Reading the resolved box keeps the tag consistent with the geofence.
+ *
+ * The tag is uniform (one tag for all providers), so any config change colds all
+ * provider caches together; config changes are rare deploy events and a cold
+ * cache is "slower but correct" — the degradation posture the app already
+ * commits to.
  */
 export function configCacheTag(source: EnvSource = process.env): string {
   const cfg = parseProviderConfig(source);
-  const bbox = optionalEnv(source, "NEXT_PUBLIC_MAP_BBOX") ?? "";
+  const bboxIsDefault =
+    BUCHAREST_BBOX.minLng === DEFAULT_BBOX.minLng &&
+    BUCHAREST_BBOX.minLat === DEFAULT_BBOX.minLat &&
+    BUCHAREST_BBOX.maxLng === DEFAULT_BBOX.maxLng &&
+    BUCHAREST_BBOX.maxLat === DEFAULT_BBOX.maxLat;
   const isDefault =
     cfg.nominatimBase === PROVIDER_DEFAULTS.nominatimBase &&
     cfg.photonBase === PROVIDER_DEFAULTS.photonBase &&
@@ -237,7 +255,7 @@ export function configCacheTag(source: EnvSource = process.env): string {
     cfg.transitBase === PROVIDER_DEFAULTS.transitBase &&
     sameList(cfg.overpassEndpoints, PROVIDER_DEFAULTS.overpassEndpoints) &&
     sameList(cfg.bulkOverpassEndpoints, PROVIDER_DEFAULTS.bulkOverpassEndpoints) &&
-    bbox === "";
+    bboxIsDefault;
   if (isDefault) return "";
   const canonical = JSON.stringify({
     n: cfg.nominatimBase,
@@ -246,7 +264,7 @@ export function configCacheTag(source: EnvSource = process.env): string {
     t: cfg.transitBase,
     ov: cfg.overpassEndpoints,
     bo: cfg.bulkOverpassEndpoints,
-    b: bbox,
+    b: [BUCHAREST_BBOX.minLng, BUCHAREST_BBOX.minLat, BUCHAREST_BBOX.maxLng, BUCHAREST_BBOX.maxLat],
   });
   return createHash("sha256").update(canonical).digest("hex").slice(0, 8);
 }

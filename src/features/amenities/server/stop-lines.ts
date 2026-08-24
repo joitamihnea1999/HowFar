@@ -1,6 +1,7 @@
 import { parseRouteRelations, type StopLine } from "@/features/amenities/stop-lines";
 import { raceOverpass } from "@/features/amenities/server/overpass-client";
 import { getCachedSafe, setCachedSafe } from "@/lib/api-cache";
+import { taggedCacheKey } from "@/lib/env";
 
 /**
  * The transit lines serving one OSM stop (task 021), via OSM public-transport
@@ -72,7 +73,9 @@ const inFlight = new Map<string, Promise<StopLine[]>>();
 export async function stopLines(osmType: OsmType, id: number): Promise<StopLine[]> {
   // v2: StopLine gained relationId (task 024) — the bump keeps v1 hits (parsed
   // before ids existed) from serving rows whose paths could never be drawn.
-  const key = `stop-lines:v2:${osmType}/${id}`;
+  // Config-tagged (task 007): the lines come from the config-driven Overpass
+  // pool, so an OVERPASS_ENDPOINTS switch must re-namespace this 30-day cache.
+  const key = taggedCacheKey(`stop-lines:v2:${osmType}/${id}`);
   const hit = await getCachedSafe<StopLine[]>(key);
   if (hit) return hit;
 

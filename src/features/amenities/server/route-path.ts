@@ -2,6 +2,7 @@ import { parseRoutePath, type RoutePath } from "@/features/amenities/route-path"
 import { TRANSIT_ROUTE_VALUES } from "@/features/amenities/stop-lines";
 import { raceOverpass } from "@/features/amenities/server/overpass-client";
 import { getCachedSafe, setCachedSafe } from "@/lib/api-cache";
+import { taggedCacheKey } from "@/lib/env";
 
 /**
  * The drawable path (track + named stops) of one OSM transit route relation
@@ -61,7 +62,9 @@ const inFlight = new Map<string, Promise<RoutePath | null>>();
  * transit route (→ 404 at the route). Cached best-effort; single-flighted.
  */
 export async function routePath(relationId: number): Promise<RoutePath | null> {
-  const key = `route-path:v1:${relationId}`;
+  // Config-tagged (task 007): route geometry comes from the config-driven
+  // Overpass pool, so an OVERPASS_ENDPOINTS switch must re-namespace this cache.
+  const key = taggedCacheKey(`route-path:v1:${relationId}`);
   const hit = await getCachedSafe<CachedRoutePath>(key);
   if (hit) return hit.path;
 

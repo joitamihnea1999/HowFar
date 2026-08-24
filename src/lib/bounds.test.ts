@@ -1,5 +1,5 @@
 import fc from "fast-check";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { BUCHAREST_BBOX, BUCHAREST_MAX_BOUNDS, MAX_BBOX_SPAN_DEG, inBucharest, parseBbox } from "./bounds";
 
@@ -93,5 +93,36 @@ describe("parseBbox (task 007)", () => {
     // ~7° wide — an all-country extent that would OOM the transit grid.
     expect(parseBbox("20,44,27,48")).toBeNull();
     expect(MAX_BBOX_SPAN_DEG).toBe(2);
+  });
+
+  it("rejects empty interior tokens (Number('') is 0, must not slip through)", () => {
+    expect(parseBbox("-1,,1,1")).toBeNull();
+    expect(parseBbox("25.8,44.2,,44.7")).toBeNull();
+  });
+});
+
+describe("resolveBbox via NEXT_PUBLIC_MAP_BBOX (task 007, fresh module load)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it("a valid override moves BUCHAREST_BBOX, inBucharest, and BUCHAREST_MAX_BOUNDS", async () => {
+    vi.resetModules();
+    vi.stubEnv("NEXT_PUBLIC_MAP_BBOX", "23.4,46.6,23.7,46.9"); // Cluj-ish
+    const fresh = await import("./bounds");
+    expect(fresh.BUCHAREST_BBOX).toEqual({ minLng: 23.4, minLat: 46.6, maxLng: 23.7, maxLat: 46.9 });
+    expect(fresh.inBucharest(46.7, 23.5)).toBe(true); // inside the override
+    expect(fresh.inBucharest(44.4, 26.1)).toBe(false); // old Bucharest point now outside
+    expect(fresh.BUCHAREST_MAX_BOUNDS).toEqual([
+      [23.4, 46.6],
+      [23.7, 46.9],
+    ]);
+  });
+
+  it("FAILS CLOSED at import on a set-but-invalid extent (no silent Bucharest fallback)", async () => {
+    vi.resetModules();
+    vi.stubEnv("NEXT_PUBLIC_MAP_BBOX", "not,a,bbox,really");
+    await expect(import("./bounds")).rejects.toThrow(/Invalid NEXT_PUBLIC_MAP_BBOX/);
   });
 });
