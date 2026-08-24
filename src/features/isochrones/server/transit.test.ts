@@ -276,6 +276,26 @@ describe("transitIsochrone", () => {
     expect(url).toContain("useRoutedTransfers=true");
   });
 
+  it("defaults to today's public Transitous host, and a TRANSIT_BASE_URL override moves URL + rateHost (task 007)", async () => {
+    providerFetch.mockResolvedValue(oneToAll([]));
+    await transitIsochrone(44.4, 26.1);
+    const [defUrl, defOpts] = providerFetch.mock.calls[0] as [string, { rateHost: string }];
+    expect(defUrl.startsWith("https://api.transitous.org/api/v6/one-to-all?")).toBe(true);
+    expect(defOpts.rateHost).toBe("api.transitous.org");
+
+    vi.stubEnv("TRANSIT_BASE_URL", "https://motis.internal");
+    try {
+      providerFetch.mockClear();
+      providerFetch.mockResolvedValue(oneToAll([]));
+      await transitIsochrone(44.41, 26.11); // fresh coords → not cached
+      const [url, opts] = providerFetch.mock.calls[0] as [string, { rateHost: string }];
+      expect(url.startsWith("https://motis.internal/api/v6/one-to-all?")).toBe(true);
+      expect(opts.rateHost).toBe("motis.internal");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("threads SLOW all the way through: MOTIS access speed, egress stamping, and the cache key", async () => {
     // Task 064: every transit contract test ran at the default
     // pace, so a broken pace→provider path would have shipped green. Slow must

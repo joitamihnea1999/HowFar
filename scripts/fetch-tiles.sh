@@ -7,12 +7,25 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# Pick up config from .env so "point at another city" is a single .env edit that
+# reaches the tile extract too (task 007). Absent .env → today's Bucharest values.
+if [ -f .env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . ./.env
+  set +a
+fi
+
 BUILD_DATE="${1:-$(date -u -d 'yesterday' +%Y%m%d)}"
-BBOX="25.80,44.20,26.40,44.70" # Bucharest + Ilfov ring
-OUT="data/tiles/bucharest.pmtiles"
+# Extent + output path are the SAME env vars the app reads (bounds.ts /
+# tiles route) — one source of truth for "which region / which archive".
+# NEXT_PUBLIC_MAP_BBOX is "minLng,minLat,maxLng,maxLat", exactly pmtiles'
+# --bbox order (west,south,east,north).
+BBOX="${NEXT_PUBLIC_MAP_BBOX:-25.80,44.20,26.40,44.70}" # default: Bucharest + Ilfov ring
+OUT="${TILES_PMTILES_PATH:-data/tiles/bucharest.pmtiles}"
 PMTILES_VERSION="1.31.1"
 
-mkdir -p data/tiles
+mkdir -p "$(dirname "$OUT")"
 
 if ! command -v pmtiles >/dev/null 2>&1; then
   echo "pmtiles CLI not found — downloading v${PMTILES_VERSION} to .cache/ ..."

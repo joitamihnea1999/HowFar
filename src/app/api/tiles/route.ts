@@ -1,15 +1,17 @@
 import { createReadStream, promises as fs } from "node:fs";
-import path from "node:path";
 import { Readable } from "node:stream";
 
 import { parseByteRange } from "@/lib/byte-range";
+import { tilesPmtilesPath } from "@/lib/env";
 
 // Serves the self-hosted Protomaps archive with HTTP Range support (the
 // pmtiles client reads the archive via byte-range requests). Keyless by
 // design: the "external API keys stay server-side" constraint rules out
 // browser-keyed tile providers.
 
-const TILES_PATH = path.join(process.cwd(), "data", "tiles", "bucharest.pmtiles");
+// Path is config-driven (task 007, `TILES_PMTILES_PATH`) — default =
+// <cwd>/data/tiles/bucharest.pmtiles, so an unset env is unchanged.
+const TILES_PATH = tilesPmtilesPath();
 
 // pmtiles range requests are small (header ~16KB, tile batches well under 1MB);
 // the cap keeps a hostile client from turning ranges into whole-archive buffers.

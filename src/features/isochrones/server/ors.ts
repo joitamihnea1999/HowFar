@@ -5,7 +5,7 @@ import {
 } from "@/features/isochrones/car-traffic";
 import { DEFAULT_PACE, PACE_MODEL, type Pace } from "@/features/isochrones/pace";
 import { getCachedSafe, setCachedSafe } from "@/lib/api-cache";
-import { serverEnv } from "@/lib/env";
+import { providerConfig, serverEnv, taggedCacheKey } from "@/lib/env";
 import { providerFetch, ProviderError, roundCoord } from "@/lib/provider-http";
 
 /**
@@ -19,9 +19,10 @@ import { providerFetch, ProviderError, roundCoord } from "@/lib/provider-http";
  * cache prefix.
  */
 
-const HOST = "api.openrouteservice.org";
+// Host/base are config-driven (task 007) — default = today's public ORS. Read
+// inside the fetch function; the rate-limit host derives from the base.
 /** ORS isochrone endpoint for a routing profile (foot-walking | driving-car). */
-const isoUrl = (profile: string) => `https://api.openrouteservice.org/v2/isochrones/${profile}`;
+const isoUrl = (base: string, profile: string) => `${base}/v2/isochrones/${profile}`;
 const MIN_INTERVAL_MS = 1500; // free tier ~40 isochrone req/min (PROVIDERS.md) ⇒ ≥1.5s spacing
 const TIMEOUT_MS = 12_000;
 const TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -170,7 +171,7 @@ export async function walkingIsochrone(
   // v3 (task 051): pace added to the key. v4 (task 064): the walking speeds
   // changed to 3/5 km/h, so every cached ring's GEOMETRY is different at the
   // same coordinates — v3 entries must never serve (7-day TTL).
-  const key = `iso:foot:v4:${pace}:${roundCoord(latRaw)},${roundCoord(lngRaw)}`;
+  const key = taggedCacheKey(`iso:foot:v4:${pace}:${roundCoord(latRaw)},${roundCoord(lngRaw)}`);
   return orsIsochrone("foot-walking", latRaw, lngRaw, PACE_MODEL[pace].orsRangesS, NOMINAL_MINUTES, key);
 }
 
@@ -189,7 +190,9 @@ export async function drivingIsochrone(
   slot: CarTrafficSlot,
 ): Promise<IsochroneResult> {
   const ranges = scaledCarRangesS(CAR_RANGES_S, slot.factor);
-  const key = `iso:car:v2:${CAR_FACTOR_REVISION}:est:${slot.slotId}:${roundCoord(latRaw)},${roundCoord(lngRaw)}`;
+  const key = taggedCacheKey(
+    `iso:car:v2:${CAR_FACTOR_REVISION}:est:${slot.slotId}:${roundCoord(latRaw)},${roundCoord(lngRaw)}`,
+  );
   return orsIsochrone("driving-car", latRaw, lngRaw, ranges, CAR_MINUTES, key);
 }
 
@@ -207,11 +210,13 @@ async function fetchAndCache(
   const apiKey = serverEnv().orsApiKey;
   if (!apiKey) throw new ProviderError("ORS_API_KEY is not configured");
 
+  const { orsBase } = providerConfig();
+
   // A stalled/unreachable/garbled upstream is a provider error (→ 502), not a 500.
   let body: { features?: OrsFeature[] };
   try {
-    const res = await providerFetch(isoUrl(profile), {
-      rateHost: HOST,
+    const res = await providerFetch(isoUrl(orsBase, profile), {
+      rateHost: new URL(orsBase).host,
       minIntervalMs: MIN_INTERVAL_MS,
       timeoutMs: TIMEOUT_MS,
       init: {

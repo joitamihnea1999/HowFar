@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { store, providerFetch, serverEnv } = vi.hoisted(() => ({
+const { store, providerFetch, serverEnv, providerConfig } = vi.hoisted(() => ({
   store: new Map<string, unknown>(),
   providerFetch: vi.fn(),
   serverEnv: vi.fn(() => ({ orsApiKey: "test-key" }) as { orsApiKey?: string }),
+  providerConfig: vi.fn(() => ({ orsBase: "https://api.openrouteservice.org" }) as { orsBase: string }),
 }));
 
 vi.mock("@/lib/api-cache", () => ({
@@ -19,7 +20,11 @@ vi.mock("@/lib/provider-http", async (importOriginal) => ({
   providerFetch,
 }));
 
-vi.mock("@/lib/env", () => ({ serverEnv }));
+vi.mock("@/lib/env", () => ({
+  serverEnv,
+  providerConfig,
+  taggedCacheKey: (key: string) => key, // identity on default config (tag tested in env.test)
+}));
 
 import { carTrafficSlot, scaledCarRangesS } from "@/features/isochrones/car-traffic";
 
@@ -38,6 +43,7 @@ beforeEach(() => {
   store.clear();
   providerFetch.mockReset();
   serverEnv.mockReturnValue({ orsApiKey: "test-key" });
+  providerConfig.mockReturnValue({ orsBase: "https://api.openrouteservice.org" });
 });
 
 describe("walkingIsochrone", () => {
@@ -210,6 +216,15 @@ describe("drivingIsochrone (car, tasks 053/058)", () => {
     await drivingIsochrone(44.4268, 26.1025, amPeak);
     const parsed = JSON.parse((providerFetch.mock.calls[0] as [string, { init: { body: string } }])[1].init.body);
     parsed.range.forEach((v: number, i: number) => expect(v).toBeLessThan(MIDDAY_RANGES[i]!));
+  });
+
+  it("routes the request URL and rate-limit host to an ORS_BASE_URL override (task 007)", async () => {
+    providerConfig.mockReturnValue({ orsBase: "https://ors.internal" });
+    providerFetch.mockResolvedValue(orsResponse(MIDDAY_RANGES.map(poly)));
+    await drivingIsochrone(44.4268, 26.1025, midday);
+    const [url, opts] = providerFetch.mock.calls[0] as [string, { rateHost: string }];
+    expect(url).toBe("https://ors.internal/v2/isochrones/driving-car");
+    expect(opts.rateHost).toBe("ors.internal");
   });
 
   it("relabels the driving rings to 10/20/30 min, ascending regardless of input order", async () => {

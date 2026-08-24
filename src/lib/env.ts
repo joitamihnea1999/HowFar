@@ -6,6 +6,9 @@
  * Secrets must never be re-exported under NEXT_PUBLIC_*.
  */
 
+import { createHash } from "node:crypto";
+import path from "node:path";
+
 export interface ServerEnv {
   /** PostgreSQL connection string, e.g. postgresql://user:pass@host:5432/db */
   databaseUrl: string;
@@ -85,4 +88,171 @@ let cached: ServerEnv | undefined;
 export function serverEnv(): ServerEnv {
   cached ??= parseServerEnv();
   return cached;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Region / self-host configuration (Phase 1 config lift, task 007).
+//
+// Every remote-provider host and the tile path is lifted here as an OPTIONAL env
+// var, each DEFAULTING to today's public value — so an unset environment is
+// byte-for-byte identical to the pre-lift build, and pointing at a self-hosted
+// instance (or a different Romanian city) becomes an `.env` edit rather than a
+// code change. Read via `providerConfig()` — deliberately NON-memoized and
+// SEPARATE from `serverEnv()` so provider clients never gain a dependency on the
+// required DATABASE_URL / AUTH_SECRET (they only need these optional knobs).
+//
+// Fail-closed (mirrors `required()`): an ABSENT var falls back to the default; a
+// var that is SET but invalid (unparseable/non-http(s) URL, empty endpoint pool)
+// throws EnvError — a typo becomes a startup error, never a silent bad fetch.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Built-in defaults == today's public providers. Exported so tests assert the
+ *  default path against the exact literals (byte-identity is the whole task). */
+export const PROVIDER_DEFAULTS = {
+  nominatimBase: "https://nominatim.openstreetmap.org",
+  photonBase: "https://photon.komoot.io/api",
+  orsBase: "https://api.openrouteservice.org",
+  transitBase: "https://api.transitous.org",
+  // Interactive Overpass race pool (route/stop queries) — ordered by observed
+  // reliability; racing means a dead host costs nothing.
+  overpassEndpoints: [
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+  ],
+  // Bulk importer pool (heavy whole-bbox query) — the two hosts that tolerate it.
+  bulkOverpassEndpoints: [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+  ],
+} as const;
+
+/** Default tile archive location, relative to cwd, joined server-side. */
+export const TILES_PATH_DEFAULT_SEGMENTS = ["data", "tiles", "bucharest.pmtiles"] as const;
+
+export interface ProviderConfig {
+  /** Base URL (no trailing slash); the client appends provider-version paths. */
+  nominatimBase: string;
+  photonBase: string;
+  orsBase: string;
+  /** One host feeds both MOTIS endpoints (one-to-all + plan). */
+  transitBase: string;
+  overpassEndpoints: string[];
+  bulkOverpassEndpoints: string[];
+}
+
+/** Validate a single base URL: trailing slash stripped, must parse as an
+ *  absolute http(s) URL. Used for both single bases and each pool member. */
+function validateBaseUrl(name: string, raw: string): string {
+  const trimmed = raw.trim().replace(/\/+$/, "");
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    throw new EnvError(name, `must be a valid absolute URL (got "${raw.slice(0, 40)}")`);
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new EnvError(name, `must use http:// or https:// (got "${url.protocol}")`);
+  }
+  return trimmed;
+}
+
+/** Absent → default; present → validated (fail-closed). */
+function baseUrl(source: EnvSource, name: string, fallback: string): string {
+  const raw = optionalEnv(source, name);
+  return raw === undefined ? fallback : validateBaseUrl(name, raw);
+}
+
+/** A comma/space-separated endpoint pool. Absent → default; present → split,
+ *  drop empties, validate each, and reject an empty result (fail-closed). */
+function endpointPool(source: EnvSource, name: string, fallback: readonly string[]): string[] {
+  const raw = optionalEnv(source, name);
+  if (raw === undefined) return [...fallback];
+  const parts = raw
+    .split(/[,\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (parts.length === 0) throw new EnvError(name, "must list at least one endpoint URL");
+  return parts.map((p) => validateBaseUrl(name, p));
+}
+
+/** Parse provider config from a source. Pure (no process.env), so tests inject. */
+export function parseProviderConfig(source: EnvSource = process.env): ProviderConfig {
+  return {
+    nominatimBase: baseUrl(source, "NOMINATIM_BASE_URL", PROVIDER_DEFAULTS.nominatimBase),
+    photonBase: baseUrl(source, "PHOTON_BASE_URL", PROVIDER_DEFAULTS.photonBase),
+    orsBase: baseUrl(source, "ORS_BASE_URL", PROVIDER_DEFAULTS.orsBase),
+    transitBase: baseUrl(source, "TRANSIT_BASE_URL", PROVIDER_DEFAULTS.transitBase),
+    overpassEndpoints: endpointPool(source, "OVERPASS_ENDPOINTS", PROVIDER_DEFAULTS.overpassEndpoints),
+    bulkOverpassEndpoints: endpointPool(
+      source,
+      "OVERPASS_BULK_ENDPOINTS",
+      PROVIDER_DEFAULTS.bulkOverpassEndpoints,
+    ),
+  };
+}
+
+/** Provider config accessor. NON-memoized on purpose: call it INSIDE request
+ *  handlers so an override (or a test's `vi.stubEnv`) always takes effect — a
+ *  module-top-level const would freeze at import/build time. Parsing is a few
+ *  string ops, dwarfed by the network call it precedes. */
+export function providerConfig(source: EnvSource = process.env): ProviderConfig {
+  return parseProviderConfig(source);
+}
+
+/** Server-side resolved path to the tile archive. Absolute override used as-is;
+ *  a relative override (or the default) is joined against cwd. */
+export function tilesPmtilesPath(source: EnvSource = process.env): string {
+  const override = optionalEnv(source, "TILES_PMTILES_PATH");
+  if (override) return path.isAbsolute(override) ? override : path.join(process.cwd(), override);
+  return path.join(process.cwd(), ...TILES_PATH_DEFAULT_SEGMENTS);
+}
+
+function sameList(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
+/**
+ * A short cache-key namespace that is the EMPTY STRING when the resolved
+ * provider/region config equals the built-in defaults (so default keys stay
+ * byte-identical and the existing multi-day ApiCache keeps serving) and a stable
+ * 8-char hash otherwise. Prepended to every ApiCache provider key so flipping a
+ * provider host or the city bbox serves a FRESH namespace instead of answers
+ * computed against the old provider/region (keys carry no host/bbox themselves).
+ *
+ * "Default" means the vars are UNSET. Setting `NEXT_PUBLIC_MAP_BBOX` (even to
+ * Bucharest's own numbers) is treated as a non-default config and re-namespaces
+ * — a superfluous cold cache at worst, never a stale-answer bug. The tag is
+ * uniform (one tag for all providers), so any config change colds all provider
+ * caches together; config changes are rare deploy events and a cold cache is
+ * "slower but correct" — the degradation posture the app already commits to.
+ */
+export function configCacheTag(source: EnvSource = process.env): string {
+  const cfg = parseProviderConfig(source);
+  const bbox = optionalEnv(source, "NEXT_PUBLIC_MAP_BBOX") ?? "";
+  const isDefault =
+    cfg.nominatimBase === PROVIDER_DEFAULTS.nominatimBase &&
+    cfg.photonBase === PROVIDER_DEFAULTS.photonBase &&
+    cfg.orsBase === PROVIDER_DEFAULTS.orsBase &&
+    cfg.transitBase === PROVIDER_DEFAULTS.transitBase &&
+    sameList(cfg.overpassEndpoints, PROVIDER_DEFAULTS.overpassEndpoints) &&
+    sameList(cfg.bulkOverpassEndpoints, PROVIDER_DEFAULTS.bulkOverpassEndpoints) &&
+    bbox === "";
+  if (isDefault) return "";
+  const canonical = JSON.stringify({
+    n: cfg.nominatimBase,
+    p: cfg.photonBase,
+    o: cfg.orsBase,
+    t: cfg.transitBase,
+    ov: cfg.overpassEndpoints,
+    bo: cfg.bulkOverpassEndpoints,
+    b: bbox,
+  });
+  return createHash("sha256").update(canonical).digest("hex").slice(0, 8);
+}
+
+/** Prefix a provider cache key with the config tag (no-op on default config). */
+export function taggedCacheKey(baseKey: string, source: EnvSource = process.env): string {
+  const tag = configCacheTag(source);
+  return tag ? `${tag}:${baseKey}` : baseKey;
 }

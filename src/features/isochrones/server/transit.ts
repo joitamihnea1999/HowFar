@@ -17,6 +17,7 @@ import {
 } from "@/features/isochrones/time-context";
 import { getCachedSafe, setCachedSafe } from "@/lib/api-cache";
 import { BUCHAREST_BBOX } from "@/lib/bounds";
+import { providerConfig, taggedCacheKey } from "@/lib/env";
 import { providerFetch, ProviderError, roundCoord, USER_AGENT } from "@/lib/provider-http";
 import { withTimeout } from "@/lib/timeout";
 
@@ -30,8 +31,9 @@ import { withTimeout } from "@/lib/timeout";
  * isochrone so the map renders both modes through one path.
  */
 
-const URL = "https://api.transitous.org/api/v6/one-to-all";
-const HOST = "api.transitous.org";
+// Transitous host is config-driven (task 007) — default = today's public MOTIS.
+// The one-to-all path is version-specific and stays in code; only the base moves.
+const ONE_TO_ALL_PATH = "/api/v6/one-to-all";
 const MIN_INTERVAL_MS = 1500; // community-run; be a good citizen
 const TIMEOUT_MS = 20_000; // one-to-all is heavy (~1.5–3 s live)
 const TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -187,7 +189,7 @@ export async function transitIsochrone(
   // filter. v5 (task 064): the walking speeds changed to 3/5 km/h, which moves
   // both the MOTIS access walk and the egress stamping — v4 entries would serve
   // rings built at the old speed.
-  const key = `transit:v5:${pace}:${roundCoord(latRaw)},${roundCoord(lngRaw)}:${departure}`;
+  const key = taggedCacheKey(`transit:v5:${pace}:${roundCoord(latRaw)},${roundCoord(lngRaw)}:${departure}`);
 
   const hit = await getCachedSafe<TransitIsochroneResult>(key);
   if (hit) return hit;
@@ -226,15 +228,17 @@ async function fetchAndBuild(
       return null;
     });
 
+  const { transitBase } = providerConfig();
+
   // A stalled/unreachable/garbled upstream is a provider error (→ 502), not a 500.
   let body: OneToAllBody;
   try {
     const url =
-      `${URL}?one=${lat},${lng}&maxTravelTime=${MAX_TRAVEL_MIN}` +
+      `${transitBase}${ONE_TO_ALL_PATH}?one=${lat},${lng}&maxTravelTime=${MAX_TRAVEL_MIN}` +
       `&transitModes=TRANSIT&time=${encodeURIComponent(departure)}` +
       `&pedestrianSpeed=${paceModel.pedestrianSpeedMs}&useRoutedTransfers=true`;
     const res = await providerFetch(url, {
-      rateHost: HOST,
+      rateHost: new URL(transitBase).host,
       minIntervalMs: MIN_INTERVAL_MS,
       timeoutMs: TIMEOUT_MS,
       init: { headers: { "User-Agent": USER_AGENT } },

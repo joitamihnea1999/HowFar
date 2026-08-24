@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { store, providerFetch } = vi.hoisted(() => ({
   store: new Map<string, unknown>(),
@@ -118,5 +118,27 @@ describe("photon suggest", () => {
       throw new TypeError("network down");
     });
     await expect(suggest("x")).rejects.toThrow(/request failed/i);
+  });
+});
+
+describe("config-driven host (task 007)", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("defaults to today's public Photon host, byte-exact (URL + rateHost + focus)", async () => {
+    providerFetch.mockResolvedValue(res([]));
+    await suggest("default host");
+    const [url, opts] = providerFetch.mock.calls[0] as [string, { rateHost: string }];
+    expect(url.startsWith("https://photon.komoot.io/api?")).toBe(true);
+    expect(url).toContain("lat=44.43&lon=26.10"); // focus kept byte-identical in P1
+    expect(opts.rateHost).toBe("photon.komoot.io");
+  });
+
+  it("routes both the request URL and the rate-limit host to an override", async () => {
+    vi.stubEnv("PHOTON_BASE_URL", "https://photon.internal/api");
+    providerFetch.mockResolvedValue(res([]));
+    await suggest("override host");
+    const [url, opts] = providerFetch.mock.calls[0] as [string, { rateHost: string }];
+    expect(url.startsWith("https://photon.internal/api?")).toBe(true);
+    expect(opts.rateHost).toBe("photon.internal");
   });
 });

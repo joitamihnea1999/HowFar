@@ -1,5 +1,6 @@
 import { getCachedSafe, setCachedSafe } from "@/lib/api-cache";
 import { BUCHAREST_BBOX, inBucharest } from "@/lib/bounds";
+import { providerConfig, taggedCacheKey } from "@/lib/env";
 import { providerFetch, ProviderError, sha256Hex, USER_AGENT } from "@/lib/provider-http";
 
 /**
@@ -11,8 +12,8 @@ import { providerFetch, ProviderError, sha256Hex, USER_AGENT } from "@/lib/provi
  * client debounces + a min query length.
  */
 
-const BASE = "https://photon.komoot.io/api";
-const HOST = "photon.komoot.io";
+// Host/base are config-driven (task 007) — default = today's public Photon.
+// Read inside the fetch function; the rate-limit host derives from the base.
 const MIN_INTERVAL_MS = 300;
 const TIMEOUT_MS = 6_000;
 const TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -72,7 +73,7 @@ const inFlight = new Map<string, Promise<Suggestion[]>>();
 /** Type-ahead address suggestions for a partial query, Bucharest-constrained. */
 export async function suggest(query: string): Promise<Suggestion[]> {
   const q = query.trim();
-  const key = `suggest:${sha256Hex(q.toLowerCase())}`;
+  const key = taggedCacheKey(`suggest:${sha256Hex(q.toLowerCase())}`);
   const hit = await getCachedSafe<Suggestion[]>(key);
   if (hit) return hit;
 
@@ -91,9 +92,12 @@ export async function suggest(query: string): Promise<Suggestion[]> {
 async function fetchAndCacheSuggestions(key: string, q: string): Promise<Suggestion[]> {
   let body: { features?: PhotonFeature[] };
   try {
-    const url = `${BASE}?q=${encodeURIComponent(q)}&bbox=${BBOX}&lat=44.43&lon=26.10&limit=8&lang=en`;
+    const { photonBase } = providerConfig();
+    // Focus (lat/lon) is a ranking bias only; kept byte-identical in P1 —
+    // bbox-centre derivation is a P4 region-UI item (see task Parked).
+    const url = `${photonBase}?q=${encodeURIComponent(q)}&bbox=${BBOX}&lat=44.43&lon=26.10&limit=8&lang=en`;
     const res = await providerFetch(url, {
-      rateHost: HOST,
+      rateHost: new URL(photonBase).host,
       minIntervalMs: MIN_INTERVAL_MS,
       timeoutMs: TIMEOUT_MS,
       init: { headers: { "User-Agent": USER_AGENT, Accept: "application/json" } },

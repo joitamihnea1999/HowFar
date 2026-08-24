@@ -327,6 +327,26 @@ describe("planTrip", () => {
     expect(url).toContain(`time=${encodeURIComponent(DEP)}`);
   });
 
+  it("defaults to today's public plan host, and a TRANSIT_BASE_URL override moves URL + rateHost (task 007)", async () => {
+    providerFetch.mockResolvedValue(planResponse([FAST]));
+    await planTrip(FROM, TO, DEP);
+    const [defUrl, defOpts] = providerFetch.mock.calls[0] as [string, { rateHost: string }];
+    expect(defUrl.startsWith("https://api.transitous.org/api/v1/plan?")).toBe(true);
+    expect(defOpts.rateHost).toBe("api.transitous.org");
+
+    vi.stubEnv("TRANSIT_BASE_URL", "https://motis.internal/");
+    try {
+      providerFetch.mockClear();
+      providerFetch.mockResolvedValue(planResponse([FAST]));
+      await planTrip({ lat: 44.30, lng: 26.05 }, { lat: 44.49, lng: 26.19 }, DEP); // fresh coords
+      const [url, opts] = providerFetch.mock.calls[0] as [string, { rateHost: string }];
+      expect(url.startsWith("https://motis.internal/api/v1/plan?")).toBe(true);
+      expect(opts.rateHost).toBe("motis.internal");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("matches the painted rings' walking contract: raised LAST street leg, default first leg, ring pedestrian params", async () => {
     providerFetch.mockResolvedValue(planResponse([FAST]));
     await planTrip(FROM, TO, DEP);

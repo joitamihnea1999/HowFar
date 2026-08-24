@@ -2,6 +2,7 @@ import { getCachedSafe, setCachedSafe } from "@/lib/api-cache";
 import { PACE_MODEL } from "@/features/isochrones/pace";
 import { decodePolyline } from "@/features/isochrones/polyline";
 import { hasTransitLeg } from "@/features/isochrones/transit-classify";
+import { providerConfig, taggedCacheKey } from "@/lib/env";
 import { providerFetch, ProviderError, roundCoord, USER_AGENT } from "@/lib/provider-http";
 
 /**
@@ -15,8 +16,10 @@ import { providerFetch, ProviderError, roundCoord, USER_AGENT } from "@/lib/prov
  * User-Agent + attribution to transitous.org/sources (rendered client-side).
  */
 
-const URL = "https://api.transitous.org/api/v1/plan";
-const HOST = "api.transitous.org";
+// Transitous host is config-driven (task 007) — default = today's public MOTIS,
+// shared with one-to-all (transit.ts). The plan path is version-specific and
+// stays in code; only the base moves.
+const PLAN_PATH = "/api/v1/plan";
 const MIN_INTERVAL_MS = 1500; // community-run; be a good citizen (shared with one-to-all's host)
 /** END-TO-END budget for resolving one trip plan: rate-limiter queue wait +
  * first attempt + the bounded retry, all under ONE absolute deadline (an
@@ -308,7 +311,9 @@ export async function planTrip(
   // legs (and therefore the chosen itinerary) can differ. maxMinutes is in the
   // key because it changes the selected itinerary.
   const band = typeof maxMinutes === "number" && maxMinutes > 0 ? Math.round(maxMinutes) : 0;
-  const key = `reach:plan:v5:${roundCoord(from.lat)},${roundCoord(from.lng)}:${roundCoord(to.lat)},${roundCoord(to.lng)}:${departureIso}:${band}`;
+  const key = taggedCacheKey(
+    `reach:plan:v5:${roundCoord(from.lat)},${roundCoord(from.lng)}:${roundCoord(to.lat)},${roundCoord(to.lng)}:${departureIso}:${band}`,
+  );
   const hit = await getCachedSafe<ReachPlan>(key);
   if (hit) return hit;
   const existing = inFlight.get(key);
@@ -322,11 +327,11 @@ export async function planTrip(
   }
 }
 
-async function fetchPlanBody(url: string, budgetSignal: AbortSignal): Promise<MotisPlanBody> {
+async function fetchPlanBody(url: string, host: string, budgetSignal: AbortSignal): Promise<MotisPlanBody> {
   let body: MotisPlanBody;
   try {
     const res = await providerFetch(url, {
-      rateHost: HOST,
+      rateHost: host,
       minIntervalMs: MIN_INTERVAL_MS,
       // The per-attempt timeout is a ceiling only — the ABSOLUTE budget signal
       // is what bounds queue+attempts end-to-end (see PLAN_BUDGET_MS).
@@ -353,8 +358,10 @@ async function fetchAndParse(
   key: string,
   maxSeconds?: number,
 ): Promise<ReachPlan> {
+  const { transitBase } = providerConfig();
+  const host = new URL(transitBase).host;
   const url =
-    `${URL}?fromPlace=${roundCoord(from.lat)},${roundCoord(from.lng)}` +
+    `${transitBase}${PLAN_PATH}?fromPlace=${roundCoord(from.lat)},${roundCoord(from.lng)}` +
     `&toPlace=${roundCoord(to.lat)},${roundCoord(to.lng)}` +
     `&time=${encodeURIComponent(departureIso)}&arriveBy=false` +
     // Match the painted rings' walking contract (see the constants above): the
@@ -381,7 +388,7 @@ async function fetchAndParse(
     (Array.isArray(b.direct) ? b.direct : []).some((it) => it && durationSeconds(it.duration) > 0);
   let plan: ReachPlan;
   try {
-    const body = await fetchPlanBody(url, budget.signal);
+    const body = await fetchPlanBody(url, host, budget.signal);
     plan = bestPlan(body, { maxSeconds });
     // One bounded retry when the response yields NO public-transport answer AND
     // no direct (walk/bike) answer either — an effectively-empty response is
@@ -392,7 +399,7 @@ async function fetchAndParse(
     // NEVER let a failed retry discard the first, determinate answer (review).
     if (!isTransitAnswer(plan) && !usableDirect(body) && Date.now() + RETRY_MIN_REMAINING_MS < deadline) {
       try {
-        const second = bestPlan(await fetchPlanBody(url, budget.signal), { maxSeconds });
+        const second = bestPlan(await fetchPlanBody(url, host, budget.signal), { maxSeconds });
         if (isTransitAnswer(second)) plan = second;
       } catch {
         // The first response already answers "no transit here" — a failed

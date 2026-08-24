@@ -1,3 +1,4 @@
+import { providerConfig } from "@/lib/env";
 import { providerFetch, ProviderError, USER_AGENT } from "@/lib/provider-http";
 
 /**
@@ -17,15 +18,12 @@ import { providerFetch, ProviderError, USER_AGENT } from "@/lib/provider-http";
  * a valid answer instead of a 502.
  */
 
-// Ordered by observed reliability (probed 2026-07-17): maps.mail.ru answered the
-// live query every round (~2s); overpass-api.de is variable (fast, or 504 under
-// load); kumi is kept as a third hedge (was fully down when probed, may recover).
-// Racing means a currently-dead host costs nothing — it simply never wins.
-const ENDPOINTS: { url: string; host: string }[] = [
-  { url: "https://maps.mail.ru/osm/tools/overpass/api/interpreter", host: "maps.mail.ru" },
-  { url: "https://overpass-api.de/api/interpreter", host: "overpass-api.de" },
-  { url: "https://overpass.kumi.systems/api/interpreter", host: "overpass.kumi.systems" },
-];
+// The endpoint pool is config-driven (task 007, `OVERPASS_ENDPOINTS`) — default
+// is today's list, ordered by observed reliability (probed 2026-07-17):
+// maps.mail.ru answered the live query every round (~2s); overpass-api.de is
+// variable (fast, or 504 under load); kumi is a third hedge (was down when
+// probed, may recover). Racing means a currently-dead host costs nothing — it
+// simply never wins. The per-host rate-limit key is derived from each URL.
 const MIN_INTERVAL_MS = 1100; // be a good fair-use citizen (per host)
 const ENDPOINT_TIMEOUT_MS = 18_000; // per-host abort; the race isn't sequential so this is the whole budget
 
@@ -137,7 +135,8 @@ export async function raceOverpass(
 ): Promise<OverpassElement[]> {
   const treatEmptyAsFailure = opts.treatEmptyAsFailure ?? true;
   const controller = new AbortController();
-  const attempts = ENDPOINTS.map((ep) =>
+  const endpoints = providerConfig().overpassEndpoints.map((url) => ({ url, host: new URL(url).host }));
+  const attempts = endpoints.map((ep) =>
     fetchFromHost(ep, query, controller.signal, treatEmptyAsFailure),
   );
   try {

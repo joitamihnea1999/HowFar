@@ -1,12 +1,8 @@
 import { AMENITY_CATEGORIES } from "@/features/amenities/amenities";
 import type { OverpassElement } from "@/features/amenities/server/overpass-client";
 import { BUCHAREST_BBOX } from "@/lib/bounds";
+import { providerConfig } from "@/lib/env";
 import { ProviderError, USER_AGENT } from "@/lib/provider-http";
-
-const BULK_ENDPOINTS = [
-  "https://overpass-api.de/api/interpreter",
-  "https://overpass.kumi.systems/api/interpreter",
-] as const;
 
 export const BULK_OVERPASS_TIMEOUT_MS = 180_000;
 export const BULK_OVERPASS_MAX_BYTES = 50 * 1024 * 1024;
@@ -115,7 +111,9 @@ export async function fetchBulkOverpass(
     maxBytes?: number;
   } = {},
 ): Promise<BulkOverpassSnapshot> {
-  const endpoints = options.endpoints ?? BULK_ENDPOINTS;
+  // Default pool is config-driven (task 007, `OVERPASS_BULK_ENDPOINTS`); the
+  // weekly job passes none, so it picks up the configured (or default) hosts.
+  const endpoints = options.endpoints ?? providerConfig().bulkOverpassEndpoints;
   const query = buildBulkOverpassQuery();
   const failures: string[] = [];
   for (const endpoint of endpoints) {

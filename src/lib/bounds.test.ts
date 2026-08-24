@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 
-import { BUCHAREST_BBOX, BUCHAREST_MAX_BOUNDS, inBucharest } from "./bounds";
+import { BUCHAREST_BBOX, BUCHAREST_MAX_BOUNDS, MAX_BBOX_SPAN_DEG, inBucharest, parseBbox } from "./bounds";
 
 describe("inBucharest", () => {
   it("accepts every point inside the bbox (property)", () => {
@@ -47,5 +47,51 @@ describe("BUCHAREST_MAX_BOUNDS", () => {
       [BUCHAREST_BBOX.minLng, BUCHAREST_BBOX.minLat],
       [BUCHAREST_BBOX.maxLng, BUCHAREST_BBOX.maxLat],
     ]);
+  });
+});
+
+describe("default extent (byte-identity, task 007)", () => {
+  // NOT self-referential: pins the DEFAULT box to today's exact literals so the
+  // config lift cannot silently move the current Bucharest deployment.
+  it("with NEXT_PUBLIC_MAP_BBOX unset, is exactly Bucharest+Ilfov", () => {
+    expect(BUCHAREST_BBOX).toEqual({ minLng: 25.8, minLat: 44.2, maxLng: 26.4, maxLat: 44.7 });
+  });
+});
+
+describe("parseBbox (task 007)", () => {
+  it("parses a well-formed single-city box", () => {
+    expect(parseBbox("23.4,46.6,23.7,46.9")).toEqual({
+      minLng: 23.4,
+      minLat: 46.6,
+      maxLng: 23.7,
+      maxLat: 46.9,
+    });
+  });
+
+  it("tolerates surrounding whitespace", () => {
+    expect(parseBbox(" 25.8 , 44.2 , 26.4 , 44.7 ")).toEqual({
+      minLng: 25.8,
+      minLat: 44.2,
+      maxLng: 26.4,
+      maxLat: 44.7,
+    });
+  });
+
+  it("returns null for every malformed shape", () => {
+    expect(parseBbox(null)).toBeNull();
+    expect(parseBbox(undefined)).toBeNull();
+    expect(parseBbox("")).toBeNull();
+    expect(parseBbox("25.8,44.2,26.4")).toBeNull(); // wrong arity
+    expect(parseBbox("25.8,44.2,26.4,44.7,extra")).toBeNull();
+    expect(parseBbox("a,b,c,d")).toBeNull(); // non-finite
+    expect(parseBbox("26.4,44.2,25.8,44.7")).toBeNull(); // minLng >= maxLng
+    expect(parseBbox("25.8,44.7,26.4,44.2")).toBeNull(); // minLat >= maxLat
+    expect(parseBbox("-181,44.2,26.4,44.7")).toBeNull(); // out of world range
+  });
+
+  it("rejects a span beyond the single-city cap (all-Romania guard)", () => {
+    // ~7° wide — an all-country extent that would OOM the transit grid.
+    expect(parseBbox("20,44,27,48")).toBeNull();
+    expect(MAX_BBOX_SPAN_DEG).toBe(2);
   });
 });

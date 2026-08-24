@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // In-memory cache + a stubbed providerFetch (so the real rate limiter isn't
 // exercised here — that's covered in http.test.ts).
@@ -88,6 +88,27 @@ describe("reverseGeocode", () => {
       lng: 26.2,
       label: "Somewhere, București",
     });
+  });
+});
+
+describe("config-driven host (task 007)", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("defaults to today's public Nominatim host, byte-exact (URL + rateHost)", async () => {
+    providerFetch.mockResolvedValue(jsonResponse([]));
+    await geocode("default host");
+    const [url, opts] = providerFetch.mock.calls[0] as [string, { rateHost: string }];
+    expect(url.startsWith("https://nominatim.openstreetmap.org/search?")).toBe(true);
+    expect(opts.rateHost).toBe("nominatim.openstreetmap.org");
+  });
+
+  it("routes both the request URL and the rate-limit host to an override", async () => {
+    vi.stubEnv("NOMINATIM_BASE_URL", "https://nom.example");
+    providerFetch.mockResolvedValue(jsonResponse([]));
+    await geocode("override host");
+    const [url, opts] = providerFetch.mock.calls[0] as [string, { rateHost: string }];
+    expect(url.startsWith("https://nom.example/search?")).toBe(true);
+    expect(opts.rateHost).toBe("nom.example");
   });
 });
 

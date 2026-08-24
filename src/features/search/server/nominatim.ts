@@ -1,5 +1,6 @@
 import { getCachedSafe, setCachedSafe } from "@/lib/api-cache";
 import { BUCHAREST_BBOX } from "@/lib/bounds";
+import { providerConfig, taggedCacheKey } from "@/lib/env";
 import { providerFetch, ProviderError, roundCoord, sha256Hex, USER_AGENT } from "@/lib/provider-http";
 
 // Nominatim viewbox is x1,y1,x2,y2 (two opposite corners); with bounded=1 it
@@ -14,8 +15,9 @@ const VIEWBOX = `${BUCHAREST_BBOX.minLng},${BUCHAREST_BBOX.maxLat},${BUCHAREST_B
  * wrapper) so a bad/repeated query can't hammer the 1 req/s budget.
  */
 
-const BASE = "https://nominatim.openstreetmap.org";
-const HOST = "nominatim.openstreetmap.org";
+// Host/base are config-driven (task 007) — default = today's public Nominatim.
+// Read inside the request functions (never at module top level) so an override
+// takes effect; the rate-limit host is derived from the configured base.
 const MIN_INTERVAL_MS = 1100; // ToS ≤1 req/s, with margin
 const TIMEOUT_MS = 8_000;
 const TTL_OK_MS = 30 * 24 * 60 * 60 * 1000;
@@ -42,7 +44,7 @@ function normalize(row: NominatimRow | undefined): GeoPoint | null {
   return { lat, lng, label: row.display_name ?? "" };
 }
 
-async function cachedLookup(key: string, url: string): Promise<GeoPoint | null> {
+async function cachedLookup(key: string, url: string, host: string): Promise<GeoPoint | null> {
   // Sentinel wrapper: a cached `{ result: null }` is a real "known empty",
   // distinct from a cache miss (getCached returning null).
   const hit = await getCachedSafe<{ result: GeoPoint | null }>(key);
@@ -52,7 +54,7 @@ async function cachedLookup(key: string, url: string): Promise<GeoPoint | null> 
   let data: NominatimRow[] | NominatimRow;
   try {
     const res = await providerFetch(url, {
-      rateHost: HOST,
+      rateHost: host,
       minIntervalMs: MIN_INTERVAL_MS,
       timeoutMs: TIMEOUT_MS,
       init: { headers: { "User-Agent": USER_AGENT, Accept: "application/json" } },
@@ -73,15 +75,17 @@ async function cachedLookup(key: string, url: string): Promise<GeoPoint | null> 
 
 /** Forward geocode a free-text address (restricted to Romania; top match). */
 export function geocode(query: string): Promise<GeoPoint | null> {
+  const { nominatimBase } = providerConfig();
   const normalized = query.trim().toLowerCase();
-  const key = `geo:fwd:${sha256Hex(normalized)}`;
-  const url = `${BASE}/search?format=jsonv2&countrycodes=ro&viewbox=${VIEWBOX}&bounded=1&limit=1&q=${encodeURIComponent(query.trim())}`;
-  return cachedLookup(key, url);
+  const key = taggedCacheKey(`geo:fwd:${sha256Hex(normalized)}`);
+  const url = `${nominatimBase}/search?format=jsonv2&countrycodes=ro&viewbox=${VIEWBOX}&bounded=1&limit=1&q=${encodeURIComponent(query.trim())}`;
+  return cachedLookup(key, url, new URL(nominatimBase).host);
 }
 
 /** Reverse geocode a point to a human-readable address. */
 export function reverseGeocode(lat: number, lng: number): Promise<GeoPoint | null> {
-  const key = `geo:rev:${roundCoord(lat)},${roundCoord(lng)}`;
-  const url = `${BASE}/reverse?format=jsonv2&lat=${lat}&lon=${lng}`;
-  return cachedLookup(key, url);
+  const { nominatimBase } = providerConfig();
+  const key = taggedCacheKey(`geo:rev:${roundCoord(lat)},${roundCoord(lng)}`);
+  const url = `${nominatimBase}/reverse?format=jsonv2&lat=${lat}&lon=${lng}`;
+  return cachedLookup(key, url, new URL(nominatimBase).host);
 }
