@@ -1,8 +1,12 @@
+import { readFileSync } from "node:fs";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { DEFAULT_BBOX, parseBbox } from "./bounds";
 import {
   EnvError,
   PROVIDER_DEFAULTS,
+  TILES_PATH_DEFAULT_SEGMENTS,
   configCacheTag,
   parseProviderConfig,
   parseServerEnv,
@@ -117,8 +121,17 @@ describe("parseProviderConfig (region/self-host config lift)", () => {
     expect(cfg.overpassEndpoints).toEqual(["https://a.example/api", "https://b.example/api"]);
   });
 
-  it("treats an empty/whitespace override as absent (falls back to default)", () => {
-    expect(parseProviderConfig({ ORS_BASE_URL: "   " }).orsBase).toBe(PROVIDER_DEFAULTS.orsBase);
+  it("uses the default only when the var is ABSENT, not when set-but-blank", () => {
+    expect(parseProviderConfig({}).orsBase).toBe(PROVIDER_DEFAULTS.orsBase); // absent → default
+  });
+
+  it("FAILS CLOSED on a set-but-blank provider base (a stray `ORS_BASE_URL=` must not silently use public)", () => {
+    expect(() => parseProviderConfig({ ORS_BASE_URL: "   " })).toThrowError(/blank/);
+    expect(() => parseProviderConfig({ NOMINATIM_BASE_URL: "" })).toThrowError(/blank/);
+  });
+
+  it("FAILS CLOSED on a set-but-blank endpoint pool", () => {
+    expect(() => parseProviderConfig({ OVERPASS_ENDPOINTS: "" })).toThrowError(/no endpoint URL/);
   });
 
   it("FAILS CLOSED on a set-but-invalid URL", () => {
@@ -149,7 +162,7 @@ describe("parseProviderConfig (region/self-host config lift)", () => {
 
   it("FAILS CLOSED on an endpoint pool whose members are all empty", () => {
     expect(() => parseProviderConfig({ OVERPASS_ENDPOINTS: " , , " })).toThrowError(
-      /at least one endpoint/,
+      /no endpoint URL/,
     );
   });
 
@@ -157,6 +170,27 @@ describe("parseProviderConfig (region/self-host config lift)", () => {
     expect(() =>
       parseProviderConfig({ OVERPASS_ENDPOINTS: "https://ok.example/api, nope" }),
     ).toThrowError(EnvError);
+  });
+});
+
+describe("fetch-tiles.sh default drift guard (task 007)", () => {
+  // The build script has its own copy of the extent + archive-path defaults
+  // (it can't import TS). Guard that they don't drift from the app's defaults,
+  // else an unset deploy would extract a different box/path than the app reads.
+  // File-relative (not cwd-relative) so it resolves regardless of the runner cwd.
+  const script = readFileSync(new URL("../../scripts/fetch-tiles.sh", import.meta.url), "utf8");
+
+  it("its fallback bbox equals DEFAULT_BBOX", () => {
+    // Anchor on the numeric fallback (`:-25.80,…`), not the `:-$(read_env_key…)` line.
+    const m = script.match(/NEXT_PUBLIC_MAP_BBOX:-(\d[0-9.,]+)/);
+    expect(m, "fallback bbox literal not found in fetch-tiles.sh").not.toBeNull();
+    expect(parseBbox(m![1])).toEqual(DEFAULT_BBOX);
+  });
+
+  it("its fallback archive path equals the app default", () => {
+    const m = script.match(/TILES_PMTILES_PATH:-(data[^}"']+)/);
+    expect(m, "fallback path literal not found in fetch-tiles.sh").not.toBeNull();
+    expect(m![1].trim()).toBe(TILES_PATH_DEFAULT_SEGMENTS.join("/"));
   });
 });
 

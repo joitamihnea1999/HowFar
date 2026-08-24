@@ -125,4 +125,10 @@ describe("resolveBbox via NEXT_PUBLIC_MAP_BBOX (task 007, fresh module load)", (
     vi.stubEnv("NEXT_PUBLIC_MAP_BBOX", "not,a,bbox,really");
     await expect(import("./bounds")).rejects.toThrow(/Invalid NEXT_PUBLIC_MAP_BBOX/);
   });
+
+  it("FAILS CLOSED on a set-but-blank extent (a stray NEXT_PUBLIC_MAP_BBOX= must not use the default city)", async () => {
+    vi.resetModules();
+    vi.stubEnv("NEXT_PUBLIC_MAP_BBOX", "   ");
+    await expect(import("./bounds")).rejects.toThrow(/set but blank/);
+  });
 });

@@ -167,22 +167,31 @@ function validateBaseUrl(name: string, raw: string): string {
   return trimmed;
 }
 
-/** Absent → default; present → validated (fail-closed). */
+/** ABSENT (key unset) → default; PRESENT-but-blank → EnvError; else validated.
+ *  A blank value is a mistake, not "use the default": for the commercial
+ *  self-host boundary a stray `ORS_BASE_URL=` must not silently fall back to a
+ *  public provider — fail closed and make the operator unset it deliberately. */
 function baseUrl(source: EnvSource, name: string, fallback: string): string {
-  const raw = optionalEnv(source, name);
-  return raw === undefined ? fallback : validateBaseUrl(name, raw);
+  const raw = source[name];
+  if (raw === undefined) return fallback;
+  if (raw.trim() === "") {
+    throw new EnvError(name, "is set but blank — unset it entirely to use the default");
+  }
+  return validateBaseUrl(name, raw);
 }
 
-/** A comma/space-separated endpoint pool. Absent → default; present → split,
- *  drop empties, validate each, and reject an empty result (fail-closed). */
+/** A comma/space-separated endpoint pool. ABSENT → default; PRESENT-but-empty
+ *  (blank or only separators) → EnvError; else split, validate each. */
 function endpointPool(source: EnvSource, name: string, fallback: readonly string[]): string[] {
-  const raw = optionalEnv(source, name);
+  const raw = source[name];
   if (raw === undefined) return [...fallback];
   const parts = raw
     .split(/[,\s]+/)
     .map((s) => s.trim())
     .filter(Boolean);
-  if (parts.length === 0) throw new EnvError(name, "must list at least one endpoint URL");
+  if (parts.length === 0) {
+    throw new EnvError(name, "is set but lists no endpoint URL — unset it entirely to use the default");
+  }
   return parts.map((p) => validateBaseUrl(name, p));
 }
 

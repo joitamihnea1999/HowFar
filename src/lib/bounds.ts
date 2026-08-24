@@ -64,8 +64,14 @@ export function parseBbox(raw: string | undefined | null): Bbox | null {
 }
 
 function resolveBbox(): Bbox {
-  const raw = process.env.NEXT_PUBLIC_MAP_BBOX?.trim();
-  if (!raw) return DEFAULT_BBOX; // absent → today's Bucharest box (byte-identical)
+  const rawEnv = process.env.NEXT_PUBLIC_MAP_BBOX;
+  if (rawEnv === undefined) return DEFAULT_BBOX; // absent → today's Bucharest box (byte-identical)
+  const raw = rawEnv.trim();
+  if (raw === "") {
+    // Present-but-blank is a mistake, not "use the default" — fail closed so a
+    // stray NEXT_PUBLIC_MAP_BBOX= doesn't silently ship the wrong (default) city.
+    throw new Error("NEXT_PUBLIC_MAP_BBOX is set but blank — unset it entirely to use the default extent.");
+  }
   const parsed = parseBbox(raw);
   if (!parsed) {
     // Fail-closed: a SET-but-invalid extent must NOT silently fall back to
