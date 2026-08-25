@@ -86,7 +86,10 @@ with-flatnode answers, confirming a serve-only instance does not need it. Gettin
 - **All 27 checks PASS** (`parity-check.mjs --public … --local …` exits 0):
   - **18/18 rings** — walk + car: median 0.0%, **worst sector ≤3.1%**, area 0.998–1.003.
   - **Geocode all ≤150 m** — Unirii (Piața Unirii) 0.0 m, Grozăvești (AFI Cotroceni) 0.0 m,
-    Berceni (Piața Sudului) 109.7 m.
+    Berceni (Piața Sudului) 109.7 m. (Piața Sudului is a large public-transit square, not a single
+    rooftop, so the two engines pick slightly different representative nodes for it — the 109.7 m is
+    that node choice, well inside the 150 m rooftop tolerance; Unirii/AFI resolve to one exact object,
+    hence 0.0 m.)
   - **Reverse all ≤150 m** (map-click label path) — 0.0 / 0.0 / 30.5 m.
   - **Suggest top hit ≤110 m** — Unirii 108 m, Grozăvești 0 m, Berceni 110 m.
 - Note on area-name queries: a bare neighborhood name (e.g. just "Grozăvești") resolves to a

@@ -47,7 +47,7 @@ All commands are run from the `HowFar/` app root.
 |---|---|---|---|
 | Nominatim (`IMPORT_STYLE=full`) | ~24 min | ~4.2 GiB | PG DB 5.4 GB + flatnode **106 GB** (deleted by default post-import → ~8 GB) |
 | Photon (index from Nominatim DB) | ~2.7 min | ~0.75 GiB | 468 MB (+94 MB jar) |
-| ORS (foot-walking + driving-car) | ~6.6 min | ~1.82 GiB (XMX 2 g) | 799 MB |
+| ORS (foot-walking + driving-car) | ~6.6 min | ~1.82 GiB (XMX 2 g) | graph 799 MB + **752 MB SRTM elevation cache** |
 | pmtiles (protomaps/basemaps) | ~5 min + one-time ~2.25 GB base-source download | XMX 6 g | 684 MB (all-Romania z0–15) |
 | **Extract download** | ~1 min | — | 312 MB |
 
@@ -60,7 +60,12 @@ after the flatnode is removed and the container restarted). Keep it only if you 
 replication (`KEEP_FLATNODE=1`, §2). **Tradeoff if you delete and later need it back:** no
 in-place rebuild — you re-import Nominatim (~24 min). The "~8 GB resident" counts the serving
 engine data + the pmtiles archive (Nominatim DB 5.4 GB + Photon 468 MB + jar 94 MB + ORS 799 MB +
-tiles 684 MB ≈ 7.5 GB). The **~2.25 GB of Protomaps base sources** the tile build downloads
+tiles 684 MB ≈ 7.5 GB) plus a **752 MB SRTM elevation cache** (`ors-elevation` volume). ORS fetches
+SRTM elevation for its graph build (as the public ORS does — so it is faithful for parity, not a
+divergence), but SRTM is an **external, unpinned** input downloaded on demand, like the tile base
+sources: the routing graph is only as reproducible as whatever SRTM vintage is current upstream. To
+drop it (at the cost of elevation-aware routing that public ORS has), disable ORS elevation and
+re-validate parity. The **~2.25 GB of Protomaps base sources** the tile build downloads
 (`data/selfhost/planetiler/`) is a **separate build cache**, not serving data — keep it only to
 rebuild tiles faster, else `rm -rf data/selfhost/planetiler` reclaims it.
 
@@ -80,6 +85,12 @@ docker/selfhost/fetch-photon-jar.sh               # → data/selfhost/photon/pho
 ```
 
 `--dry-run` on the extract fetcher prints the size and downloads nothing.
+
+> **Run this BEFORE any `docker compose … up`.** The compose file bind-mounts
+> `data/osm/romania-260824.osm.pbf`; if you `up` before the file exists, Docker
+> silently creates that path as a **directory**, and the fetcher would then keep
+> re-downloading (its `[ -f ]` check fails on a directory). If you hit that, remove the
+> stray directory and re-fetch. Fetch first and this can't happen.
 
 ## 2 — Nominatim (import runs on first `up`)
 
@@ -104,9 +115,13 @@ docker/selfhost/prune-flatnode.sh                 # delete flatnode.file → ~8 
 # KEEP_FLATNODE=1 docker/selfhost/prune-flatnode.sh   # keep it (only if you run OSM replication)
 ```
 
-The geocoder keeps answering `/search` + `/reverse` byte-identically without the flatnode (verified
-by re-querying after removal + a container restart). If you later need the flatnode back (to enable
-minutely updates), there is no in-place rebuild — re-import (~24 min).
+`prune-flatnode.sh` refuses unless the Nominatim container reports `healthy`, so it cannot delete the
+flatnode out from under a running import: the `mediagis/nominatim` image runs the import to completion
+and only THEN starts the webserver, so `/status` (which drives the healthcheck) does not answer `0`
+until the import — including the flatnode write — has finished. A fresh import takes ~24 min to reach
+healthy; a serve restart, ~15 s. The geocoder keeps answering `/search` + `/reverse` byte-identically
+without the flatnode (verified by re-querying after removal + a container restart). If you later need
+the flatnode back (to enable minutely updates), there is no in-place rebuild — re-import (~24 min).
 
 ## 3 — Photon (index built FROM the Nominatim DB)
 
@@ -183,7 +198,14 @@ Keep `.env` at its public defaults (the overlay values go inline below, not in `
 ```bash
 npm run build
 
-# PUBLIC instance — default providers (public Nominatim/Photon/ORS; needs ORS_API_KEY in .env):
+# PUBLIC instance — set the PUBLIC provider bases INLINE (do NOT rely on .env: if you
+# merged the overlay in §6, .env now points at localhost and BOTH legs would hit the
+# self-hosted engines, reporting a vacuous 27/27). Give it its OWN fresh revision token
+# so it queries the providers rather than serving old ApiCache rows. Needs ORS_API_KEY in .env.
+NOMINATIM_BASE_URL=https://nominatim.openstreetmap.org \
+PHOTON_BASE_URL=https://photon.komoot.io \
+ORS_BASE_URL=https://api.openrouteservice.org \
+PROVIDER_DATA_REVISION=public-$(date +%s) \
 PORT=3000 npm run start &
 
 # LOCAL instance — self-host providers, set inline (a DISTINCT PROVIDER_DATA_REVISION),
@@ -192,12 +214,17 @@ NOMINATIM_BASE_URL=http://localhost:8081 \
 PHOTON_BASE_URL=http://localhost:2322 \
 ORS_BASE_URL=http://localhost:8082/ors \
 TILES_PMTILES_PATH=data/tiles/selfhost-romania.pmtiles \
-PROVIDER_DATA_REVISION=romania-260824 \
+PROVIDER_DATA_REVISION=romania-260824-$(date +%s) \
 NOMINATIM_MIN_INTERVAL_MS=0 PHOTON_MIN_INTERVAL_MS=0 ORS_MIN_INTERVAL_MS=0 \
 PORT=3001 npm run start &
 
 node docker/selfhost/parity-check.mjs --public http://localhost:3000 --local http://localhost:3001
 ```
+
+Setting the public bases inline (not via `.env`) is what makes §7 correct regardless of
+whether §6's overlay is in `.env`; the per-run `$(date +%s)` revision suffix colds BOTH
+ApiCache namespaces so the comparison re-hits the live providers on each leg rather than
+serving cached rows (there is no expiry reaper — see Caveats).
 
 The harness gates each ring on FULL bearing coverage on both legs AND median AND
 worst-sector radial residual AND the area band. A wedge clipped from an *enclosing*
@@ -222,6 +249,14 @@ rm -rf data/osm data/selfhost                                        # reclaim d
 ## Caveats
 
 - **Transit is not self-hosted** (GTFS licence gate) — it keeps its current provider.
+- **Tile attribution is NOT yet complete for the self-built archive.** The protomaps/basemaps
+  build bundles more than OpenStreetMap — Natural Earth, OSM water/land polygons, and **Daylight
+  landcover** (ESA WorldCover / Overture), which carry their own visible-attribution requirements
+  (`data/selfhost/planetiler/basemaps/LICENSE_DATA.md`). The app's map currently shows only the
+  OpenStreetMap credit (`src/features/map/map-setup.ts`). **Before shipping the self-hosted tiles
+  commercially, the map attribution must be extended (or Daylight landcover excluded from the
+  build).** That is a UI/licensing change (touches `src/`) and is deliberately OUT of this
+  infra-only, byte-identical task — tracked for the region-UI / go-live phase.
 - **Basemap glyphs + sprite** are still fetched keyless from `protomaps.github.io`
   (tracked polish item, `docs/PROVIDERS.md`) — only the tiles are self-hosted here.
 - **Run imports one at a time.** Peak RAM, not disk, is the constraint on a small box.
