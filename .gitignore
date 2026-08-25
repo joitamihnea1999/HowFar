@@ -56,3 +56,9 @@ next-env.d.ts
 
 # pmtiles CLI cache
 /.cache/
+
+# self-host stack: OSM extract + engine data volumes — multi-GB,
+# never committed. The compose files, scripts and docs under docker/selfhost/
+# ARE committed; only the downloaded/imported DATA lives here.
+/data/osm/
+/data/selfhost/

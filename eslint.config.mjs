@@ -14,6 +14,9 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // Generated coverage report (npm run test:coverage).
     "coverage/**",
+    // Local data: downloaded OSM extracts, tile archives, and self-host engine
+    // volumes + the vendored tile-generator checkout (all gitignored, not our code).
+    "data/**",
   ]),
 ]);
 

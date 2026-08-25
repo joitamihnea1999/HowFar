@@ -1,0 +1,168 @@
+# HowFar self-host provider stack — LOCAL ONLY.
+#
+# Stands up the OSM provider engines the app talks to, all fed from ONE pinned
+# Geofabrik Romania extract (docker/selfhost/fetch-romania-extract.sh):
+#   - nominatim  → /search + /reverse   (submit-time geocode + reverse label)
+#   - photon     → /api                 (type-ahead autocomplete)
+#   - ors        → /ors/v2/isochrones/* (walk foot-walking + car driving-car)
+#   - planetiler → data/tiles/*.pmtiles (basemap, Protomaps schema)
+#
+# This file is SEPARATE from the app's default ../../docker-compose.yml so
+# `docker compose up -d db` (the dev Postgres) is completely unchanged. Nothing
+# here runs unless you invoke this file explicitly:
+#   docker compose -f docker/selfhost/docker-compose.yml up -d nominatim
+# See docs/SELFHOST.md for the full fetch→import→build→point-app→verify runbook.
+#
+# RAM is the binding constraint on a dev box: every service has an
+# explicit mem_limit + heap cap so an import cannot swap-thrash the host. Run the
+# heavy imports ONE AT A TIME (docs/SELFHOST.md) rather than all at once.
+#
+# All ports bind to 127.0.0.1 only — this stack is never exposed off the machine.
+# All data lives under ../../data/ (gitignored: data/osm, data/selfhost, data/tiles).
+
+name: howfar-selfhost
+
+services:
+  # ── Geocoding: Nominatim (submit-time /search + /reverse) ──────────────────
+  # First `up` runs the import from the mounted PBF, then serves on :8080.
+  # Reuses its named volume on subsequent starts (no re-import).
+  nominatim:
+    # Pinned by digest so a rebuild reproduces the exact geocoder (the `:5.3` tag
+    # can move to a patch release). Nominatim 5.3.2.
+    image: mediagis/nominatim:5.3@sha256:7923a8e67197fc6d4f4ecb7c0e8bbedffeddcfdf4519596fe946e46a28f5a9f8
+    container_name: howfar-nominatim
+    environment:
+      PBF_PATH: /data/romania.osm.pbf      # the ONE extract, mounted read-only below
+      IMPORT_STYLE: full                   # full = faithful to the public instance (parity); `address` is smaller/faster
+      NOMINATIM_PASSWORD: howfar           # password for the internal `nominatim` DB role (Photon import uses it)
+      THREADS: "8"
+      # Postgres import tuning — sized for a ~3.5 GB-free box, NOT the whole host.
+      POSTGRES_SHARED_BUFFERS: 512MB
+      POSTGRES_MAINTENANCE_WORK_MEM: 1GB
+      POSTGRES_WORK_MEM: 64MB
+      POSTGRES_EFFECTIVE_CACHE_SIZE: 2GB
+    volumes:
+      - ../../data/osm/romania-260824.osm.pbf:/data/romania.osm.pbf:ro
+      - nominatim-data:/var/lib/postgresql/16/main
+      - nominatim-flatnode:/nominatim/flatnode
+    ports:
+      - "127.0.0.1:8081:8080"              # app: NOMINATIM_BASE_URL=http://localhost:8081
+    expose:
+      - "5432"                             # internal PG reachable by photon-import over the compose network
+    shm_size: 1gb
+    mem_limit: 5g
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS 'http://localhost:8080/status?format=json' | grep -q '\"status\":0' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      start_period: 30m                    # first-run import can take a long time
+    restart: "no"          # opt-in local stack: do NOT auto-restart on reboot (see docs/SELFHOST.md)
+
+  # ── Geocoding autocomplete: Photon ────────────────────────────────────────
+  # Photon builds its index FROM the Nominatim DB (komoot's `-nominatim-import`),
+  # so it derives from the SAME ONE Romania extract as Nominatim — no separate
+  # planet/region dump. The pinned komoot photon jar is fetched into gitignored
+  # data/selfhost/photon/ (see docs/SELFHOST.md) and mounted here; the container
+  # is a plain JRE, which keeps the version pinned and the source explicit.
+  #
+  # One-shot import job — run AFTER nominatim is healthy. It shares nominatim's
+  # network namespace so it reaches the internal Postgres at localhost:5432
+  # (Photon needs the DB only at import time, never at serve time):
+  #   docker compose -f docker/selfhost/docker-compose.yml --profile import run --rm photon-import
+  photon-import:
+    image: eclipse-temurin:21-jre@sha256:7a65df4b22d2de92d4e04056e884f3b9122d70b21e2847fd66084278bd0ce037   # plain JRE; the pinned jar is mounted
+    container_name: howfar-photon-import
+    # Run as the host user so the built photon_data/ index is host-owned (removable
+    # by the operator's teardown). Override DOCKER_UID/GID if your uid isn't 1000.
+    user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
+    profiles: ["import"]
+    depends_on:
+      nominatim:
+        condition: service_healthy
+    network_mode: "service:nominatim"       # reach the Nominatim Postgres at 127.0.0.1:5432
+    working_dir: /photon
+    command: >
+      java -jar /photon/photon.jar
+      -nominatim-import
+      -host 127.0.0.1 -port 5432
+      -database nominatim -user nominatim -password howfar
+      -languages en,ro
+    volumes:
+      - ../../data/selfhost/photon:/photon      # holds photon.jar (pinned) + the built photon_data/
+    mem_limit: 3g
+    restart: "no"
+
+  photon:
+    image: eclipse-temurin:21-jre@sha256:7a65df4b22d2de92d4e04056e884f3b9122d70b21e2847fd66084278bd0ce037
+    container_name: howfar-photon
+    user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"   # host-owned index (see photon-import)
+    # Behind a profile so a bare `up -d` (whole file) can't start it crash-looping
+    # over a not-yet-built index during the import. Start it explicitly after the
+    # import: `docker compose … up -d photon` (naming a profiled service starts it).
+    profiles: ["serve"]
+    working_dir: /photon
+    command: ["java", "-jar", "/photon/photon.jar", "-listen-ip", "0.0.0.0", "-listen-port", "2322"]
+    volumes:
+      - ../../data/selfhost/photon:/photon      # serves the already-built photon_data/ (no DB needed)
+    ports:
+      - "127.0.0.1:2322:2322"              # app: PHOTON_BASE_URL=http://localhost:2322
+    mem_limit: 2g
+    healthcheck:
+      # temurin JRE has no curl/wget — a bash /dev/tcp liveness probe on the API port.
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/2322' 2>/dev/null || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 30s
+    restart: "no"          # opt-in local stack: do NOT auto-restart on reboot (see docs/SELFHOST.md)
+
+  # ── Routing: OpenRouteService (walk + car isochrones) ─────────────────────
+  # First `up` builds the foot-walking + driving-car graphs from the PBF, then
+  # serves at :8082/ors/v2/isochrones/{profile}. Config is passed as dotted-key
+  # env (ORS 8+ convention). CRITICAL: maximum_intervals default is 1, but the
+  # app POSTs 3 ranges in one request (ors.ts normalize() needs exactly 3
+  # features) — so it is raised here or every isochrone call 502s.
+  ors:
+    # Pinned by digest so a rebuild reproduces the exact routing graph engine.
+    image: openrouteservice/openrouteservice:v9.10.0@sha256:cd7d8f3cc1b753b12d706577aca92f7bc952aa9ef9a685394ad86cef9f829473
+    container_name: howfar-ors
+    environment:
+      REBUILD_GRAPHS: "False"              # reuse the built graph across restarts
+      XMX: 2g                              # heap: PBF(0.31g) * 2 profiles * 2 ≈ 1.3g → 2g headroom
+      ors.engine.profile_default.build.source_file: /home/ors/files/romania.osm.pbf
+      ors.engine.profiles.foot-walking.enabled: "true"
+      ors.engine.profiles.driving-car.enabled: "true"
+      # Admit the app's real isochrone payload (3 intervals; walk max 2633 s, car well under).
+      ors.endpoints.isochrones.maximum_intervals: "10"
+      ors.endpoints.isochrones.maximum_locations: "5"
+      ors.endpoints.isochrones.maximum_range_time_default: "18000"
+    volumes:
+      - ../../data/osm/romania-260824.osm.pbf:/home/ors/files/romania.osm.pbf:ro
+      - ors-graphs:/home/ors/graphs
+      - ors-elevation:/home/ors/elevation_cache
+    ports:
+      - "127.0.0.1:8082:8082"             # app: ORS_BASE_URL=http://localhost:8082/ors
+    mem_limit: 3g
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8082/ors/v2/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      start_period: 20m                    # first-run graph build
+    restart: "no"          # opt-in local stack: do NOT auto-restart on reboot (see docs/SELFHOST.md)
+
+  # ── Basemap tiles (pmtiles) ───────────────────────────────────────────────
+  # NOT a compose service: the Protomaps basemap schema (matching the app's
+  # @protomaps/basemaps style) is produced by the protomaps/basemaps Planetiler
+  # build profile, which is compiled from source at a pinned ref — a stock
+  # planetiler/OpenMapTiles run would render blank. That build is driven by
+  # docker/selfhost/build-tiles.sh (it uses a maven+temurin container, so no
+  # host toolchain is needed) and writes data/tiles/bucharest.pmtiles atomically.
+  # See docs/SELFHOST.md.
+
+volumes:
+  nominatim-data:
+  nominatim-flatnode:
+  ors-graphs:
+  ors-elevation:

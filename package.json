@@ -16,8 +16,9 @@
     "test:db": "POSTGIS_INTEGRATION=1 node --env-file-if-exists=.env ./node_modules/vitest/vitest.mjs run src/lib/postgres.integration.test.ts && POSTGIS_INTEGRATION=1 node --env-file-if-exists=.env ./node_modules/vitest/vitest.mjs run --no-file-parallelism src/features/amenities/server/catalogue-store.integration.test.ts src/features/amenities/server/catalogue-import.integration.test.ts",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
-    "check": "npm run security:google-keys && npm run lint && npm run typecheck && npm test",
-    "check:ci": "npm run security:google-keys && npm run lint && npm run typecheck && npm run test:coverage && npm run build"
+    "selfhost:harness-selftest": "node docker/selfhost/parity-check.mjs --self-test",
+    "check": "npm run security:google-keys && npm run lint && npm run typecheck && npm test && npm run selfhost:harness-selftest",
+    "check:ci": "npm run security:google-keys && npm run lint && npm run typecheck && npm run test:coverage && npm run build && npm run selfhost:harness-selftest"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.2",
