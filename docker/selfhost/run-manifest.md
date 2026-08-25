@@ -64,12 +64,12 @@ with-flatnode answers, confirming a serve-only instance does not need it. Gettin
 
 - Origins: Unirii (central) / Grozăvești (river barrier) / Berceni (periphery). Ring pace `normal`;
   car `preset=crowded` (pins the traffic slot so both legs send identical ranges).
-- Ring gate (per band, all enforced): median sector residual ≤10% AND worst sector ≤15% AND zero
-  cross-coverage mismatch AND area ratio within ±21%. Residual = ray/polygon boundary distance at
-  24 bearings (density-independent — not vertex binning). Cross-coverage mismatch = count of bearings
-  reached by only ONE of the two rings; a wedge missing from just one leg (whose small area loss can
-  sit inside ±21%) is caught here and by the worst-sector bound. Geocode + reverse ≤150 m (specific
-  landmarks); suggest top hit ≤500 m.
+- Ring gate (per band, all enforced): FULL bearing coverage on both legs (`n === bins`, 24/24) AND
+  median sector residual ≤10% AND worst sector ≤15% AND area ratio within ±21%. Residual = ray/polygon
+  boundary distance at 24 bearings (density-independent — not vertex binning). The full-coverage gate
+  catches a ring that fails to ENCLOSE the origin (a bearing with no boundary crossing on one or both
+  legs); a wedge clipped from an ENCLOSING ring instead casts a short ray → a large residual caught by
+  the worst-sector bound. Geocode + reverse ≤150 m (specific landmarks); suggest top hit ≤500 m.
 - A PROVENANCE preflight runs first and ABORTS unless the two base URLs differ, all three engines
   are proven live, AND the local app's answers match each local engine's OWN direct answer
   (Nominatim geocode ≤150 m, ORS 15-min ring area ±2%, Photon suggest ≤500 m). It reliably catches

@@ -28,7 +28,7 @@
 //     wedge missing from one leg) AND area ratio within +/-21% (area = r^2 equivalent
 //     of +/-10% radius). All enforced, not just printed.
 //   - suggest: top type-ahead hit within 500 m (looser than exact geocode).
-//   Before any of this, a PROVENANCE preflight proves the local leg is backed by the
+//   Before any of this, a PROVENANCE preflight checks the local leg is backed by the
 //   LIVE self-hosted engines (distinct base URLs, engines healthy now, and the local
 //   app's geocode matches the local Nominatim's own answer) — else it aborts.
 //   NB this compares two ORS builds of the SAME engine family with the SAME
@@ -127,23 +127,26 @@ function median(xs) {
 // |ratio-1| per matched radial sector. Returns median AND the worst sector — the
 // gate looks at the TAIL, not just the median, so a truncated ring (which casts a
 // short ray in its clipped bearings → a large single-sector residual) can't pass.
-// ALSO returns `mismatch`: bearings where exactly ONE ring reaches the boundary (its
-// profile is a distance) while the other returns null. A null happens only when the
-// ray crosses NO exterior edge — i.e. that ring does not ENCLOSE the origin in that
-// bearing. So `mismatch` is the guard for the degenerate case (a ring that fails to
-// surround the origin), NOT for a missing wedge on an enclosing ring: a wedge clipped
-// out of an enclosing ring still casts a SHORT ray (a large residual → caught by the
-// worst-sector `max`), never a null. Both guards are enforced by ringVerdict.
+// Also returns coverage bookkeeping: `n` = sectors compared (both rings reach the
+// boundary, denominator > 0), `bins` = sectors attempted, `mismatch` = bearings only
+// ONE ring reaches. A null happens only when the ray crosses NO exterior edge — that
+// ring does not ENCLOSE the origin there. ringVerdict REQUIRES `n === bins` (full
+// coverage on BOTH legs): that subsumes mismatch (one-null) AND the both-null case
+// (two degenerate rings that could otherwise pass on a shrunken denominator), so the
+// residual is never computed over a partial sample. A missing wedge on an ENCLOSING
+// ring is NOT this case — it casts a short ray (a large residual → caught by the
+// worst-sector `max`), never a null.
 function radialResidual(profA, profB) {
   const rs = [];
   let mismatch = 0;
-  for (let i = 0; i < profA.length; i++) {
+  const bins = profA.length;
+  for (let i = 0; i < bins; i++) {
     const aOk = profA[i] != null, bOk = profB[i] != null;
     if (aOk && bOk && profB[i] > 0) rs.push(Math.abs(profA[i] / profB[i] - 1));
     else if (aOk !== bOk) mismatch++;   // one ring reaches this bearing, the other does not
   }
-  if (!rs.length) return { median: NaN, max: NaN, mismatch };
-  return { median: median(rs), max: Math.max(...rs), mismatch };
+  if (!rs.length) return { median: NaN, max: NaN, mismatch, n: 0, bins };
+  return { median: median(rs), max: Math.max(...rs), mismatch, n: rs.length, bins };
 }
 
 // ── fixtures / self-test (rule 13: validate the instrument before trusting it) ─
@@ -222,19 +225,30 @@ function selfTest() {
   // cannot. Hand-inject nulls to exercise the counter directly.
   const wedge = base.map((v, i) => (i >= 6 && i < 10 ? null : v));
   const wres = radialResidual(wedge, base);
-  assertClose("non-enclosing (null bearings): mismatch counts them", wres.mismatch, 4, 1e-9);
-  assertBool("non-enclosing (null bearings): verdict false via mismatch", ringVerdict(wres, 1.0), false);
+  assertClose("non-enclosing (one leg null): mismatch counts them", wres.mismatch, 4, 1e-9);
+  assertClose("non-enclosing (one leg null): n shrinks below bins", wres.n, 20, 1e-9);
+  assertBool("non-enclosing (one leg null): verdict false via coverage", ringVerdict(wres, 1.0), false);
+  // BOTH legs null at the same bearings (two rings that both fail to enclose the origin):
+  // counted in NEITHER rs NOR mismatch, so only the full-coverage `n === bins` gate stops
+  // it passing on a shrunken denominator.
+  const bnA = base.map((v, i) => (i < 4 ? null : v));
+  const bnB = base.map((v, i) => (i < 4 ? null : v));
+  const bn = radialResidual(bnA, bnB);
+  assertClose("both-null bearings: mismatch is 0", bn.mismatch, 0, 1e-9);
+  assertClose("both-null bearings: n < bins", bn.n, 20, 1e-9);
+  assertBool("both-null bearings: verdict false via full-coverage gate", ringVerdict(bn, 1.0), false);
 
   // Exercise the VERDICT PREDICATE itself (not just the computed values) so a
   // deleted gate clause is caught — pass/fail fixtures for each threshold.
-  assertBool("verdict: identical ring passes", ringVerdict({ median: 0, max: 0, mismatch: 0 }, 1.0), true);
-  assertBool("verdict: median just over fails", ringVerdict({ median: 0.11, max: 0.11, mismatch: 0 }, 1.0), false);
-  assertBool("verdict: worst sector over fails (median ok)", ringVerdict({ median: 0.0, max: 0.16, mismatch: 0 }, 1.0), false);
-  assertBool("verdict: area over fails (residual ok)", ringVerdict({ median: 0.0, max: 0.0, mismatch: 0 }, 1.25), false);
-  assertBool("verdict: NaN residual fails", ringVerdict({ median: NaN, max: NaN, mismatch: 0 }, 1.0), false);
-  assertBool("verdict: coverage mismatch fails (non-enclosing ring)", ringVerdict({ median: 0.0, max: 0.0, mismatch: 4 }, 1.0), false);
+  const full = { n: 24, bins: 24 };
+  assertBool("verdict: identical ring passes", ringVerdict({ median: 0, max: 0, ...full }, 1.0), true);
+  assertBool("verdict: median just over fails", ringVerdict({ median: 0.11, max: 0.11, ...full }, 1.0), false);
+  assertBool("verdict: worst sector over fails (median ok)", ringVerdict({ median: 0.0, max: 0.16, ...full }, 1.0), false);
+  assertBool("verdict: area over fails (residual ok)", ringVerdict({ median: 0.0, max: 0.0, ...full }, 1.25), false);
+  assertBool("verdict: NaN residual fails", ringVerdict({ median: NaN, max: NaN, ...full }, 1.0), false);
+  assertBool("verdict: partial coverage fails (n<bins)", ringVerdict({ median: 0.0, max: 0.0, n: 20, bins: 24 }, 1.0), false);
 
-  console.log("SELF-TEST PASS — geometry instrument + verdict predicate validated (17 fixtures).");
+  console.log("SELF-TEST PASS — geometry instrument + verdict predicate validated (24 fixtures).");
 }
 
 function assertClose(name, got, want, relTol) {
@@ -275,15 +289,17 @@ const RING_AREA_TOL = 0.21;       // area band, ENFORCED: 1.10²−1 ≈ 0.21 = 
                                   // drift the per-sector residuals could average out is caught here.
 const EXPECTED_RINGS = 3; // the app always requests 3 nested bands (ors.ts normalize() enforces it)
 
-// A ring passes iff ALL hold: median residual ≤ tol, worst-sector residual ≤ max
-// (this is what catches a missing wedge on an ENCLOSING ring — the clipped bearings
-// cast a short ray → large residual), zero coverage mismatch (the guard for the
-// degenerate case where a ring does not enclose the origin), AND the area ratio in band.
+// A ring passes iff ALL hold: FULL coverage (`n === bins` — the residual was computed
+// over every bearing on BOTH legs; catches a one-null mismatch AND two rings that both
+// fail to enclose the origin, neither of which may pass on a shrunken denominator),
+// median residual ≤ tol, worst-sector residual ≤ max (this is what catches a missing
+// wedge on an ENCLOSING ring — its clipped bearings cast a short ray → large residual),
+// AND the area ratio in band.
 function ringVerdict(res, areaRatio) {
   return Number.isFinite(res.median)
+    && res.n === res.bins
     && res.median <= RING_RADIAL_TOL
     && res.max <= RING_RADIAL_MAX
-    && res.mismatch === 0
     && Math.abs(areaRatio - 1) <= RING_AREA_TOL;
 }
 
@@ -303,10 +319,14 @@ const PROV_ORS_RANGE = (process.env.PARITY_ORS_RANGE || "861,1744,2633").split("
 const PROV_BBOX = process.env.NEXT_PUBLIC_MAP_BBOX || "25.8,44.2,26.4,44.7";
 const [PROV_LON, PROV_LAT] = (() => { const b = PROV_BBOX.split(",").map(Number); return [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2]; })();
 
-// PROVENANCE preflight — proves the local leg is really backed by the self-hosted
+// PROVENANCE preflight — checks the local leg is backed by the live self-hosted
 // engines (not a mis-started public-vs-public passthrough, and not stale ApiCache
 // rows served while an engine is stopped). Returns [] on success or a list of
-// failure strings.
+// failure strings. HONEST LIMIT: this is an output/liveness check, not proof of
+// routing — two distinct-URL instances both on public providers would also pass
+// (the self-host stack is a faithful replica). What actually pins the local leg to
+// the self-hosted engines is CONFIGURATION: keyless ORS to a non-public host 403s,
+// and the Nominatim/Photon bases are localhost. See run-manifest.md.
 async function provenancePreflight(publicBase, localBase, o) {
   const problems = [];
   // 1. The two app instances must be distinct (a copy-paste that points both at
@@ -337,7 +357,7 @@ async function provenancePreflight(publicBase, localBase, o) {
     }
   } catch (e) { problems.push(`Nominatim cross-check failed: ${e.message}`); }
   // 4. ORS cross-check: the local app's walk ring must match a DIRECT POST to the
-  //    local ORS (same payload) — proves the app routed rings to the local engine,
+  //    local ORS (same payload) — evidence the app routed rings to the local engine,
   //    not a public ORS with the inherited key. Compared by 15-min ring area.
   try {
     const appRings = await ringsFor(localBase, o, "walk");
@@ -405,7 +425,7 @@ async function main() {
   const localBase = args.includes("--public-only") ? null : (argVal(args, "--local") || "http://localhost:3001");
   console.log(`\nPUBLIC = ${publicBase}\nLOCAL  = ${localBase ?? "(public-only dry-run)"}\n`);
 
-  // Provenance gate: before trusting any parity number, prove the local leg is
+  // Provenance gate: before trusting any parity number, check the local leg is
   // actually backed by the LIVE self-hosted engines. A failure here aborts (a
   // "PARITY OK" against a misconfigured or cache-only run is worse than no run).
   if (localBase) {
@@ -491,7 +511,7 @@ async function main() {
             const pass = ringVerdict(res, areaRatio);
             if (!pass) fail();
             verdict = pass ? "PASS" : "FAIL";
-            detail = `med ${(res.median * 100).toFixed(1)}% max ${(res.max * 100).toFixed(1)}% area×${areaRatio.toFixed(3)}`;
+            detail = `med ${(res.median * 100).toFixed(1)}% max ${(res.max * 100).toFixed(1)}% area×${areaRatio.toFixed(3)} cov ${res.n}/${res.bins}`;
           }
           rows.push([
             `${kind} ${pubRings[i].minutes}min`, o.name,

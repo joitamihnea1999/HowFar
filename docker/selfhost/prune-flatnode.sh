@@ -47,7 +47,11 @@ if [ "$health" != "healthy" ]; then
   exit 1
 fi
 
-size="$(docker run --rm -v "${VOLUME}:/fn" alpine sh -c \
+# Pinned by digest (reproducible, no `:latest` drift). Alpine 3.20.
+ALPINE="alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b"
+
+# Size probe mounts the volume READ-ONLY — no write access until the explicit delete.
+size="$(docker run --rm -v "${VOLUME}:/fn:ro" "$ALPINE" sh -c \
   'if [ -f /fn/flatnode.file ]; then du -sh /fn/flatnode.file | cut -f1; else echo none; fi')"
 
 if [ "$size" = "none" ]; then
@@ -61,5 +65,5 @@ if [ "${KEEP_FLATNODE:-}" = "1" ]; then
 fi
 
 echo "Deleting flatnode.file (${size}) from '$VOLUME' — serve-only instance does not need it." >&2
-docker run --rm -v "${VOLUME}:/fn" alpine rm -f "$FLATNODE_PATH"
+docker run --rm -v "${VOLUME}:/fn" "$ALPINE" rm -f "$FLATNODE_PATH"    # only THIS call needs write access
 echo "Done. Reclaimed ~${size}. Re-import (~24 min) is the cost if you later need it back." >&2

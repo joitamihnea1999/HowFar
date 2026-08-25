@@ -199,14 +199,16 @@ PORT=3001 npm run start &
 node docker/selfhost/parity-check.mjs --public http://localhost:3000 --local http://localhost:3001
 ```
 
-The harness gates each ring on median AND worst-sector radial residual AND zero
-cross-coverage mismatch AND the area band — a truncated ring casts a short ray in the
-clipped bearings (caught by the worst-sector bound), and a wedge present in only one leg
-is caught by the cross-coverage mismatch (a bearing one ring reaches and the other does
-not). A provenance preflight first checks all three engines are live and the local app's
-answers match each local engine's own (else it aborts; see run-manifest for the honest limit). Tolerances: geocode + reverse ≤ 150 m (specific landmarks); rings
-median ≤ ±10% / max ≤ ±15% / zero cross-coverage mismatch / area ±21%; suggest top hit
-≤ 500 m. `--public-only` does a dry-run; `--self-test` validates the geometry instrument. **Bump `PROVIDER_DATA_REVISION` for a fresh run** (or purge
+The harness gates each ring on FULL bearing coverage on both legs AND median AND
+worst-sector radial residual AND the area band. A wedge clipped from an *enclosing*
+ring casts a short ray in those bearings → caught by the worst-sector bound; the
+full-coverage gate (`n === bins`) is the separate guard for a ring that fails to
+*enclose* the origin (a null/short-of-boundary ray), so a partial-coverage comparison
+can never pass on a shrunken sample. A provenance preflight first checks all three
+engines are live and the local app's answers match each local engine's own (else it
+aborts; see run-manifest for the honest limit). Tolerances: geocode + reverse ≤ 150 m
+(specific landmarks); rings full-coverage / median ≤ ±10% / max ≤ ±15% / area ±21%;
+suggest top hit ≤ 500 m. `--public-only` does a dry-run; `--self-test` validates the geometry instrument. **Bump `PROVIDER_DATA_REVISION` for a fresh run** (or purge
 `ApiCache`) so the comparison re-hits the engines rather than serving cached rows.
 
 ## Teardown
