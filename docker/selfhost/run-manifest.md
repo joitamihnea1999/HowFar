@@ -10,8 +10,11 @@ engines rebuild deterministically. The **basemap tile archive is NOT bit-reprodu
 protomaps/basemaps build downloads ~2.25 GB of upstream base datasets (Natural Earth, OSM
 water/land polygons, Daylight landcover) via `--download` with no version pin, so a rebuild on
 a fresh box gets whatever vintage is current upstream. The schema (source-layer set) is stable
-across those vintages, so the map still renders; only the exact tile bytes may differ. Pinning
-those sources (explicit `--*_path` inputs) is a future hardening.
+across those vintages, so the map still renders; only the exact tile bytes may differ. This
+non-bit-reproducibility is an **accepted tradeoff** (2026-08-25): the base data is
+dated upstream, the schema is stable, and parity is verified against the rendered output — pinning
+those sources (explicit `--*_path` inputs) is deliberately NOT built. It stays a future hardening
+option if bit-exact tile rebuilds ever become a requirement.
 
 ## Data source (the ONE extract)
 
@@ -41,17 +44,21 @@ those sources (explicit `--*_path` inputs) is a future hardening.
 
 | Engine | Wall-time | Peak RAM | On-disk |
 |---|---|---|---|
-| Nominatim import (`IMPORT_STYLE=full`) | ~24 min | ~4.2 GiB | PG DB 5.4 GB + flatnode **106 GB** |
+| Nominatim import (`IMPORT_STYLE=full`) | ~24 min | ~4.2 GiB | PG DB 5.4 GB + flatnode **106 GB** (pruned by default post-import → ~8 GB) |
 | Photon index (from Nominatim DB) | ~2.7 min | ~0.75 GiB | 468 MB (+94 MB jar) |
 | ORS graph (foot-walking + driving-car) | ~6.6 min | ~1.82 GiB (XMX 2 g) | 799 MB |
 | pmtiles (protomaps/basemaps, all-Romania z0–15) | ~5 min + one-time ~2.25 GB base-source download | XMX 6 g | 684 MB |
 | Extract download | ~1 min | — | 312 MB |
 
-**Total footprint ≈ 114 GB, dominated by the Nominatim flatnode (106 GB).** Measured with `du -sh`
-(actual blocks) — `du --apparent-size` reports the same 106 GB, so the file is genuinely dense, not a
-sparse file whose `ls -l` size would overstate disk use. The flatnode is sized by the planet node-ID
-space (not the extract), is only needed during import/replication, and can be deleted afterwards (no
-minutely updates here) → **~8 GB** resident without it.
+**Peak footprint ≈ 114 GB during import, dominated by the Nominatim flatnode (106 GB); ~8 GB resident
+after the default prune.** Measured with `du -sh` (actual blocks) — `du --apparent-size` reports the
+same 106 GB, so the file is genuinely dense, not a sparse file whose `ls -l` size would overstate disk
+use. The flatnode is sized by the planet node-ID space (not the extract) and is read only during import
+and minutely/replication updates. `docker/selfhost/prune-flatnode.sh` deletes it **by default** after
+the import (opt out with `KEEP_FLATNODE=1` for replication setups) → **~8 GB** resident. Verified
+2026-08-25: after deleting `flatnode.file` and restarting the container, `/search` (Piața Unirii →
+44.4280060, 26.1025098) and `/reverse` (44.4268, 26.1025) return **byte-identical** coords to the
+with-flatnode answers, confirming a serve-only instance does not need it. Getting it back = re-import (~24 min).
 
 ## Parity result (public providers vs self-hosted stack, 2026-08-25)
 

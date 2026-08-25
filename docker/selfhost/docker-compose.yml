@@ -44,7 +44,7 @@ services:
     volumes:
       - ../../data/osm/romania-260824.osm.pbf:/data/romania.osm.pbf:ro
       - nominatim-data:/var/lib/postgresql/16/main
-      - nominatim-flatnode:/nominatim/flatnode
+      - nominatim-flatnode:/nominatim/flatnode   # ~106 GB flatnode.file; prune-flatnode.sh deletes it post-import by default (serve-only doesn't need it)
     ports:
       - "127.0.0.1:8081:8080"              # app: NOMINATIM_BASE_URL=http://localhost:8081
     expose:
