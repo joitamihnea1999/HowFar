@@ -70,15 +70,19 @@ with-flatnode answers, confirming a serve-only instance does not need it. Gettin
   reached by only ONE of the two rings; a wedge missing from just one leg (whose small area loss can
   sit inside ±21%) is caught here and by the worst-sector bound. Geocode + reverse ≤150 m (specific
   landmarks); suggest top hit ≤500 m.
-- A PROVENANCE preflight runs first and ABORTS unless all three engines are proven live AND the
-  local app's answers match each local engine's OWN direct answer (Nominatim geocode ≤150 m, ORS
-  15-min ring area ±2%, Photon suggest ≤500 m) — so a mis-started public-vs-public run or a cached
-  run against a stopped engine cannot report parity. Validated both ways (identical legs → abort).
-  Honest limit: because the self-hosted stack is a FAITHFUL replica of the public providers (that
-  is exactly what the parity result proves), an output-level check cannot fully distinguish "app
-  routed to local" from "app routed to a public host that returns the same answer". The preflight
-  catches the realistic failures (an engine down, a grossly misrouted app, identical legs); a
-  fully airtight proof needs request-level instrumentation (a per-engine proxy/counter), parked.
+- A PROVENANCE preflight runs first and ABORTS unless the two base URLs differ, all three engines
+  are proven live, AND the local app's answers match each local engine's OWN direct answer
+  (Nominatim geocode ≤150 m, ORS 15-min ring area ±2%, Photon suggest ≤500 m). It reliably catches
+  the realistic failure modes: an engine down, a grossly misrouted app, or the two legs pointed at
+  the same base URL. **Honest limit (it does NOT prove routing on output alone):** because the
+  self-hosted stack is a FAITHFUL replica of the public providers (which is exactly what the parity
+  result proves), two DISTINCT-URL app instances both configured on public providers would sit
+  inside these same output tolerances and pass the preflight — an output-level check cannot fully
+  distinguish "app routed to local" from "app routed to a public host that returns the same answer".
+  What DOES pin the local leg to the self-hosted engines is configuration, not output: the local app
+  is keyless to a non-public `ORS_BASE_URL` (a public-ORS call would 403), with Nominatim/Photon base
+  URLs likewise set to localhost. A fully airtight output-side proof needs request-level
+  instrumentation (a per-engine proxy/counter), parked.
 - **All 27 checks PASS** (`parity-check.mjs --public … --local …` exits 0):
   - **18/18 rings** — walk + car: median 0.0%, **worst sector ≤3.1%**, area 0.998–1.003.
   - **Geocode all ≤150 m** — Unirii (Piața Unirii) 0.0 m, Grozăvești (AFI Cotroceni) 0.0 m,

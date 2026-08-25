@@ -65,7 +65,8 @@ tiles 684 MB ≈ 7.5 GB). The **~2.25 GB of Protomaps base sources** the tile bu
 rebuild tiles faster, else `rm -rf data/selfhost/planetiler` reclaims it.
 
 **Parity (public vs self-hosted, 2026-08-25):** all 27 checks pass (after a provenance preflight that
-proves all three engines are the ones the app uses) — 18/18 rings (walk + car) with median boundary
+checks all three engines are live and the local app's answers match each local engine's own — see
+the run-manifest for the honest limit) — 18/18 rings (walk + car) with median boundary
 residual 0.0%, worst sector ≤3.1%, area 0.998–1.003 across Unirii/Grozăvești/Berceni × 3 bands;
 geocode ≤150 m and reverse ≤150 m at all three specific-landmark origins; Photon suggest top hit
 ≤110 m. (A bare neighborhood-name geocode query varies ~400 m across geocoders — inherent ranking
@@ -202,8 +203,8 @@ The harness gates each ring on median AND worst-sector radial residual AND zero
 cross-coverage mismatch AND the area band — a truncated ring casts a short ray in the
 clipped bearings (caught by the worst-sector bound), and a wedge present in only one leg
 is caught by the cross-coverage mismatch (a bearing one ring reaches and the other does
-not). A provenance preflight first proves all three engines are the ones the app uses
-(else it aborts). Tolerances: geocode + reverse ≤ 150 m (specific landmarks); rings
+not). A provenance preflight first checks all three engines are live and the local app's
+answers match each local engine's own (else it aborts; see run-manifest for the honest limit). Tolerances: geocode + reverse ≤ 150 m (specific landmarks); rings
 median ≤ ±10% / max ≤ ±15% / zero cross-coverage mismatch / area ±21%; suggest top hit
 ≤ 500 m. `--public-only` does a dry-run; `--self-test` validates the geometry instrument. **Bump `PROVIDER_DATA_REVISION` for a fresh run** (or purge
 `ApiCache`) so the comparison re-hits the engines rather than serving cached rows.

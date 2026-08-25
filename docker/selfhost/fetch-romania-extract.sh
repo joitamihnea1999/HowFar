@@ -35,14 +35,6 @@ DRY_RUN=0
 echo "Extract:  ${PBF_URL}"
 echo "Target:   ${OUT}"
 
-# Expected size from a HEAD (also proves the pinned snapshot still exists).
-EXPECTED_LEN="$(curl -fsIL "$PBF_URL" | awk 'tolower($0) ~ /^content-length:/ {v=$2} END{gsub(/\r/,"",v); print v}')"
-if [ -n "${EXPECTED_LEN:-}" ]; then
-  echo "Size:     ${EXPECTED_LEN} bytes (~$(( EXPECTED_LEN / 1024 / 1024 )) MB)"
-else
-  echo "Size:     (HEAD returned no content-length)"
-fi
-
 verify_md5() { # $1 = file; returns 0 iff it matches the PINNED md5 (no network)
   local got
   got="$(md5sum "$1" | awk '{print $1}')"
@@ -50,19 +42,31 @@ verify_md5() { # $1 = file; returns 0 iff it matches the PINNED md5 (no network)
   [ "$EXTRACT_MD5" = "$got" ]
 }
 
+# Idempotent, and network-free: an already-downloaded, md5-verified extract is
+# accepted BEFORE any network call, so an outage or a retired dated URL cannot block
+# an otherwise-valid cached rebuild. (The HEAD below is optional/informational only.)
+if [ "$DRY_RUN" != "1" ] && [ -f "$OUT" ] && verify_md5 "$OUT"; then
+  echo "Already present and md5-verified — nothing to do."
+  ls -lh "$OUT"
+  exit 0
+fi
+
+# Expected size from a HEAD — informational (and a hint that the pinned snapshot still
+# exists). NON-fatal: never abort the run on a HEAD failure (offline, proxy, retired URL);
+# an outage here must not stop a cached rebuild, and a real download failure is caught below.
+EXPECTED_LEN="$(curl -fsIL "$PBF_URL" 2>/dev/null | awk 'tolower($0) ~ /^content-length:/ {v=$2} END{gsub(/\r/,"",v); print v}' || true)"
+if [ -n "${EXPECTED_LEN:-}" ]; then
+  echo "Size:     ${EXPECTED_LEN} bytes (~$(( EXPECTED_LEN / 1024 / 1024 )) MB)"
+else
+  echo "Size:     (HEAD unavailable — offline or the dated URL may be retired; see run-manifest to re-pin)"
+fi
+
 if [ "$DRY_RUN" = "1" ]; then
   echo "[dry-run] no download performed."
   exit 0
 fi
 
 mkdir -p "$OUT_DIR"
-
-# Idempotent: keep an already-downloaded, verified extract.
-if [ -f "$OUT" ] && verify_md5 "$OUT"; then
-  echo "Already present and md5-verified — nothing to do."
-  ls -lh "$OUT"
-  exit 0
-fi
 
 echo "Downloading ${PBF_NAME} ..."
 curl -fSL --retry 3 --retry-delay 5 -o "${OUT}.part" "$PBF_URL"

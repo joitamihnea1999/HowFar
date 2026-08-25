@@ -127,12 +127,13 @@ function median(xs) {
 // |ratio-1| per matched radial sector. Returns median AND the worst sector — the
 // gate looks at the TAIL, not just the median, so a truncated ring (which casts a
 // short ray in its clipped bearings → a large single-sector residual) can't pass.
-// ALSO returns `mismatch`: bearings where exactly ONE ring encloses the origin (one
-// profile null, the other a distance). Matched-only residuals are blind to a wedge
-// missing from just one leg (both-null and both-present bearings look fine while the
-// absent wedge's small area loss stays inside the area band) — `mismatch` is the
-// cross-coverage guard that catches it. This is NOT the tautological single-ring
-// coverage dropped earlier: it compares the TWO rings' bearing coverage to each other.
+// ALSO returns `mismatch`: bearings where exactly ONE ring reaches the boundary (its
+// profile is a distance) while the other returns null. A null happens only when the
+// ray crosses NO exterior edge — i.e. that ring does not ENCLOSE the origin in that
+// bearing. So `mismatch` is the guard for the degenerate case (a ring that fails to
+// surround the origin), NOT for a missing wedge on an enclosing ring: a wedge clipped
+// out of an enclosing ring still casts a SHORT ray (a large residual → caught by the
+// worst-sector `max`), never a null. Both guards are enforced by ringVerdict.
 function radialResidual(profA, profB) {
   const rs = [];
   let mismatch = 0;
@@ -198,13 +199,31 @@ function selfTest() {
   assertClose("3-sector spike: caught by MAX", sres.max, 1.0, 0.01);
   assertClose("identical ring: zero cross-coverage mismatch", radialResidual(base, base).mismatch, 0, 1e-9);
 
-  // MISSING-WEDGE (one leg not reaching a bearing the other does): the matched-sector
-  // residuals stay 0 and the small area loss can sit inside the area band, so ONLY the
-  // cross-coverage mismatch catches it. A 4-of-24 wedge absent from the local leg.
+  // MISSING WEDGE on a ring that STILL ENCLOSES the origin (the realistic case): the
+  // clipped bearings cast a SHORT ray (hit the pulled-in edge), not a null, so the
+  // WORST-SECTOR bound is what catches it — mismatch stays 0. Build it from geometry
+  // (not hand-injected nulls): pull 3 of 12 vertices in to 40% radius.
+  const ringNotched = () => {
+    const pts = [];
+    let i = 0;
+    for (let a = 0; a < 360; a += 30) {
+      const r = 0.01 * (i >= 3 && i < 6 ? 0.4 : 1);   // a ~60° wedge pulled in to 40%
+      pts.push([origin.lng + r * Math.cos(a * DEG) / Math.cos(origin.lat * DEG), origin.lat + r * Math.sin(a * DEG)]);
+      i++;
+    }
+    pts.push(pts[0]);
+    return { type: "Polygon", coordinates: [pts] };
+  };
+  const notch = radialResidual(radialProfile(ringNotched(), origin), base);
+  assertClose("notch (enclosing wedge): mismatch stays 0 (ray is short, not null)", notch.mismatch, 0, 1e-9);
+  assertBool("notch (enclosing wedge): caught by WORST-SECTOR, verdict false", ringVerdict(notch, 1.0), false);
+  // DEGENERATE case mismatch is for: a ring that fails to ENCLOSE the origin in some
+  // bearings (radialProfile returns null there) — one leg reaches a bearing the other
+  // cannot. Hand-inject nulls to exercise the counter directly.
   const wedge = base.map((v, i) => (i >= 6 && i < 10 ? null : v));
   const wres = radialResidual(wedge, base);
-  assertClose("missing-wedge: matched sectors still 0 residual", wres.median, 0.0, 1e-9);
-  assertClose("missing-wedge: mismatch counts the absent bearings", wres.mismatch, 4, 1e-9);
+  assertClose("non-enclosing (null bearings): mismatch counts them", wres.mismatch, 4, 1e-9);
+  assertBool("non-enclosing (null bearings): verdict false via mismatch", ringVerdict(wres, 1.0), false);
 
   // Exercise the VERDICT PREDICATE itself (not just the computed values) so a
   // deleted gate clause is caught — pass/fail fixtures for each threshold.
@@ -213,12 +232,17 @@ function selfTest() {
   assertBool("verdict: worst sector over fails (median ok)", ringVerdict({ median: 0.0, max: 0.16, mismatch: 0 }, 1.0), false);
   assertBool("verdict: area over fails (residual ok)", ringVerdict({ median: 0.0, max: 0.0, mismatch: 0 }, 1.25), false);
   assertBool("verdict: NaN residual fails", ringVerdict({ median: NaN, max: NaN, mismatch: 0 }, 1.0), false);
-  assertBool("verdict: cross-coverage mismatch fails (missing wedge)", ringVerdict({ median: 0.0, max: 0.0, mismatch: 4 }, 1.0), false);
+  assertBool("verdict: coverage mismatch fails (non-enclosing ring)", ringVerdict({ median: 0.0, max: 0.0, mismatch: 4 }, 1.0), false);
 
-  console.log("SELF-TEST PASS — geometry instrument + verdict predicate validated (15 fixtures).");
+  console.log("SELF-TEST PASS — geometry instrument + verdict predicate validated (17 fixtures).");
 }
 
 function assertClose(name, got, want, relTol) {
+  // Fail-CLOSED on a non-finite value FIRST: `NaN > relTol` is false, so without this
+  // a broken primitive that returns NaN/Infinity (e.g. radialProfile losing all
+  // crossings → radialResidual {median:NaN}) would print "ok" and pass the whole
+  // self-test — the exact instrument-nobody-catches failure this gate exists to prevent.
+  if (!Number.isFinite(got)) { console.error(`SELF-TEST FAIL: ${name}: got non-finite value ${got}, want ${want}`); process.exit(2); }
   const rel = Math.abs(got - want) / Math.abs(want || 1);
   if (rel > relTol) { console.error(`SELF-TEST FAIL: ${name}: got ${got}, want ${want} (rel ${rel})`); process.exit(2); }
   console.log(`  ok ${name}: ${got.toFixed(2)} ~= ${want.toFixed(2)} (rel ${rel.toExponential(2)})`);
@@ -251,10 +275,10 @@ const RING_AREA_TOL = 0.21;       // area band, ENFORCED: 1.10²−1 ≈ 0.21 = 
                                   // drift the per-sector residuals could average out is caught here.
 const EXPECTED_RINGS = 3; // the app always requests 3 nested bands (ors.ts normalize() enforces it)
 
-// A ring passes iff the median residual, the worst-sector residual, the CROSS-coverage
-// (no bearing reached by only one of the two rings), AND the area ratio are all in band.
-// `mismatch===0` is the density-independent guard against a wedge missing from one leg —
-// a hole matched-sector residuals + a within-band area ratio would otherwise miss.
+// A ring passes iff ALL hold: median residual ≤ tol, worst-sector residual ≤ max
+// (this is what catches a missing wedge on an ENCLOSING ring — the clipped bearings
+// cast a short ray → large residual), zero coverage mismatch (the guard for the
+// degenerate case where a ring does not enclose the origin), AND the area ratio in band.
 function ringVerdict(res, areaRatio) {
   return Number.isFinite(res.median)
     && res.median <= RING_RADIAL_TOL
