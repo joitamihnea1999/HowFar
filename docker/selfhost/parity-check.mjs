@@ -23,8 +23,10 @@
 //     Residual = ray/polygon boundary distance at 24 bearings (density-independent).
 //     A ring passes only if ALL hold: median sector residual <= 0.10 AND worst
 //     sector <= 0.15 (a tail bound, so a truncated ring — which casts a short ray in
-//     the clipped bearings — can't hide behind the median) AND area ratio within
-//     +/-21% (area = r^2 equivalent of +/-10% radius). All enforced, not just printed.
+//     the clipped bearings — can't hide behind the median) AND zero cross-coverage
+//     mismatch (no bearing reached by only one of the two rings — the guard against a
+//     wedge missing from one leg) AND area ratio within +/-21% (area = r^2 equivalent
+//     of +/-10% radius). All enforced, not just printed.
 //   - suggest: top type-ahead hit within 500 m (looser than exact geocode).
 //   Before any of this, a PROVENANCE preflight proves the local leg is backed by the
 //   LIVE self-hosted engines (distinct base URLs, engines healthy now, and the local
@@ -125,13 +127,22 @@ function median(xs) {
 // |ratio-1| per matched radial sector. Returns median AND the worst sector — the
 // gate looks at the TAIL, not just the median, so a truncated ring (which casts a
 // short ray in its clipped bearings → a large single-sector residual) can't pass.
+// ALSO returns `mismatch`: bearings where exactly ONE ring encloses the origin (one
+// profile null, the other a distance). Matched-only residuals are blind to a wedge
+// missing from just one leg (both-null and both-present bearings look fine while the
+// absent wedge's small area loss stays inside the area band) — `mismatch` is the
+// cross-coverage guard that catches it. This is NOT the tautological single-ring
+// coverage dropped earlier: it compares the TWO rings' bearing coverage to each other.
 function radialResidual(profA, profB) {
   const rs = [];
+  let mismatch = 0;
   for (let i = 0; i < profA.length; i++) {
-    if (profA[i] != null && profB[i] != null && profB[i] > 0) rs.push(Math.abs(profA[i] / profB[i] - 1));
+    const aOk = profA[i] != null, bOk = profB[i] != null;
+    if (aOk && bOk && profB[i] > 0) rs.push(Math.abs(profA[i] / profB[i] - 1));
+    else if (aOk !== bOk) mismatch++;   // one ring reaches this bearing, the other does not
   }
-  if (!rs.length) return { median: NaN, max: NaN };
-  return { median: median(rs), max: Math.max(...rs) };
+  if (!rs.length) return { median: NaN, max: NaN, mismatch };
+  return { median: median(rs), max: Math.max(...rs), mismatch };
 }
 
 // ── fixtures / self-test (rule 13: validate the instrument before trusting it) ─
@@ -185,16 +196,26 @@ function selfTest() {
   const sres = radialResidual(spike, base);
   assertClose("3-sector spike: median stays low", sres.median, 0.0, 1e-9);
   assertClose("3-sector spike: caught by MAX", sres.max, 1.0, 0.01);
+  assertClose("identical ring: zero cross-coverage mismatch", radialResidual(base, base).mismatch, 0, 1e-9);
+
+  // MISSING-WEDGE (one leg not reaching a bearing the other does): the matched-sector
+  // residuals stay 0 and the small area loss can sit inside the area band, so ONLY the
+  // cross-coverage mismatch catches it. A 4-of-24 wedge absent from the local leg.
+  const wedge = base.map((v, i) => (i >= 6 && i < 10 ? null : v));
+  const wres = radialResidual(wedge, base);
+  assertClose("missing-wedge: matched sectors still 0 residual", wres.median, 0.0, 1e-9);
+  assertClose("missing-wedge: mismatch counts the absent bearings", wres.mismatch, 4, 1e-9);
 
   // Exercise the VERDICT PREDICATE itself (not just the computed values) so a
   // deleted gate clause is caught — pass/fail fixtures for each threshold.
-  assertBool("verdict: identical ring passes", ringVerdict({ median: 0, max: 0 }, 1.0), true);
-  assertBool("verdict: median just over fails", ringVerdict({ median: 0.11, max: 0.11 }, 1.0), false);
-  assertBool("verdict: worst sector over fails (median ok)", ringVerdict({ median: 0.0, max: 0.16 }, 1.0), false);
-  assertBool("verdict: area over fails (residual ok)", ringVerdict({ median: 0.0, max: 0.0 }, 1.25), false);
-  assertBool("verdict: NaN residual fails", ringVerdict({ median: NaN, max: NaN }, 1.0), false);
+  assertBool("verdict: identical ring passes", ringVerdict({ median: 0, max: 0, mismatch: 0 }, 1.0), true);
+  assertBool("verdict: median just over fails", ringVerdict({ median: 0.11, max: 0.11, mismatch: 0 }, 1.0), false);
+  assertBool("verdict: worst sector over fails (median ok)", ringVerdict({ median: 0.0, max: 0.16, mismatch: 0 }, 1.0), false);
+  assertBool("verdict: area over fails (residual ok)", ringVerdict({ median: 0.0, max: 0.0, mismatch: 0 }, 1.25), false);
+  assertBool("verdict: NaN residual fails", ringVerdict({ median: NaN, max: NaN, mismatch: 0 }, 1.0), false);
+  assertBool("verdict: cross-coverage mismatch fails (missing wedge)", ringVerdict({ median: 0.0, max: 0.0, mismatch: 4 }, 1.0), false);
 
-  console.log("SELF-TEST PASS — geometry instrument + verdict predicate validated (12 fixtures).");
+  console.log("SELF-TEST PASS — geometry instrument + verdict predicate validated (15 fixtures).");
 }
 
 function assertClose(name, got, want, relTol) {
@@ -230,13 +251,15 @@ const RING_AREA_TOL = 0.21;       // area band, ENFORCED: 1.10²−1 ≈ 0.21 = 
                                   // drift the per-sector residuals could average out is caught here.
 const EXPECTED_RINGS = 3; // the app always requests 3 nested bands (ors.ts normalize() enforces it)
 
-// A ring passes iff the median residual, the worst-sector residual, AND the area
-// ratio are all in band. (No coverage clause: ray/polygon casting yields a distance
-// at every bearing for any ring enclosing the origin, so `max` is the truncation guard.)
+// A ring passes iff the median residual, the worst-sector residual, the CROSS-coverage
+// (no bearing reached by only one of the two rings), AND the area ratio are all in band.
+// `mismatch===0` is the density-independent guard against a wedge missing from one leg —
+// a hole matched-sector residuals + a within-band area ratio would otherwise miss.
 function ringVerdict(res, areaRatio) {
   return Number.isFinite(res.median)
     && res.median <= RING_RADIAL_TOL
     && res.max <= RING_RADIAL_MAX
+    && res.mismatch === 0
     && Math.abs(areaRatio - 1) <= RING_AREA_TOL;
 }
 
@@ -305,8 +328,15 @@ async function provenancePreflight(publicBase, localBase, o) {
       if (feats.length !== 3 || !appRings.length) problems.push("ORS cross-check: unexpected feature/ring count");
       else {
         // The direct ORS 15-min feature vs the app's 15-min ring: same engine → same area.
-        const ratio = geometryAreaM2(feats[0].geometry, o.lat) / geometryAreaM2(appRings[0].geometry, o.lat);
-        if (Math.abs(ratio - 1) > 0.02) problems.push(`ORS: app 15-min ring differs ${((ratio - 1) * 100).toFixed(1)}% from the local ORS's own answer — app may not be using the local engine`);
+        const areaD = geometryAreaM2(feats[0].geometry, o.lat);
+        const areaP = geometryAreaM2(appRings[0].geometry, o.lat);
+        // Fail-CLOSED on a degenerate ring: a zero/NaN area would make the ratio
+        // NaN, and `Math.abs(NaN-1) > 0.02` is false — silently passing the preflight.
+        if (!(areaP > 0) || !Number.isFinite(areaD)) problems.push("ORS cross-check: degenerate ring area (zero/NaN) — cannot verify provenance");
+        else {
+          const ratio = areaD / areaP;
+          if (Math.abs(ratio - 1) > 0.02) problems.push(`ORS: app 15-min ring differs ${((ratio - 1) * 100).toFixed(1)}% from the local ORS's own answer — app may not be using the local engine`);
+        }
       }
     }
   } catch (e) { problems.push(`ORS cross-check failed: ${e.message}`); }

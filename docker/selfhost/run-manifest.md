@@ -64,10 +64,11 @@ with-flatnode answers, confirming a serve-only instance does not need it. Gettin
 
 - Origins: Unirii (central) / Grozăvești (river barrier) / Berceni (periphery). Ring pace `normal`;
   car `preset=crowded` (pins the traffic slot so both legs send identical ranges).
-- Ring gate (per band, all enforced): median sector residual ≤10% AND worst sector ≤15% AND area
-  ratio within ±21%. Residual = ray/polygon boundary distance at 24 bearings (density-independent —
-  not vertex binning; a ray from the interior origin always hits the boundary, so the worst-sector
-  bound, not a coverage count, is the truncation guard). Geocode + reverse ≤150 m (specific
+- Ring gate (per band, all enforced): median sector residual ≤10% AND worst sector ≤15% AND zero
+  cross-coverage mismatch AND area ratio within ±21%. Residual = ray/polygon boundary distance at
+  24 bearings (density-independent — not vertex binning). Cross-coverage mismatch = count of bearings
+  reached by only ONE of the two rings; a wedge missing from just one leg (whose small area loss can
+  sit inside ±21%) is caught here and by the worst-sector bound. Geocode + reverse ≤150 m (specific
   landmarks); suggest top hit ≤500 m.
 - A PROVENANCE preflight runs first and ABORTS unless all three engines are proven live AND the
   local app's answers match each local engine's OWN direct answer (Nominatim geocode ≤150 m, ORS
@@ -88,12 +89,15 @@ with-flatnode answers, confirming a serve-only instance does not need it. Gettin
   different-but-valid representative point (~400 m) across geocoders; that is inherent geocoder
   ranking variance, not a self-host defect, so the parity set uses specific landmarks.
 - Provenance (that the local leg really hit the self-hosted engines, not a misconfigured
-  public-vs-public passthrough): the **area ratios are 0.998–1.003, NOT exactly 1.000** — a
-  same-backend comparison (cache hit, or both legs on the public host) would return byte-identical
-  geometry (ratio exactly 1.000). The sub-percent, non-unity differences are the operative proof the
-  two legs ran on DIFFERENT engine instances. Corroborating: the local app was configured with
+  public-vs-public passthrough): the **primary proof is the mechanized preflight** (§ above) —
+  distinct base URLs, all three engines proven live, and the local app's answer matched to each
+  local engine's OWN direct answer — **plus** the keyless-ORS argument: the local app is configured
   `ORS_BASE_URL=localhost:8082` and sends no key to a non-public host (a public-ORS call would 403
-  keyless), so its valid rings could only come from the local engine; same for Nominatim/Photon.
+  keyless), so its valid rings can only come from the local engine; the same base-URL wiring holds
+  for Nominatim/Photon. Corroborating only (NOT proof on its own): the area ratios print as
+  0.998–1.003 rather than exactly 1.000, consistent with two different engine instances — but this
+  is weak evidence (a cache row from an older vintage of the *same* host would also be non-unity, and
+  `toFixed(3)` rounds true-1.000 rows indistinguishably), so it is not relied on.
 - Basemap: verified 2026-08-25 that the self-built `data/tiles/selfhost-romania.pmtiles` (684 MB,
   built host-owned via `build-tiles.sh` `--user`) has the reference's exact 9 source-layers and is
   Range-served by `/api/tiles` (HTTP 206, `PMTiles` magic) when the local app sets
