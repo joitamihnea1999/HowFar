@@ -23,11 +23,28 @@ set -euo pipefail
 
 PROJECT="${COMPOSE_PROJECT_NAME:-howfar-selfhost}"
 VOLUME="${PROJECT}_nominatim-flatnode"
+CONTAINER="${NOMINATIM_CONTAINER:-howfar-nominatim}"
 FLATNODE_PATH="/fn/flatnode.file"
 
 if ! docker volume inspect "$VOLUME" >/dev/null 2>&1; then
   echo "flatnode volume '$VOLUME' not found — nothing to prune (has Nominatim imported yet?)." >&2
   exit 0
+fi
+
+# Refuse to delete unless the import has COMPLETED. The flatnode file is written by
+# osm2pgsql throughout the ~24-min import; removing it mid-import corrupts a build
+# that has no in-place rebuild. The container's own healthcheck reports 'healthy'
+# only once /status returns 0 (= import done and serving), so gate on that. If the
+# import already finished but you stopped the container, start it, wait for healthy,
+# then re-run. (Override the name with NOMINATIM_CONTAINER if you renamed it.)
+health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}nohealth{{end}}' "$CONTAINER" 2>/dev/null || echo absent)"
+if [ "$health" != "healthy" ]; then
+  echo "Refusing to prune: Nominatim container '$CONTAINER' is '$health', not 'healthy'." >&2
+  echo "  healthy   = import finished & serving  -> safe to prune" >&2
+  echo "  starting  = still importing            -> DO NOT prune (would corrupt the import)" >&2
+  echo "  absent/nohealth = container not up      -> start it, wait for healthy, then re-run" >&2
+  echo "Start with: docker compose -f docker/selfhost/docker-compose.yml up -d nominatim" >&2
+  exit 1
 fi
 
 size="$(docker run --rm -v "${VOLUME}:/fn" alpine sh -c \

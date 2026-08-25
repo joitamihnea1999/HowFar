@@ -30,6 +30,9 @@ jobs:
       # Coverage thresholds (vitest.config.ts) gate the merge, not just tests.
       - run: npm run test:coverage
       - run: npm run build
+      # Hermetic geometry-instrument self-test (no Docker/stack needed): guards the
+      # parity harness's area/residual/verdict math so a refactor can't silently break it.
+      - run: npm run selfhost:harness-selftest
 
   e2e:
     name: e2e (Playwright + PostGIS)
