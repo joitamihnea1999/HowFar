@@ -76,8 +76,8 @@ name. This clone uses the committed pre-commit scanner; enable it in another clo
 ### Health endpoints
 
 - `GET /api/health` — liveness: always 200, reports `{ ok, db }` (DB probe bounded at 2 s).
-- `GET /api/ready` — readiness: 200 only when PostgreSQL, PostGIS and the migration history are available.
-- `GET /api/catalogue-status` — 200 for a fresh active amenity snapshot; 503 if missing, stale (>10 days), or unavailable.
+- `GET /api/ready` — readiness: 200 when PostgreSQL, PostGIS and the migration history are available and the provider/region configuration parses (a self-hosted ORS base without its required key still passes here and fails only on the first routing request — a tracked hardening follow-up). A missing amenity catalogue does not fail readiness (that is `/api/catalogue-status`'s concern); but if an active catalogue **is** present, its recorded region must be consistent with the configured map extent — a present catalogue whose region mismatches, or cannot be verified, does fail readiness. (Datasets predating region recording are accepted only under the default extent.)
+- `GET /api/catalogue-status` — 200 for a fresh active amenity snapshot; 503 if missing, stale (>10 days), unavailable, or built for a different region than the configured map extent (in which case the body carries `reason: "region-mismatch"` and the dataset fields are suppressed).
 - `GET /api/catalogue-export?limit=500&after=…` — paginated GeoJSON export of only the OSM-derived catalogue.
 
 ## CI

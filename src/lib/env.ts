@@ -9,7 +9,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 
-import { BUCHAREST_BBOX, DEFAULT_BBOX } from "./bounds";
+import { LAUNCH_BBOX, DEFAULT_BBOX, bboxesEqual } from "./bounds";
 
 export interface ServerEnv {
   /** PostgreSQL connection string, e.g. postgresql://user:pass@host:5432/db */
@@ -402,7 +402,7 @@ function sameList(a: readonly string[], b: readonly string[]): boolean {
  *
  * "Default" means every provider var is unset AND the resolved extent equals
  * the Bucharest default. The bbox component is taken from the RESOLVED
- * `BUCHAREST_BBOX` (imported from bounds.ts), NOT a raw runtime read of
+ * `LAUNCH_BBOX` (imported from bounds.ts), NOT a raw runtime read of
  * `NEXT_PUBLIC_MAP_BBOX`: that var is build-time inlined, so a dynamic
  * `process.env` read would be undefined in a build-ARG container and wrongly
  * yield tag "" for a non-default city — serving city A's cached answers for city
@@ -427,11 +427,7 @@ function sameList(a: readonly string[], b: readonly string[]): boolean {
 export function configCacheTag(source: EnvSource = process.env): string {
   const cfg = parseProviderConfig(source);
   const dataRevision = optionalEnv(source, "PROVIDER_DATA_REVISION");
-  const bboxIsDefault =
-    BUCHAREST_BBOX.minLng === DEFAULT_BBOX.minLng &&
-    BUCHAREST_BBOX.minLat === DEFAULT_BBOX.minLat &&
-    BUCHAREST_BBOX.maxLng === DEFAULT_BBOX.maxLng &&
-    BUCHAREST_BBOX.maxLat === DEFAULT_BBOX.maxLat;
+  const bboxIsDefault = bboxesEqual(LAUNCH_BBOX, DEFAULT_BBOX);
   const isDefault =
     cfg.nominatimBase === PROVIDER_DEFAULTS.nominatimBase &&
     cfg.photonBase === PROVIDER_DEFAULTS.photonBase &&
@@ -449,7 +445,7 @@ export function configCacheTag(source: EnvSource = process.env): string {
     t: cfg.transitBase,
     ov: cfg.overpassEndpoints,
     bo: cfg.bulkOverpassEndpoints,
-    b: [BUCHAREST_BBOX.minLng, BUCHAREST_BBOX.minLat, BUCHAREST_BBOX.maxLng, BUCHAREST_BBOX.maxLat],
+    b: [LAUNCH_BBOX.minLng, LAUNCH_BBOX.minLat, LAUNCH_BBOX.maxLng, LAUNCH_BBOX.maxLat],
     r: dataRevision ?? "",
   });
   return createHash("sha256").update(canonical).digest("hex").slice(0, 8);

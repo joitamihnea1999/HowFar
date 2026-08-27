@@ -1,5 +1,5 @@
 import { getCachedSafe, setCachedSafe } from "@/lib/api-cache";
-import { BUCHAREST_BBOX, inBucharest } from "@/lib/bounds";
+import { LAUNCH_BBOX, inLaunchArea } from "@/lib/bounds";
 import { providerConfig, taggedCacheKey } from "@/lib/env";
 import { providerFetch, ProviderError, sha256Hex, USER_AGENT } from "@/lib/provider-http";
 
@@ -7,7 +7,7 @@ import { providerFetch, ProviderError, sha256Hex, USER_AGENT } from "@/lib/provi
  * Photon (komoot, keyless, OSM-based) type-ahead geocoding — the autocomplete
  * source. Nominatim's ToS forbids per-keystroke autocomplete; Photon is built
  * for it. `bbox` hard-constrains results to Bucharest/Ilfov upstream (lat/lon
- * are only a ranking bias); we still defensively re-filter with `inBucharest`.
+ * are only a ranking bias); we still defensively re-filter with `inLaunchArea`.
  * Server-side + best-effort cached. Be a good citizen: identifying UA + the
  * client debounces + a min query length.
  */
@@ -18,7 +18,7 @@ import { providerFetch, ProviderError, sha256Hex, USER_AGENT } from "@/lib/provi
 const TIMEOUT_MS = 6_000;
 const TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // Photon bbox is minLon,minLat,maxLon,maxLat.
-const BBOX = `${BUCHAREST_BBOX.minLng},${BUCHAREST_BBOX.minLat},${BUCHAREST_BBOX.maxLng},${BUCHAREST_BBOX.maxLat}`;
+const BBOX = `${LAUNCH_BBOX.minLng},${LAUNCH_BBOX.minLat},${LAUNCH_BBOX.maxLng},${LAUNCH_BBOX.maxLat}`;
 
 export interface Suggestion {
   label: string;
@@ -58,7 +58,7 @@ function normalize(features: PhotonFeature[]): Suggestion[] {
     const lng = Number(coords[0]);
     const lat = Number(coords[1]);
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
-    if (!inBucharest(lat, lng)) continue; // defensive; bbox already constrains upstream
+    if (!inLaunchArea(lat, lng)) continue; // defensive; bbox already constrains upstream
     const label = composeLabel(f.properties);
     if (!label || seen.has(label)) continue; // drop blank + duplicate rows
     seen.add(label);

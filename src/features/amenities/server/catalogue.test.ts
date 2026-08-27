@@ -284,6 +284,38 @@ describe("nearbyAmenities local catalogue flow", () => {
     expect(drivingIsochrone).not.toHaveBeenCalled();
   });
 
+  it("region cross-check (task 013): refuses a wrong-region active dataset BEFORE any ring call (outer early-out)", async () => {
+    // Active dataset recorded for another city than the configured (default) extent.
+    findActiveDataset.mockResolvedValue({
+      id: "dataset-1",
+      validation: { source: { bbox: { minLng: 23.4, minLat: 46.6, maxLng: 23.7, maxLat: 46.9 } } },
+    });
+    await expect(nearbyAmenities(44.4268, 26.1025)).rejects.toThrow(
+      /does not match the configured extent/,
+    );
+    // The whole point of the OUTER check: no upstream ring call, no dataset read.
+    expect(walkingIsochrone).not.toHaveBeenCalled();
+    expect(withActiveDataset).not.toHaveBeenCalled();
+    expect(amenityCacheWrite).not.toHaveBeenCalled();
+    // Guard against a silent regression that drops `validation` from the outer select
+    // (which would make readValidationBbox see undefined ⇒ grandfather ⇒ fail open).
+    expect(findActiveDataset).toHaveBeenCalledWith(
+      expect.objectContaining({ select: expect.objectContaining({ validation: true }) }),
+    );
+  });
+
+  it("region cross-check (task 013): TOCTOU — a region-mismatched pinned dataset yields no result (withActiveDataset gates and returns null)", async () => {
+    // The authoritative pinned-region gate now lives INSIDE withActiveDataset (proven
+    // against a real DB in catalogue-store.integration.test.ts). Here we assert
+    // nearbyAmenities' contract when the gate fires: withActiveDataset returns null ⇒
+    // catalogue unavailable, and nothing is cached. (The outer early-out let this
+    // request through because its pointer looked legacy-under-default.)
+    findActiveDataset.mockResolvedValue({ id: "dataset-1" });
+    withActiveDataset.mockResolvedValue(null);
+    await expect(nearbyAmenities(44.4268, 26.1025)).rejects.toBeInstanceOf(CatalogueUnavailableError);
+    expect(amenityCacheWrite).not.toHaveBeenCalled();
+  });
+
   it("wraps a database query failure as catalogue unavailable and does not cache", async () => {
     withActiveDataset.mockRejectedValue(new Error("connection reset"));
     await expect(nearbyAmenities(44.4268, 26.1025)).rejects.toThrow(

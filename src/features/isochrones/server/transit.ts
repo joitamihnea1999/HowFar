@@ -16,7 +16,7 @@ import {
   type TimeContext,
 } from "@/features/isochrones/time-context";
 import { getCachedSafe, setCachedSafe } from "@/lib/api-cache";
-import { BUCHAREST_BBOX } from "@/lib/bounds";
+import { LAUNCH_BBOX } from "@/lib/bounds";
 import { providerConfig, taggedCacheKey } from "@/lib/env";
 import { providerFetch, ProviderError, roundCoord, USER_AGENT } from "@/lib/provider-http";
 import { withTimeout } from "@/lib/timeout";
@@ -158,10 +158,10 @@ function parseStops(all: OneToAllStop[]): TransitStop[] {
     if (dur <= 0 || dur > MAX_TRAVEL_MIN) continue;
     // Drop bogus coords (e.g. 0,0) and stops well outside the launch area.
     if (
-      lat < BUCHAREST_BBOX.minLat - STOP_MARGIN_DEG ||
-      lat > BUCHAREST_BBOX.maxLat + STOP_MARGIN_DEG ||
-      lng < BUCHAREST_BBOX.minLng - STOP_MARGIN_DEG ||
-      lng > BUCHAREST_BBOX.maxLng + STOP_MARGIN_DEG
+      lat < LAUNCH_BBOX.minLat - STOP_MARGIN_DEG ||
+      lat > LAUNCH_BBOX.maxLat + STOP_MARGIN_DEG ||
+      lng < LAUNCH_BBOX.minLng - STOP_MARGIN_DEG ||
+      lng > LAUNCH_BBOX.maxLng + STOP_MARGIN_DEG
     ) {
       continue;
     }

@@ -25,6 +25,17 @@ beforeEach(() => {
 });
 
 describe("catalogue export", () => {
+  it("region cross-check (task 013): when the active dataset is gated out (region mismatch), exportCataloguePage yields null (→ 503) and runs no query", async () => {
+    // The region gate now lives inside `withActiveDataset` (proven against a real DB
+    // in catalogue-import.integration.test.ts). When it fires it returns null WITHOUT
+    // invoking the read callback, so the public ODbL feed never queries — let alone
+    // publishes — the old city's places. Here we simulate that gated-out path.
+    withActiveDataset.mockResolvedValue(null);
+    await expect(exportCataloguePage(null, 100)).resolves.toBeNull();
+    expect(queryRaw).not.toHaveBeenCalled();
+    expect(findDataset).not.toHaveBeenCalled();
+  });
+
   it("exports only the explicit OSM-derived GeoJSON allowlist", async () => {
     queryRaw.mockResolvedValue([{
       canonicalId: "way/42",

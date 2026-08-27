@@ -5,6 +5,7 @@ import {
 } from "@/features/amenities/server/catalogue-query";
 import { mergeCoincidentTransitStops } from "@/features/amenities/server/merge-transit-stops";
 import { withActiveDataset } from "@/features/amenities/server/catalogue-store";
+import { datasetMatchesExtent, describeRegionMismatch } from "@/features/amenities/server/catalogue-region";
 import { bandMinutes, LEGEND_BANDS, type Band } from "@/features/isochrones/bands";
 import { CAR_FACTOR_REVISION, carTrafficSlotFor } from "@/features/isochrones/car-traffic";
 import { DEFAULT_PACE, type Pace } from "@/features/isochrones/pace";
@@ -341,9 +342,17 @@ export async function nearbyAmenities(
   // behind an upstream call it can make unnecessary.
   const active = await db().amenityDataset.findUnique({
     where: { activeKey: 1 },
-    select: { id: true },
+    select: { id: true, validation: true },
   });
   if (!active) throw new CatalogueUnavailableError("No active amenity catalogue");
+  // Region cross-check (task 013), cheap OUTER early-out: refuse a dataset whose
+  // recorded import bbox ≠ the resolved extent BEFORE the ORS/MOTIS ring call, so a
+  // wrong-region catalogue answers a clean 503, never an honest-looking empty 200.
+  // The AUTHORITATIVE check is repeated inside `withActiveDataset` below (a publish
+  // can swap the active dataset between here and the pinned read — TOCTOU).
+  if (!datasetMatchesExtent(active.validation)) {
+    throw new CatalogueUnavailableError(describeRegionMismatch(active.validation));
+  }
 
   // Resolve the clip identity BEFORE coalescing. It used to be keyed on the preset id,
   // which can coalesce two transit requests that straddle
@@ -420,6 +429,12 @@ async function computeNearbyAmenities(
         where: { id: datasetId },
         select: { sourceTimestamp: true },
       });
+      // The AUTHORITATIVE region cross-check (task 013) lives inside `withActiveDataset`
+      // itself: it verifies the pinned dataset's region in the SAME snapshot before
+      // running this callback, returning null on a mismatch (which maps to a 503
+      // below). So a publish that swaps in a wrong-region dataset between the outer
+      // early-out and this pinned read cannot serve its rows — no TOCTOU window, and
+      // no per-caller re-check needed here.
       return {
         datasetId,
         countsByBand: result.countsByBand,

@@ -16,7 +16,8 @@ import {
   normalizeCatalogueElement,
 } from "@/features/amenities/server/catalogue-normalize";
 import { publishDataset } from "@/features/amenities/server/catalogue-store";
-import { BUCHAREST_BBOX } from "@/lib/bounds";
+import { LAUNCH_BBOX } from "@/lib/bounds";
+import { datasetMatchesExtent } from "@/features/amenities/server/catalogue-region";
 import { db, poolConfig } from "@/lib/db";
 import { serverEnv } from "@/lib/env";
 
@@ -55,7 +56,7 @@ export type CatalogueValidation = {
     overridesChecksum: string;
     overridesVersion: number;
     pipelineVersion: number;
-    bbox: typeof BUCHAREST_BBOX;
+    bbox: typeof LAUNCH_BBOX;
   };
 };
 
@@ -349,7 +350,7 @@ async function databaseValidation(datasetId: string): Promise<{
   outsideBoundsCount: number;
   categoryCounts: CategoryCounts;
 }> {
-  const { minLng, minLat, maxLng, maxLat } = BUCHAREST_BBOX;
+  const { minLng, minLat, maxLng, maxLat } = LAUNCH_BBOX;
   const rows = await db().$queryRaw<
     Array<{ placeCount: number; invalidGeometryCount: number; outsideBoundsCount: number }>
   >`
@@ -414,10 +415,22 @@ export async function importCatalogueSnapshot(
   // scripts/amenities/overrides.json (e.g. a new manual suppression) forces a
   // reprocess even against byte-identical OSM, instead of silently deferring
   // until next week's snapshot happens to differ.
+  //
+  // A region flip (task 013) cannot get stuck on this short-circuit: the extent
+  // bbox is part of `buildBulkOverpassQuery()`, so a new city fetches a different
+  // Overpass response ⇒ a different `sourceChecksum` ⇒ `unchanged` is false and the
+  // new-region import always proceeds. (There is no path where the same bytes are
+  // served for two different extents.)
   if (
     active?.sourceChecksum === checksum &&
     validationPipelineVersion(active.validation) === CATALOGUE_PIPELINE_VERSION &&
-    validationOverridesChecksum(active.validation) === overridesChecksum
+    validationOverridesChecksum(active.validation) === overridesChecksum &&
+    // …and the active dataset's region matches the configured extent (task 013). A
+    // region flip already changes the query bbox ⇒ different bytes ⇒ different
+    // checksum, so this clause is belt-and-braces: it guarantees a region-mismatched
+    // active dataset is NEVER short-circuited as "unchanged", so a re-import always
+    // has a path to replace it even in the impossible event that bytes coincide.
+    datasetMatchesExtent(active.validation)
   ) {
     return {
       runId: active.importRunId,
@@ -433,7 +446,14 @@ export async function importCatalogueSnapshot(
   }
 
   const normalized = normalizeElements(snapshot.body, overrides);
-  const previousCounts = validationCounts(active?.validation);
+  // Category-delta guard baseline (task 013): compare against the active dataset ONLY
+  // when it belongs to the SAME region as the configured extent. On a city-extent flip the
+  // active dataset is the OLD city, so its per-category counts are not a comparable
+  // baseline — feeding them to `validateCategoryDeltas` would throw (>50% drop / >3×)
+  // and delete the new dataset, leaving the mismatched one active and the guard
+  // STUCK-closed. A region change legitimately has no baseline ⇒ null.
+  const previousCounts =
+    active && datasetMatchesExtent(active.validation) ? validationCounts(active.validation) : null;
 
   const runId = randomUUID();
   const datasetId = randomUUID();
@@ -520,7 +540,7 @@ export async function importCatalogueSnapshot(
         overridesChecksum,
         overridesVersion: overrides.version,
         pipelineVersion: CATALOGUE_PIPELINE_VERSION,
-        bbox: BUCHAREST_BBOX,
+        bbox: LAUNCH_BBOX,
       },
     };
     const finishedAt = new Date();

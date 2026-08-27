@@ -51,31 +51,38 @@ export async function exportCataloguePage(
   after: string | null,
   limit: number,
 ): Promise<CatalogueExportPage | null> {
+  // Region cross-check (task 013) is enforced inside `withActiveDataset`: a
+  // region-mismatched active dataset yields null (→ the route's 503 path) BEFORE this
+  // callback runs, so this PUBLIC ODbL feed can never publish the old city's places
+  // after an extent flip, and a mismatched request pays no query.
   return withActiveDataset(async (tx, datasetId) => {
-    const [dataset, rows] = await Promise.all([
-      tx.amenityDataset.findUniqueOrThrow({
-        where: { id: datasetId },
-        select: { sourceVersion: true, sourceTimestamp: true, sourceChecksum: true },
-      }),
-      tx.$queryRaw<ExportRow[]>`
-        SELECT
-          "canonicalId",
-          "sourceType",
-          "sourceId",
-          category,
-          name,
-          "accessState",
-          "qualityState",
-          "sourceTags",
-          "sourceUpdatedAt",
-          ST_AsGeoJSON(geom) AS geometry
-        FROM "osm_catalogue"."AmenityPlace"
-        WHERE "datasetId" = ${datasetId}
-          AND (${after}::text IS NULL OR "canonicalId" > ${after})
-        ORDER BY "canonicalId"
-        LIMIT ${limit}
-      `,
-    ]);
+    const dataset = await tx.amenityDataset.findUniqueOrThrow({
+      where: { id: datasetId },
+      select: {
+        sourceVersion: true,
+        sourceTimestamp: true,
+        sourceChecksum: true,
+      },
+    });
+
+    const rows = await tx.$queryRaw<ExportRow[]>`
+      SELECT
+        "canonicalId",
+        "sourceType",
+        "sourceId",
+        category,
+        name,
+        "accessState",
+        "qualityState",
+        "sourceTags",
+        "sourceUpdatedAt",
+        ST_AsGeoJSON(geom) AS geometry
+      FROM "osm_catalogue"."AmenityPlace"
+      WHERE "datasetId" = ${datasetId}
+        AND (${after}::text IS NULL OR "canonicalId" > ${after})
+      ORDER BY "canonicalId"
+      LIMIT ${limit}
+    `;
 
     // Expose canonicalId (public OSM identity, e.g. "relation/302"), never the
     // internal "<datasetUuid>:<canonicalId>" primary key. canonicalId is unique

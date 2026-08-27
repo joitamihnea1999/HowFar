@@ -5,7 +5,7 @@ import { contours } from "d3-contour";
 import type { Feature, MultiPolygon, Polygon } from "geojson";
 
 import { PACE_MODEL, STREET_DETOUR as PACE_STREET_DETOUR } from "@/features/isochrones/pace";
-import { BUCHAREST_BBOX } from "@/lib/bounds";
+import { LAUNCH_BBOX } from "@/lib/bounds";
 
 /**
  * Transit-isochrone geometry construction — pure and deterministic so it can be
@@ -99,8 +99,8 @@ export function buildRings(
 ): Ring[] {
   const egressMPerMin = opts.egressMPerMin;
   const mPerDegLng = 111320 * Math.cos((origin.lat * Math.PI) / 180);
-  const spanLng = BUCHAREST_BBOX.maxLng - BUCHAREST_BBOX.minLng;
-  const spanLat = BUCHAREST_BBOX.maxLat - BUCHAREST_BBOX.minLat;
+  const spanLng = LAUNCH_BBOX.maxLng - LAUNCH_BBOX.minLng;
+  const spanLat = LAUNCH_BBOX.maxLat - LAUNCH_BBOX.minLat;
   const width = Math.max(2, Math.ceil((spanLng * mPerDegLng) / CELL_M));
   const height = Math.max(2, Math.ceil((spanLat * M_PER_DEG_LAT) / CELL_M));
   const dLng = spanLng / width;
@@ -116,17 +116,17 @@ export function buildRings(
     const maxR = remaining * egressMPerMin; // crow-fly metres of egress budget left
     const di = Math.ceil(maxR / (dLng * mPerDegLng));
     const dj = Math.ceil(maxR / (dLat * M_PER_DEG_LAT));
-    const ci = Math.round((lng - BUCHAREST_BBOX.minLng) / dLng - 0.5);
-    const cj = Math.round((lat - BUCHAREST_BBOX.minLat) / dLat - 0.5);
+    const ci = Math.round((lng - LAUNCH_BBOX.minLng) / dLng - 0.5);
+    const cj = Math.round((lat - LAUNCH_BBOX.minLat) / dLat - 0.5);
     const jLo = Math.max(0, cj - dj);
     const jHi = Math.min(height - 1, cj + dj);
     const iLo = Math.max(0, ci - di);
     const iHi = Math.min(width - 1, ci + di);
     for (let j = jLo; j <= jHi; j++) {
-      const cellLat = BUCHAREST_BBOX.minLat + (j + 0.5) * dLat;
+      const cellLat = LAUNCH_BBOX.minLat + (j + 0.5) * dLat;
       const dy = (cellLat - lat) * M_PER_DEG_LAT;
       for (let i = iLo; i <= iHi; i++) {
-        const cellLng = BUCHAREST_BBOX.minLng + (i + 0.5) * dLng;
+        const cellLng = LAUNCH_BBOX.minLng + (i + 0.5) * dLng;
         const dx = (cellLng - lng) * mPerDegLng;
         const val = baseMin + Math.hypot(dx, dy) / egressMPerMin;
         if (val > MAX_MIN) continue;
@@ -148,15 +148,15 @@ export function buildRings(
 
   // Clamp to the launch box so no vertex can escape the rendered tile extent
   // (matters only for an origin near the box edge; central origins never reach it).
-  const clampLng = (v: number) => Math.min(BUCHAREST_BBOX.maxLng, Math.max(BUCHAREST_BBOX.minLng, v));
-  const clampLat = (v: number) => Math.min(BUCHAREST_BBOX.maxLat, Math.max(BUCHAREST_BBOX.minLat, v));
+  const clampLng = (v: number) => Math.min(LAUNCH_BBOX.maxLng, Math.max(LAUNCH_BBOX.minLng, v));
+  const clampLat = (v: number) => Math.min(LAUNCH_BBOX.maxLat, Math.max(LAUNCH_BBOX.minLat, v));
   const toGeo = (multipoly: number[][][][]): number[][][][] =>
     multipoly.map((poly) =>
       poly.map((ring) =>
         // d3-contour vertices are in grid-index space; +0.5 puts them at cell centres.
         ring.map(([x, y]) => [
-          clampLng(BUCHAREST_BBOX.minLng + (x + 0.5) * dLng),
-          clampLat(BUCHAREST_BBOX.minLat + (y + 0.5) * dLat),
+          clampLng(LAUNCH_BBOX.minLng + (x + 0.5) * dLng),
+          clampLat(LAUNCH_BBOX.minLat + (y + 0.5) * dLat),
         ]),
       ),
     );

@@ -1,12 +1,17 @@
 import { NextResponse } from "next/server";
 
+import { activeDatasetRegionOk, describeRegionMismatch } from "@/features/amenities/server/catalogue-region";
 import { EnvError, parseProviderConfig } from "@/lib/env";
-import { probeDb } from "@/lib/health";
+import { DB_PROBE_TIMEOUT_MS, probeDb } from "@/lib/health";
+import { withTimeout } from "@/lib/timeout";
 
-// Readiness: non-200 unless PostgreSQL is reachable AND the provider/region
-// configuration parses — Railway's healthcheck target, so a deploy with a broken
-// DATABASE_URL or a malformed provider env var (task 007) is reported unhealthy
-// rather than passing the healthcheck and 5xx-ing the first user request.
+// Readiness: non-200 unless PostgreSQL is reachable (probeDb also proves PostGIS +
+// the migration history), the provider/region configuration parses, AND the active
+// amenity catalogue's recorded region matches the configured extent — Railway's
+// healthcheck target, so a deploy with a broken DATABASE_URL, a malformed provider
+// env var (task 007), or a catalogue belonging to a different city than the
+// configured extent (task 013) is reported unhealthy rather than passing the
+// healthcheck and then serving the wrong city's data / 5xx-ing the first request.
 export const dynamic = "force-dynamic";
 
 export async function GET() {
@@ -30,6 +35,30 @@ export async function GET() {
     console.error(`[api:ready] provider configuration invalid: ${msg}`);
   }
 
-  const ready = dbUp && configOk;
+  // Active-catalogue region check (task 013). Only probed when the DB is already up
+  // (no point, and no second failure mode, when probeDb has failed). A definitive
+  // MISMATCH fails readiness; a query ERROR also fails readiness (fail closed — we
+  // cannot confirm the region), never silently passing. A missing catalogue does
+  // NOT fail readiness (unchanged: catalogue presence is /api/catalogue-status's
+  // concern). The reason is logged server-side only.
+  let regionOk = true;
+  if (dbUp) {
+    // Bounded like probeDb (2s): a locked/slow AmenityDataset read must DEGRADE the
+    // status, not hang the Railway readiness probe. A timeout or query error ⇒ not
+    // ready (fail closed — an unverifiable region must not pass).
+    const probe = await withTimeout(activeDatasetRegionOk(), DB_PROBE_TIMEOUT_MS);
+    if (!probe.ok) {
+      regionOk = false;
+      console.error(
+        `[api:ready] active-catalogue region check failed (${probe.reason})`,
+        probe.reason === "error" ? probe.error : "",
+      );
+    } else if (!probe.value.matches) {
+      regionOk = false;
+      console.error(`[api:ready] ${describeRegionMismatch(probe.value.validation)}`);
+    }
+  }
+
+  const ready = dbUp && configOk && regionOk;
   return NextResponse.json({ ready }, { status: ready ? 200 : 503 });
 }

@@ -1,51 +1,59 @@
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { BUCHAREST_BBOX, BUCHAREST_MAX_BOUNDS, MAX_BBOX_SPAN_DEG, inBucharest, parseBbox } from "./bounds";
+import {
+  LAUNCH_BBOX,
+  LAUNCH_MAX_BOUNDS,
+  MAX_BBOX_SPAN_DEG,
+  bboxesEqual,
+  coerceBbox,
+  inLaunchArea,
+  parseBbox,
+} from "./bounds";
 
-describe("inBucharest", () => {
+describe("inLaunchArea", () => {
   it("accepts every point inside the bbox (property)", () => {
     fc.assert(
       fc.property(
-        fc.double({ min: BUCHAREST_BBOX.minLat, max: BUCHAREST_BBOX.maxLat, noNaN: true }),
-        fc.double({ min: BUCHAREST_BBOX.minLng, max: BUCHAREST_BBOX.maxLng, noNaN: true }),
-        (lat, lng) => inBucharest(lat, lng),
+        fc.double({ min: LAUNCH_BBOX.minLat, max: LAUNCH_BBOX.maxLat, noNaN: true }),
+        fc.double({ min: LAUNCH_BBOX.minLng, max: LAUNCH_BBOX.maxLng, noNaN: true }),
+        (lat, lng) => inLaunchArea(lat, lng),
       ),
     );
   });
 
   it("rejects every point with at least one coordinate outside the bbox (property)", () => {
-    const inLat = fc.double({ min: BUCHAREST_BBOX.minLat, max: BUCHAREST_BBOX.maxLat, noNaN: true });
-    const inLng = fc.double({ min: BUCHAREST_BBOX.minLng, max: BUCHAREST_BBOX.maxLng, noNaN: true });
+    const inLat = fc.double({ min: LAUNCH_BBOX.minLat, max: LAUNCH_BBOX.maxLat, noNaN: true });
+    const inLng = fc.double({ min: LAUNCH_BBOX.minLng, max: LAUNCH_BBOX.maxLng, noNaN: true });
     const outLat = fc.oneof(
-      fc.double({ min: -90, max: BUCHAREST_BBOX.minLat, maxExcluded: true, noNaN: true }),
-      fc.double({ min: BUCHAREST_BBOX.maxLat, minExcluded: true, max: 90, noNaN: true }),
+      fc.double({ min: -90, max: LAUNCH_BBOX.minLat, maxExcluded: true, noNaN: true }),
+      fc.double({ min: LAUNCH_BBOX.maxLat, minExcluded: true, max: 90, noNaN: true }),
     );
     const outLng = fc.oneof(
-      fc.double({ min: -180, max: BUCHAREST_BBOX.minLng, maxExcluded: true, noNaN: true }),
-      fc.double({ min: BUCHAREST_BBOX.maxLng, minExcluded: true, max: 180, noNaN: true }),
+      fc.double({ min: -180, max: LAUNCH_BBOX.minLng, maxExcluded: true, noNaN: true }),
+      fc.double({ min: LAUNCH_BBOX.maxLng, minExcluded: true, max: 180, noNaN: true }),
     );
-    fc.assert(fc.property(outLat, inLng, (lat, lng) => !inBucharest(lat, lng)));
-    fc.assert(fc.property(inLat, outLng, (lat, lng) => !inBucharest(lat, lng)));
-    fc.assert(fc.property(outLat, outLng, (lat, lng) => !inBucharest(lat, lng)));
+    fc.assert(fc.property(outLat, inLng, (lat, lng) => !inLaunchArea(lat, lng)));
+    fc.assert(fc.property(inLat, outLng, (lat, lng) => !inLaunchArea(lat, lng)));
+    fc.assert(fc.property(outLat, outLng, (lat, lng) => !inLaunchArea(lat, lng)));
   });
 
   it("bbox edges are inside (inclusive bounds)", () => {
-    expect(inBucharest(BUCHAREST_BBOX.minLat, BUCHAREST_BBOX.minLng)).toBe(true);
-    expect(inBucharest(BUCHAREST_BBOX.maxLat, BUCHAREST_BBOX.maxLng)).toBe(true);
+    expect(inLaunchArea(LAUNCH_BBOX.minLat, LAUNCH_BBOX.minLng)).toBe(true);
+    expect(inLaunchArea(LAUNCH_BBOX.maxLat, LAUNCH_BBOX.maxLng)).toBe(true);
   });
 
   it("rejects NaN coordinates", () => {
-    expect(inBucharest(Number.NaN, 26.1)).toBe(false);
-    expect(inBucharest(44.4, Number.NaN)).toBe(false);
+    expect(inLaunchArea(Number.NaN, 26.1)).toBe(false);
+    expect(inLaunchArea(44.4, Number.NaN)).toBe(false);
   });
 });
 
-describe("BUCHAREST_MAX_BOUNDS", () => {
+describe("LAUNCH_MAX_BOUNDS", () => {
   it("is [[west, south], [east, north]] of the same bbox (MapLibre order)", () => {
-    expect(BUCHAREST_MAX_BOUNDS).toEqual([
-      [BUCHAREST_BBOX.minLng, BUCHAREST_BBOX.minLat],
-      [BUCHAREST_BBOX.maxLng, BUCHAREST_BBOX.maxLat],
+    expect(LAUNCH_MAX_BOUNDS).toEqual([
+      [LAUNCH_BBOX.minLng, LAUNCH_BBOX.minLat],
+      [LAUNCH_BBOX.maxLng, LAUNCH_BBOX.maxLat],
     ]);
   });
 });
@@ -54,7 +62,7 @@ describe("default extent (byte-identity, task 007)", () => {
   // NOT self-referential: pins the DEFAULT box to today's exact literals so the
   // config lift cannot silently move the current Bucharest deployment.
   it("with NEXT_PUBLIC_MAP_BBOX unset, is exactly Bucharest+Ilfov", () => {
-    expect(BUCHAREST_BBOX).toEqual({ minLng: 25.8, minLat: 44.2, maxLng: 26.4, maxLat: 44.7 });
+    expect(LAUNCH_BBOX).toEqual({ minLng: 25.8, minLat: 44.2, maxLng: 26.4, maxLat: 44.7 });
   });
 });
 
@@ -107,14 +115,14 @@ describe("resolveBbox via NEXT_PUBLIC_MAP_BBOX (task 007, fresh module load)", (
     vi.resetModules();
   });
 
-  it("a valid override moves BUCHAREST_BBOX, inBucharest, and BUCHAREST_MAX_BOUNDS", async () => {
+  it("a valid override moves LAUNCH_BBOX, inLaunchArea, and LAUNCH_MAX_BOUNDS", async () => {
     vi.resetModules();
     vi.stubEnv("NEXT_PUBLIC_MAP_BBOX", "23.4,46.6,23.7,46.9"); // Cluj-ish
     const fresh = await import("./bounds");
-    expect(fresh.BUCHAREST_BBOX).toEqual({ minLng: 23.4, minLat: 46.6, maxLng: 23.7, maxLat: 46.9 });
-    expect(fresh.inBucharest(46.7, 23.5)).toBe(true); // inside the override
-    expect(fresh.inBucharest(44.4, 26.1)).toBe(false); // old Bucharest point now outside
-    expect(fresh.BUCHAREST_MAX_BOUNDS).toEqual([
+    expect(fresh.LAUNCH_BBOX).toEqual({ minLng: 23.4, minLat: 46.6, maxLng: 23.7, maxLat: 46.9 });
+    expect(fresh.inLaunchArea(46.7, 23.5)).toBe(true); // inside the override
+    expect(fresh.inLaunchArea(44.4, 26.1)).toBe(false); // old Bucharest point now outside
+    expect(fresh.LAUNCH_MAX_BOUNDS).toEqual([
       [23.4, 46.6],
       [23.7, 46.9],
     ]);
@@ -130,5 +138,62 @@ describe("resolveBbox via NEXT_PUBLIC_MAP_BBOX (task 007, fresh module load)", (
     vi.resetModules();
     vi.stubEnv("NEXT_PUBLIC_MAP_BBOX", "   ");
     await expect(import("./bounds")).rejects.toThrow(/set but blank/);
+  });
+});
+
+describe("coerceBbox", () => {
+  it("returns a Bbox for an object with four finite numbers", () => {
+    expect(coerceBbox({ minLng: 25.8, minLat: 44.2, maxLng: 26.4, maxLat: 44.7 })).toEqual({
+      minLng: 25.8,
+      minLat: 44.2,
+      maxLng: 26.4,
+      maxLat: 44.7,
+    });
+  });
+
+  it("ignores extra keys but keeps the four bbox fields", () => {
+    expect(coerceBbox({ minLng: 1, minLat: 2, maxLng: 3, maxLat: 4, extra: "x" })).toEqual({
+      minLng: 1,
+      minLat: 2,
+      maxLng: 3,
+      maxLat: 4,
+    });
+  });
+
+  it("returns null for a missing key", () => {
+    expect(coerceBbox({ minLng: 25.8, minLat: 44.2, maxLng: 26.4 })).toBeNull();
+  });
+
+  it("returns null for a non-finite value (NaN/Infinity/string)", () => {
+    expect(coerceBbox({ minLng: Number.NaN, minLat: 44.2, maxLng: 26.4, maxLat: 44.7 })).toBeNull();
+    expect(coerceBbox({ minLng: 25.8, minLat: Infinity, maxLng: 26.4, maxLat: 44.7 })).toBeNull();
+    expect(coerceBbox({ minLng: "25.8", minLat: 44.2, maxLng: 26.4, maxLat: 44.7 })).toBeNull();
+  });
+
+  it("returns null for a non-object", () => {
+    expect(coerceBbox(null)).toBeNull();
+    expect(coerceBbox(undefined)).toBeNull();
+    expect(coerceBbox("25.8,44.2,26.4,44.7")).toBeNull();
+    expect(coerceBbox(42)).toBeNull();
+  });
+});
+
+describe("bboxesEqual", () => {
+  const base = { minLng: 25.8, minLat: 44.2, maxLng: 26.4, maxLat: 44.7 };
+
+  it("is true for two boxes with identical corners", () => {
+    expect(bboxesEqual(base, { ...base })).toBe(true);
+  });
+
+  it("is false when ANY single corner differs", () => {
+    for (const key of ["minLng", "minLat", "maxLng", "maxLat"] as const) {
+      expect(bboxesEqual(base, { ...base, [key]: base[key] + 0.1 })).toBe(false);
+    }
+  });
+
+  it("is false when either side is null/undefined", () => {
+    expect(bboxesEqual(base, null)).toBe(false);
+    expect(bboxesEqual(null, base)).toBe(false);
+    expect(bboxesEqual(undefined, undefined)).toBe(false);
   });
 });

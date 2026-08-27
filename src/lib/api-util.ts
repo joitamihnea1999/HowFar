@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { inBucharest } from "@/lib/bounds";
+import { inLaunchArea } from "@/lib/bounds";
 import { EnvError } from "@/lib/env";
 import { ProviderError } from "@/lib/provider-http";
 
@@ -30,7 +30,7 @@ export function parseLatLng(url: URL): { lat: number; lng: number } | NextRespon
 
 /** 422 if the point is outside the Bucharest/Ilfov launch area, else null. */
 export function outOfAreaGuard(lat: number, lng: number): NextResponse | null {
-  return inBucharest(lat, lng) ? null : jsonError(422, "Outside the Bucharest launch area");
+  return inLaunchArea(lat, lng) ? null : jsonError(422, "Outside the Bucharest launch area");
 }
 
 /**

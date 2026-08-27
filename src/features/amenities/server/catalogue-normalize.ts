@@ -3,7 +3,7 @@ import {
   type AmenityCategoryKey,
 } from "@/features/amenities/amenities";
 import type { OverpassElement } from "@/features/amenities/server/overpass-client";
-import { inBucharest } from "@/lib/bounds";
+import { inLaunchArea } from "@/lib/bounds";
 
 export type CatalogueDropReason =
   | "unclassified"
@@ -135,7 +135,7 @@ function hasCoordinateInBounds(geometry: CatalogueGeometry): boolean {
         : geometry.type === "Polygon"
           ? geometry.coordinates.flat()
           : geometry.coordinates.flat();
-  return positions.some(([lng, lat]) => inBucharest(Number(lat), Number(lng)));
+  return positions.some(([lng, lat]) => inLaunchArea(Number(lat), Number(lng)));
 }
 
 export function normalizeCatalogueElement(

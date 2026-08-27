@@ -13,8 +13,10 @@ import {
   refreshAmenityCatalogue,
 } from "./catalogue-import";
 import type { CatalogueOverrides } from "./catalogue-normalize";
+import { datasetMatchesExtent, readValidationBbox } from "./catalogue-region";
 import { nearbyAmenities } from "./catalogue";
 import { exportCataloguePage } from "./catalogue-export";
+import { LAUNCH_BBOX } from "@/lib/bounds";
 import { queryCatalogueSummaryInRing } from "./catalogue-query";
 import { withActiveDataset } from "./catalogue-store";
 import { MAX_PER_CATEGORY_PER_BAND } from "@/features/amenities/amenities";
@@ -546,6 +548,132 @@ describePostgres("deterministic amenity catalogue import", () => {
     // possible if each band is capped on its own. Under the pre-065 flat cap the same
     // catalogue returned at most one cap's worth in total.
     expect(splitTransit.length).toBeGreaterThan(MAX_PER_CATEGORY_PER_BAND);
+  });
+
+  // ---- region cross-check (task 013) through the REAL Json column ----
+
+  it("records source.bbox that round-trips the Json column byte-exact and matches the configured extent", async () => {
+    const result = await importCatalogueSnapshot(snapshot(bodyAt("2099-03-01T00:00:00Z")), overrides);
+    // Reload from the DB — proves the persisted value, not the in-memory one.
+    const reloaded = await db().amenityDataset.findUniqueOrThrow({
+      where: { id: result.datasetId },
+      select: { validation: true },
+    });
+    // Exact round-trip: the four doubles survive JSONB unchanged, so exact equality
+    // (the production comparison) is safe.
+    expect(readValidationBbox(reloaded.validation)).toEqual(LAUNCH_BBOX);
+    expect(datasetMatchesExtent(reloaded.validation)).toBe(true);
+    // A legacy dataset (validation with no source.bbox) is grandfathered under the
+    // default extent — the un-brick-prod path.
+    expect(datasetMatchesExtent({ categoryCounts: {} })).toBe(true);
+  });
+
+  it("region change disables the category-delta baseline so fail-closed can be cleared by re-import", async () => {
+    // Seed an active dataset, then rewrite its stored region to ANOTHER city and blow
+    // up its category counts, so a fresh (small-count) import would trip the >50%-drop
+    // delta guard IF the old-city counts were used as a baseline.
+    const seeded = await importCatalogueSnapshot(snapshot(bodyAt("2099-04-01T00:00:00Z")), overrides);
+    await db().amenityDataset.update({
+      where: { id: seeded.datasetId },
+      data: {
+        validation: {
+          categoryCounts: { groceries: 500, pharmacies: 500, parks: 500, schools: 500, transit: 500 },
+          source: {
+            bbox: { minLng: 23.4, minLat: 46.6, maxLng: 23.7, maxLat: 46.9 },
+            pipelineVersion: -1, // force the idempotency short-circuit off too
+          },
+        },
+      },
+    });
+
+    // A genuinely different snapshot (new bytes ⇒ new checksum ⇒ not "unchanged").
+    // With the seeded dataset's region ≠ the configured extent, the baseline is null,
+    // so the huge→small category deltas must NOT abort the import.
+    const reimport = await importCatalogueSnapshot(
+      snapshot(bodyAt("2099-04-02T00:00:00Z")),
+      overrides,
+    );
+    expect(reimport.unchanged).toBe(false);
+    // New active dataset is region-correct again — fail-closed has been cleared.
+    const active = await db().amenityDataset.findUniqueOrThrow({
+      where: { id: reimport.datasetId },
+      select: { activeKey: true, validation: true },
+    });
+    expect(active.activeKey).toBe(1);
+    expect(datasetMatchesExtent(active.validation)).toBe(true);
+  });
+
+  it("STILL enforces the category-delta guard when the active dataset's region matches (proves the baseline-null is region-gated, not removed)", async () => {
+    const seeded = await importCatalogueSnapshot(snapshot(bodyAt("2099-05-01T00:00:00Z")), overrides);
+    // Keep the region matching the configured extent, but inflate the baseline counts.
+    await db().amenityDataset.update({
+      where: { id: seeded.datasetId },
+      data: {
+        validation: {
+          categoryCounts: { groceries: 500, pharmacies: 500, parks: 500, schools: 500, transit: 500 },
+          source: { bbox: LAUNCH_BBOX, pipelineVersion: -1 },
+        },
+      },
+    });
+    // Same-region baseline is used ⇒ the huge→small drop trips the delta guard.
+    await expect(
+      importCatalogueSnapshot(snapshot(bodyAt("2099-05-02T00:00:00Z")), overrides),
+    ).rejects.toBeInstanceOf(CatalogueImportError);
+  });
+
+  it("does NOT short-circuit as 'unchanged' when the active dataset's region no longer matches (defensive)", async () => {
+    const first = await importCatalogueSnapshot(snapshot(bodyAt("2099-06-01T00:00:00Z")), overrides);
+    // Rewrite ONLY the recorded region to another city, preserving the checksum /
+    // pipeline version / overrides checksum, so the idempotency short-circuit WOULD
+    // fire on an identical re-import but for the region gate.
+    const row = await db().amenityDataset.findUniqueOrThrow({
+      where: { id: first.datasetId },
+      select: { validation: true },
+    });
+    const mutated = structuredClone(row.validation) as { source: { bbox: unknown } };
+    mutated.source.bbox = { minLng: 23.4, minLat: 46.6, maxLng: 23.7, maxLat: 46.9 };
+    await db().amenityDataset.update({
+      where: { id: first.datasetId },
+      data: { validation: mutated as object },
+    });
+    // Re-import the IDENTICAL bytes + overrides: same checksum, pipeline, overrides —
+    // the short-circuit would return unchanged, but the active region no longer
+    // matches, so it must reprocess instead (clearing fail-closed).
+    const second = await importCatalogueSnapshot(snapshot(bodyAt("2099-06-01T00:00:00Z")), overrides);
+    expect(second.unchanged).toBe(false);
+    const active = await db().amenityDataset.findUniqueOrThrow({
+      where: { id: second.datasetId },
+      select: { validation: true },
+    });
+    expect(datasetMatchesExtent(active.validation)).toBe(true);
+  });
+
+  it("withActiveDataset FAILS CLOSED by construction: a region-mismatched active dataset yields null and the read callback never runs", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const first = await importCatalogueSnapshot(snapshot(bodyAt("2099-07-01T00:00:00Z")), overrides);
+    // Rewrite the active dataset's recorded region to another city.
+    const row = await db().amenityDataset.findUniqueOrThrow({
+      where: { id: first.datasetId },
+      select: { validation: true },
+    });
+    const mutated = structuredClone(row.validation) as { source: { bbox: unknown } };
+    mutated.source.bbox = { minLng: 23.4, minLat: 46.6, maxLng: 23.7, maxLat: 46.9 };
+    await db().amenityDataset.update({
+      where: { id: first.datasetId },
+      data: { validation: mutated as object },
+    });
+
+    let readRan = false;
+    const result = await withActiveDataset(async () => {
+      readRan = true;
+      return "SERVED";
+    });
+    // The gate refuses the wrong-region dataset without ever running the read — no
+    // wrong-city rows can be queried by any place-serving caller.
+    expect(result).toBeNull();
+    expect(readRan).toBe(false);
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("does not match the configured extent"));
+    errSpy.mockRestore();
   });
 });
 

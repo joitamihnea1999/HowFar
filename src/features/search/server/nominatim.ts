@@ -1,12 +1,12 @@
 import { getCachedSafe, setCachedSafe } from "@/lib/api-cache";
-import { BUCHAREST_BBOX } from "@/lib/bounds";
+import { LAUNCH_BBOX } from "@/lib/bounds";
 import { providerConfig, taggedCacheKey } from "@/lib/env";
 import { providerFetch, ProviderError, roundCoord, sha256Hex, USER_AGENT } from "@/lib/provider-http";
 
 // Nominatim viewbox is x1,y1,x2,y2 (two opposite corners); with bounded=1 it
 // restricts results to the box — biasing forward geocode to Bucharest so a
 // same-name hit elsewhere in Romania can't win and cause a false out-of-area.
-const VIEWBOX = `${BUCHAREST_BBOX.minLng},${BUCHAREST_BBOX.maxLat},${BUCHAREST_BBOX.maxLng},${BUCHAREST_BBOX.minLat}`;
+const VIEWBOX = `${LAUNCH_BBOX.minLng},${LAUNCH_BBOX.maxLat},${LAUNCH_BBOX.maxLng},${LAUNCH_BBOX.minLat}`;
 
 /**
  * Nominatim geocoding (server-side, cached). ToS: identifying User-Agent + ≤1

@@ -1,3 +1,4 @@
+import { datasetMatchesExtent, describeRegionMismatch } from "@/features/amenities/server/catalogue-region";
 import type { Prisma } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
 
@@ -120,6 +121,17 @@ export async function publishDataset(
  * Execute all reads for one response in a repeatable-read transaction and
  * pass the captured dataset ID explicitly. A concurrent publication therefore
  * cannot make counts and markers come from different snapshots.
+ *
+ * Region cross-check (task 013) is enforced HERE, by construction: the active
+ * pointer is read AND its region verified inside the same RepeatableRead snapshot
+ * that `read` will use, so every place-serving caller (`nearbyAmenities`,
+ * `catalogue-export`) fails closed on a region mismatch — a wrong-region dataset
+ * returns `null` (which both callers already map to a 503) and `read` never runs,
+ * so no wrong-city rows are queried, and there is no TOCTOU window between the check
+ * and the read. Returns `null` both when there is no active dataset and when the
+ * active dataset's region does not match the configured extent; the mismatch reason
+ * is logged server-side. Surfaces that do NOT go through here (`/api/catalogue-status`,
+ * `/api/ready`) check `datasetMatchesExtent` explicitly.
  */
 export async function withActiveDataset<T>(
   read: (tx: Prisma.TransactionClient, datasetId: string) => Promise<T>,
@@ -128,9 +140,13 @@ export async function withActiveDataset<T>(
     async (tx) => {
       const active = await tx.amenityDataset.findUnique({
         where: { activeKey: 1 },
-        select: { id: true },
+        select: { id: true, validation: true },
       });
       if (!active) return null;
+      if (!datasetMatchesExtent(active.validation)) {
+        console.error(`[catalogue] ${describeRegionMismatch(active.validation)}`);
+        return null;
+      }
       return read(tx, active.id);
     },
     { isolationLevel: "RepeatableRead" },

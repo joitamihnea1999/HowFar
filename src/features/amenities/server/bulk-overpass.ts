@@ -1,6 +1,6 @@
 import { AMENITY_CATEGORIES } from "@/features/amenities/amenities";
 import type { OverpassElement } from "@/features/amenities/server/overpass-client";
-import { BUCHAREST_BBOX } from "@/lib/bounds";
+import { LAUNCH_BBOX } from "@/lib/bounds";
 import { providerConfig } from "@/lib/env";
 import { ProviderError, USER_AGENT } from "@/lib/provider-http";
 
@@ -20,7 +20,7 @@ export interface BulkOverpassSnapshot {
 }
 
 export function buildBulkOverpassQuery(): string {
-  const { minLat, minLng, maxLat, maxLng } = BUCHAREST_BBOX;
+  const { minLat, minLng, maxLat, maxLng } = LAUNCH_BBOX;
   const bbox = `${minLat},${minLng},${maxLat},${maxLng}`;
   const clauses = AMENITY_CATEGORIES.flatMap((category) =>
     category.predicates.map(

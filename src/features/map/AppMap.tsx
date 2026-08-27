@@ -20,7 +20,7 @@ import {
   parseAmenitySelection,
   serializeAmenitySelection,
 } from "@/features/amenities/amenity-selection";
-import { BUCHAREST_MAX_BOUNDS } from "@/lib/bounds";
+import { LAUNCH_MAX_BOUNDS } from "@/lib/bounds";
 import { DEFAULT_RING_FILTER, type RingFilter } from "@/features/isochrones/isochrone-view";
 import { amenityBandsForFilter, amenityScopeLabel } from "@/features/isochrones/bands";
 import AmenityPanel from "@/features/map/AmenityPanel";
@@ -365,7 +365,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       // test compares `getClusterExpansionZoom` against it (task 061). Leaving it
       // implicit would silently decouple the two if MapLibre's default changed.
       maxZoom: MAP_MAX_ZOOM,
-      maxBounds: BUCHAREST_MAX_BOUNDS,
+      maxBounds: LAUNCH_MAX_BOUNDS,
       attributionControl: { compact: false },
     });
     mapRef.current = map;

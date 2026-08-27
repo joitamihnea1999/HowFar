@@ -7,11 +7,12 @@
  * and MapLibre's `maxBounds` read the SAME box — keep the three in sync via the
  * one env var.
  *
- * Isomorphic (no server-only deps): the server uses `inBucharest` to geofence
- * provider results; the client uses `BUCHAREST_MAX_BOUNDS` for `maxBounds`.
+ * Isomorphic (no server-only deps): the server uses `inLaunchArea` to geofence
+ * provider results; the client uses `LAUNCH_MAX_BOUNDS` for `maxBounds`.
  *
- * Names stay `BUCHAREST_*` in Phase 1 (value is config-driven; a region-neutral
- * rename is deferred to the multi-city phase). The extent is a SINGLE city on
+ * Names are region-neutral (`LAUNCH_*`) since task 013: the launch area is one
+ * city today but the VALUE is config-driven, so `BUCHAREST_*` was renamed to stop
+ * implying a hardcoded city. The extent is a SINGLE city on
  * purpose: the transit grid allocates memory proportional to the bbox span
  * (transit-grid.ts), so an all-country box would OOM — hence the per-axis span
  * cap below.
@@ -85,19 +86,68 @@ function resolveBbox(): Bbox {
   return parsed;
 }
 
-export const BUCHAREST_BBOX: Bbox = resolveBbox();
+export const LAUNCH_BBOX: Bbox = resolveBbox();
 
-export function inBucharest(lat: number, lng: number): boolean {
+export function inLaunchArea(lat: number, lng: number): boolean {
   return (
-    lat >= BUCHAREST_BBOX.minLat &&
-    lat <= BUCHAREST_BBOX.maxLat &&
-    lng >= BUCHAREST_BBOX.minLng &&
-    lng <= BUCHAREST_BBOX.maxLng
+    lat >= LAUNCH_BBOX.minLat &&
+    lat <= LAUNCH_BBOX.maxLat &&
+    lng >= LAUNCH_BBOX.minLng &&
+    lng <= LAUNCH_BBOX.maxLng
   );
 }
 
 /** MapLibre `maxBounds` shape: [[west, south], [east, north]]. */
-export const BUCHAREST_MAX_BOUNDS: [[number, number], [number, number]] = [
-  [BUCHAREST_BBOX.minLng, BUCHAREST_BBOX.minLat],
-  [BUCHAREST_BBOX.maxLng, BUCHAREST_BBOX.maxLat],
+export const LAUNCH_MAX_BOUNDS: [[number, number], [number, number]] = [
+  [LAUNCH_BBOX.minLng, LAUNCH_BBOX.minLat],
+  [LAUNCH_BBOX.maxLng, LAUNCH_BBOX.maxLat],
 ];
+
+/**
+ * Coerce an unknown value (e.g. a Bbox read back from a Prisma `Json` column)
+ * into a Bbox, or null if it is not one. Unlike `parseBbox` this takes an OBJECT
+ * (not a comma string) and does NOT enforce ordering or the single-city span cap —
+ * it validates a STORED box for shape/finiteness only, leaving "is this the right
+ * region" to `bboxesEqual`. Pure, never throws.
+ */
+export function coerceBbox(value: unknown): Bbox | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as Record<string, unknown>;
+  const { minLng, minLat, maxLng, maxLat } = v;
+  if (
+    !Number.isFinite(minLng) ||
+    !Number.isFinite(minLat) ||
+    !Number.isFinite(maxLng) ||
+    !Number.isFinite(maxLat)
+  ) {
+    return null;
+  }
+  return {
+    minLng: minLng as number,
+    minLat: minLat as number,
+    maxLng: maxLng as number,
+    maxLat: maxLat as number,
+  };
+}
+
+/**
+ * Exact equality of two boxes (null/undefined ⇒ not equal). Used to decide whether
+ * an active amenity dataset's recorded import bbox matches the resolved runtime
+ * extent (task 013).
+ *
+ * Exact — not epsilon — comparison is correct here and was verified empirically:
+ * the recorded bbox originates from the same `DEFAULT_BBOX` literal / same
+ * `NEXT_PUBLIC_MAP_BBOX` env as `LAUNCH_BBOX`, and probing local PostGIS showed the
+ * four default values (25.8 / 44.2 / 26.4 / 44.7) round-trip through the JSONB
+ * `Json` column byte-exact (text stays "25.8", `::float8` equals the literal). A
+ * genuine region change differs by whole degrees, never by float noise.
+ */
+export function bboxesEqual(a: Bbox | null | undefined, b: Bbox | null | undefined): boolean {
+  if (!a || !b) return false;
+  return (
+    a.minLng === b.minLng &&
+    a.minLat === b.minLat &&
+    a.maxLng === b.maxLng &&
+    a.maxLat === b.maxLat
+  );
+}

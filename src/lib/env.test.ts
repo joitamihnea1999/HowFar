@@ -384,7 +384,7 @@ describe("configCacheTag + taggedCacheKey", () => {
   });
 
   it("re-namespaces when the resolved extent changes (via a fresh module load)", async () => {
-    // The bbox component comes from the RESOLVED BUCHAREST_BBOX (build-consistent),
+    // The bbox component comes from the RESOLVED LAUNCH_BBOX (build-consistent),
     // not a raw runtime env read — so exercise it by re-importing with a stubbed
     // extent, which also proves the tag tracks the geofence rather than a var that
     // may be absent at runtime in a build-ARG container.
