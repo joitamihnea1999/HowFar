@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { layers, namedFlavor } from "@protomaps/basemaps";
 import { describe, expect, it } from "vitest";
 
@@ -50,7 +52,52 @@ describe("createMapStyle", () => {
       .protomaps;
     expect(protomaps.type).toBe("vector");
     expect(protomaps.url).toBe("pmtiles://http://localhost:8080/api/tiles");
-    expect(protomaps.attribution).toContain("openstreetmap.org/copyright");
+    // Every data source the basemap is BUILT from must be credited, not just OSM
+    // (Protomaps' basemaps LICENSE_DATA.md). OSM is ODbL-required; ESA WorldCover
+    // landcover (via Daylight) is credited because that data is BUNDLED in the
+    // served pmtiles archive (the dark flavor defines a landcover layer but fades
+    // it to opacity 0 above z7, so it does not paint at this map's zoom range —
+    // credit is for the distribution, not the render); Natural Earth is shown by
+    // owner decision. One string serves both the public cut and the self-built
+    // archive (same bundled sources).
+    const attribution = protomaps.attribution ?? "";
+    // Pin the OSM credit as an anchor with the RIGHT href↔text pairing, not a loose
+    // substring — a rewrite that plain-texts it or moves the URL to another anchor
+    // must fail.
+    expect(attribution).toMatch(
+      /<a href="https:\/\/www\.openstreetmap\.org\/copyright">OpenStreetMap<\/a>/,
+    );
+    // The ESA credit is the licence-critical one: assert the WHOLE block CONTIGUOUSLY
+    // in order — ESA-anchor → CC-BY-anchor → "modified" (CC BY 4.0 §3(a)(1)(B),
+    // Daylight vectorised ESA's raster) → Daylight-anchor. A loose `toContain` set
+    // would pass a broken rewrite like "… via Daylight · Natural Earth, modified"
+    // that strips the modification indication off the ESA credit.
+    expect(attribution).toMatch(
+      /Landcover &copy; <a href="https:\/\/esa-worldcover\.org\/en\/data-access">ESA WorldCover<\/a> \(<a href="https:\/\/creativecommons\.org\/licenses\/by\/4\.0\/">CC BY 4\.0<\/a>\), modified, via <a href="https:\/\/daylightmap\.org">Daylight<\/a>/,
+    );
+    // Natural Earth: pin its anchor too (the class is every credit anchor).
+    expect(attribution).toMatch(
+      /<a href="https:\/\/www\.naturalearthdata\.com">Natural Earth<\/a>/,
+    );
+  });
+
+  it("keeps the README Attribution section in sync with the shipped credit links (no lagging doc copy)", () => {
+    // The same credit fact lives in several places (this style string, tests,
+    // README, docs). It is easy for a copy to lag the shipped credit. This makes
+    // the README copy a CHECKED invariant: every source URL the shipped attribution
+    // links must also appear in README, so a future source/extent change (P4) that
+    // updates the map but forgets the README fails here.
+    const sources = createMapStyle("http://localhost/api/tiles").sources as Record<
+      string,
+      { attribution?: string }
+    >;
+    const attribution = sources.protomaps.attribution ?? "";
+    const hrefs = [...attribution.matchAll(/href="([^"]+)"/g)].map((m) => m[1]);
+    expect(hrefs.length).toBeGreaterThanOrEqual(5); // OSM, ESA, CC-BY, Daylight, Natural Earth
+    const readme = readFileSync(new URL("../../../README.md", import.meta.url), "utf8");
+    for (const href of hrefs) {
+      expect(readme, `README is missing the credit link ${href}`).toContain(href);
+    }
   });
 
   it("uses the protomaps-hosted glyphs and dark sprite, with exactly the dark/en basemap stack", () => {

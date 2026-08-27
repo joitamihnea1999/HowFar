@@ -38,8 +38,38 @@ export function createMapStyle(tilesUrl: string): maplibregl.StyleSpecification 
       protomaps: {
         type: "vector",
         url: `pmtiles://${tilesUrl}`,
+        // Credit the data sources the basemap is BUILT from, not just OSM. Both the
+        // public build.protomaps.com cut and the self-built `build-tiles.sh` archive
+        // bundle the same sources (see docs/SELFHOST.md), so this one string is
+        // correct for either `/api/tiles` backing. Sources per Protomaps' own
+        // basemaps LICENSE_DATA.md (durable copy: github.com/protomaps/basemaps @ the
+        // build-pinned commit a50c699, recorded in docker/selfhost/run-manifest.md):
+        //  - OpenStreetMap (ODbL) — required. Also covers the ODbL water/land
+        //    coastline polygons (osmdata.openstreetmap.de), which are OSM-derived.
+        //  - ESA WorldCover landcover (CC BY 4.0), distributed via Daylight. The dark
+        //    flavor DEFINES a `landcover` layer but fades it to opacity 0 above z7
+        //    (@protomaps/basemaps base_layers), and the city-extent `maxBounds`
+        //    (NEXT_PUBLIC_MAP_BBOX) keeps the camera above z7 today, so those pixels
+        //    do not paint at this extent — BUT the ESA data is BUNDLED in the pmtiles
+        //    archive we serve regardless, and a wider extent (P4) could drop the
+        //    floor to where it paints. Either way the credit is carried for the
+        //    distribution (owner: SHOW it). CC BY 4.0 requires indicating the data
+        //    was modified — Daylight vectorised ESA's raster, so the credit says
+        //    "modified". ESA's fuller "Contains modified Copernicus Sentinel data …"
+        //    acknowledgement + the exact WorldCover vintage live in README/docs and
+        //    at the linked data-access page; the vintage is not pinned in our build
+        //    (parked), so it is NOT asserted here.
+        //  - Natural Earth — public-domain ("crediting unnecessary"); shown by owner
+        //    decision.
+        // Mapzen POI-icon sprite (MIT) is hot-linked from protomaps.github.io
+        // (glyphs/sprite above), i.e. referenced not redistributed; its MIT notice is
+        // carried in README for good measure (docs/SELFHOST.md explains the basis).
         attribution:
-          '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+          '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' +
+          ' &middot; Landcover &copy; <a href="https://esa-worldcover.org/en/data-access">ESA WorldCover</a>' +
+          ' (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>), modified,' +
+          ' via <a href="https://daylightmap.org">Daylight</a>' +
+          ' &middot; <a href="https://www.naturalearthdata.com">Natural Earth</a>',
       },
     },
     layers: layers("protomaps", namedFlavor("dark"), { lang: "en" }),

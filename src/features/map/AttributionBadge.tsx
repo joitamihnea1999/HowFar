@@ -1,6 +1,7 @@
 /**
  * Data attribution — Transitous ToS requires a visible link to its sources
- * (basemap © OSM is shown by the MapLibre attribution control).
+ * (the basemap credits — OSM + ESA WorldCover landcover + Natural Earth — are
+ * shown by the MapLibre attribution control; see createMapStyle in map-setup.ts).
  */
 
 interface AttributionBadgeProps {

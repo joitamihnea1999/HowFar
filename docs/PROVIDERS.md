@@ -326,6 +326,16 @@ T&C above); a live TomTom layer would require an owner decision on a paid Permit
   client credentials**, full styling control (custom dark theme for the "visually striking"
   goal). Not "heavy geo infra": no extra server, just a file. Basemap style from
   `@protomaps/basemaps`.
+  **Attribution obligation (not just OSM):** the Protomaps basemap bundles more than OpenStreetMap —
+  **ESA WorldCover landcover under CC BY 4.0** (via Daylight; requires a visible credit + licence
+  link + a "modified" indication), Natural Earth (public-domain), and the Mapzen/`tangrams/icons` POI
+  sprite (MIT). These are shown by the map's attribution control (`src/features/map/map-setup.ts`) and
+  in README; a tile-source or extent change (e.g. P4 all-Romania) must re-check them. The **glyph
+  fonts and sprite** hot-linked from `protomaps.github.io/basemaps-assets` (`map-setup.ts` `glyphs`/
+  `sprite`) are *referenced, not redistributed* today, so no notice obligation attaches — but the
+  planned P5 "self-host the assets" step would make them redistributed, at which point their licences
+  (the sprite's Mapzen MIT, and the fonts' own licence — confirm it then) must be carried too. Details
+  + parked gaps (raw-archive metadata, exact ESA vintage) in `docs/SELFHOST.md` §Caveats.
   *Known gap (parked for M4):* font glyphs + sprite are still fetched by the browser from
   `protomaps.github.io/basemaps-assets` — keyless static files, so the constraint's key-safety
   intent holds, but the strict "all external calls happen server-side" reading does not yet;

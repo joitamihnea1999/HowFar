@@ -116,9 +116,16 @@ this repository.
 
 Map data © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors ·
 Basemap tiles: [Protomaps](https://protomaps.com) ·
+Basemap landcover © [ESA WorldCover](https://esa-worldcover.org/en/data-access) project ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)) — contains modified Copernicus Sentinel data processed by the ESA WorldCover consortium — vectorised and distributed via [Daylight](https://daylightmap.org) ·
+[Natural Earth](https://www.naturalearthdata.com) (public domain) ·
+Basemap POI icons derived from [tangrams/icons](https://github.com/tangrams/icons) © 2017 Mapzen, Linux Foundation ([MIT](https://opensource.org/license/mit)) ·
 Transit routing: [Transitous](https://transitous.org/sources/) ·
 Geocoding: [Nominatim](https://nominatim.org) ·
-Weather & air quality (planned): [Open-Meteo](https://open-meteo.com) (CC BY 4.0)
+Weather & air quality (planned): [Open-Meteo](https://open-meteo.com) ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/))
+
+The exact ESA WorldCover vintage (e.g. 2020 v100 vs 2021 v200) is not pinned in the current
+[self-hosted tile build](docs/SELFHOST.md); pin it from the Daylight landcover dataset and add the
+year to the acknowledgement before a commercial go-live.
 
 The amenity catalogue is a Derived Database made from OpenStreetMap data and is available as
 machine-readable GeoJSON through `/api/catalogue-export`. It is distributed under the

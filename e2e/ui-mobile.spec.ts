@@ -539,6 +539,15 @@ test("mobile shell: collapsed dock + peek sheet reclaim the map; state stays vis
     expect(box.y + box.height).toBeLessThanOrEqual(sheetBox.y + 2);
     expect(box.y).toBeGreaterThan(sheetBox.y - 120);
   }
+  // The basemap credits must be ACTUALLY READABLE on a narrow viewport, not
+  // collapsed behind MapLibre's compact "i" toggle (which defaults on at ≤640px
+  // unless attributionControl.compact===false). A role selector skips
+  // display:none, so this fails if the credit link is hidden — the real guard for
+  // the licence-required ESA WorldCover credit at mobile width, complementing the
+  // desktop DOM assertions in smoke.spec.ts.
+  await expect(
+    page.locator(".maplibregl-ctrl-attrib").getByRole("link", { name: "ESA WorldCover" }),
+  ).toBeVisible();
 
   // Pill → dock: one tap re-opens the full controls with focus in search.
   await pill.tap();

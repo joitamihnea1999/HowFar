@@ -59,8 +59,40 @@ test("landing page renders the map shell and finishes loading tiles", async ({ p
   // MapLibre `load` fired = style parsed + self-hosted pmtiles served via /api/tiles.
   await expect(map).toHaveAttribute("data-map-loaded", "true", { timeout: 30_000 });
 
-  // OSM attribution is a ToS requirement — assert it is really in the DOM.
-  await expect(page.locator(".maplibregl-ctrl-attrib")).toContainText("OpenStreetMap");
+  // Attribution is a licence requirement — assert the credits are really in the
+  // rendered DOM, not just the style object. OSM (ODbL); ESA WorldCover landcover
+  // credited with its licence name + link and a "modified" indication (CC BY 4.0,
+  // distributed via Daylight — the tiles bundle it); Natural Earth (public-domain,
+  // shown by owner decision). A unit test on the style object alone would stay
+  // green if the attribution control were removed or the credits regressed.
+  const attrib = page.locator(".maplibregl-ctrl-attrib");
+  // The "modified" indication must sit ON the ESA credit, contiguously between
+  // ESA WorldCover / CC BY 4.0 and Daylight — not just anywhere in the control
+  // (which a rewrite could satisfy while stripping it off the ESA credit).
+  await expect(attrib).toContainText(/ESA WorldCover.*CC BY 4\.0.*modified.*Daylight/);
+  // Each credit must be a real link with the right name↔href pairing, not plain
+  // text — the DOM-level counterpart of the unit test regexes. The class is every
+  // credit anchor, so Daylight and Natural Earth are pinned too.
+  await expect(attrib.getByRole("link", { name: "OpenStreetMap" })).toHaveAttribute(
+    "href",
+    "https://www.openstreetmap.org/copyright",
+  );
+  await expect(attrib.getByRole("link", { name: "ESA WorldCover" })).toHaveAttribute(
+    "href",
+    "https://esa-worldcover.org/en/data-access",
+  );
+  await expect(attrib.getByRole("link", { name: /CC BY 4\.0/ })).toHaveAttribute(
+    "href",
+    "https://creativecommons.org/licenses/by/4.0/",
+  );
+  await expect(attrib.getByRole("link", { name: "Daylight" })).toHaveAttribute(
+    "href",
+    "https://daylightmap.org",
+  );
+  await expect(attrib.getByRole("link", { name: "Natural Earth" })).toHaveAttribute(
+    "href",
+    "https://www.naturalearthdata.com",
+  );
 
   // MapLibre reports tile/source failures via console.error — a "loaded" map
   // that errored on sources must fail here, not pass silently.

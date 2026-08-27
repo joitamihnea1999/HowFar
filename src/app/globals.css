@@ -386,7 +386,7 @@ button,
 
   /* ONE bottom-clearance source (task 062): how far above the viewport bottom
      the result sheet's top edge sits at its current state. The MapLibre bottom
-     controls (incl. the OSM attribution) AND the Transitous badge both consume
+     controls (incl. the basemap attribution: OSM + ESA WorldCover + Natural Earth) AND the Transitous badge both consume
      this variable, so neither can float mid-map or disagree with the sheet. */
   .hf-map-shell[data-has-results="true"] {
     --hf-sheet-clearance: calc(min(30dvh, 14.5rem) + 3.25rem);

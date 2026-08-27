@@ -249,14 +249,41 @@ rm -rf data/osm data/selfhost                                        # reclaim d
 ## Caveats
 
 - **Transit is not self-hosted** (GTFS licence gate) — it keeps its current provider.
-- **Tile attribution is NOT yet complete for the self-built archive.** The protomaps/basemaps
-  build bundles more than OpenStreetMap — Natural Earth, OSM water/land polygons, and **Daylight
-  landcover** (ESA WorldCover / Overture), which carry their own visible-attribution requirements
-  (`data/selfhost/planetiler/basemaps/LICENSE_DATA.md`). The app's map currently shows only the
-  OpenStreetMap credit (`src/features/map/map-setup.ts`). **Before shipping the self-hosted tiles
-  commercially, the map attribution must be extended (or Daylight landcover excluded from the
-  build).** That is a UI/licensing change (touches `src/`) and is deliberately OUT of this
-  infra-only, byte-identical task — tracked for the region-UI / go-live phase.
+- **Tile attribution now credits every bundled source.** The protomaps/basemaps build bundles more
+  than OpenStreetMap — Natural Earth, OSM water/land polygons, and **Daylight landcover** (derived
+  from ESA WorldCover), which carry their own attribution requirements. (Our build takes landcover
+  from `daylight-landcover.gpkg`; it does **not** pass `--overture`, so no Overture Buildings/Places
+  layers are bundled — the upstream `LICENSE_DATA.md` "See the Overture Maps Attribution Guidelines"
+  pointer is for ESA's own prescribed wording, applied below.) The authoritative list is
+  protomaps/basemaps' own `LICENSE_DATA.md`; the local copy under
+  `data/selfhost/planetiler/basemaps/` is a transient build artifact (gitignored, removed by the
+  cleanup below), so cite the durable upstream at the build-pinned commit:
+  <https://github.com/protomaps/basemaps/blob/a50c699adc60a45c899971b1e11275e61f13bfbf/LICENSE_DATA.md>
+  (that commit is recorded in `docker/selfhost/run-manifest.md`). The map's attribution control
+  (`src/features/map/map-setup.ts`) credits OpenStreetMap (ODbL) — which also covers the ODbL
+  water/land coastline polygons (osmdata.openstreetmap.de), being OSM-derived — plus **ESA
+  WorldCover landcover under CC BY 4.0 with the licence link and a "modified" indication, via
+  Daylight** (CC BY 4.0 §3(a)(1)(B) requires flagging modification — Daylight vectorised ESA's
+  raster; the ESA link goes to ESA's data-access page, and README carries the fuller "contains
+  modified Copernicus Sentinel data … processed by the ESA WorldCover consortium" acknowledgement),
+  and Natural Earth (public-domain; shown by owner decision). The exact ESA WorldCover vintage is not
+  pinned in the current build (parked — add the year at go-live). Note the dark flavor *defines* a `landcover` layer
+  but fades it to opacity 0 above z7, and the city-extent `maxBounds` (`NEXT_PUBLIC_MAP_BBOX`) keeps
+  the camera above z7 today, so those pixels do not paint at this extent — the ESA data is
+  nonetheless **bundled in the served pmtiles archive** regardless, and a wider extent (P4) could
+  drop the floor to where it paints, so the CC BY 4.0 credit is carried for the distribution either
+  way. The same credit string serves the public build.protomaps.com cut and this self-built archive,
+  since both bundle the same sources. (Basis: the public cut's PMTiles metadata declares a
+  `landcover` vector layer — the same 9 source-layers as the self-built archive — and the bbox
+  extract retains the z0–z7 tiles where that layer is opaque; both run the same protomaps/basemaps
+  profile. This is a schema + same-profile argument, not a per-feature decode.) (The basemap POI-icon sprite is Mapzen/`tangrams/icons`, MIT;
+  it is hot-linked from `protomaps.github.io` — referenced, not redistributed — but its MIT notice
+  is carried in README's Attribution section for good measure.) The owner decision was to SHOW the
+  credits, not to drop Daylight
+  landcover from the build. **Still open (parked, tracked for go-live):** the raw `.pmtiles` archive
+  served by `/api/tiles` embeds only OSM in its own TileJSON metadata — a direct archive download
+  (bypassing the map) would not carry the ESA/Natural-Earth credit; embedding the full notice in the
+  archive metadata is a build-pipeline change beyond this UI task.
 - **Basemap glyphs + sprite** are still fetched keyless from `protomaps.github.io`
   (tracked polish item, `docs/PROVIDERS.md`) — only the tiles are self-hosted here.
 - **Run imports one at a time.** Peak RAM, not disk, is the constraint on a small box.
