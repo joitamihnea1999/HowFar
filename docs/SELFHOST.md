@@ -187,6 +187,60 @@ set the app is byte-identical to the public deployment.
 > against the wrong archive → a blank/garbled map. Hard-reload (empty cache) after switching,
 > or use a fresh origin/port. The parity run (§7) already uses a separate port for exactly this.
 
+## 6a — Day-2 dev loop (`npm run dev:selfhost`)
+
+Once the one-time import/build above (§1–§5) is done, this brings the serving engines up
+and starts the app against them in **one command** — no need to hand-merge the overlay into
+`.env` or start each engine yourself:
+
+```bash
+npm run dev:selfhost                 # up (app db + nominatim + ors + photon) then `next dev`
+npm run dev:selfhost -- --dry-run    # preflight only: report prerequisites, no side effects
+npm run dev:selfhost:down            # stop engines + dev db (named volumes preserved)
+```
+
+What it does, in order (`docker/selfhost/dev-selfhost.sh`):
+
+1. **Preflight (read-only, starts nothing).** Checks Docker is present, the built **host
+   artifacts** exist — the self-built tiles archive (`TILES_PMTILES_PATH`, default
+   `data/tiles/selfhost-romania.pmtiles`), the Photon index (`data/selfhost/photon/photon_data`)
+   and jar — the imported **engine volumes** exist (`howfar-selfhost_nominatim-data`,
+   `howfar-selfhost_ors-graphs`), and the required provider overlay keys are set. If anything
+   is missing it prints what to build and exits `2`, pointing back here — it will **not**
+   silently kick off the ~24-min Nominatim import that a bare `docker compose up` would after a
+   `down -v` or `rm -rf data/osm` (which leave the host files but drop the volumes). `--dry-run`
+   stops after this step. (Engine-volume verification needs the Docker daemon; if it's not
+   reachable the check is skipped, since `up` then fails fast anyway.)
+2. Brings up the app's dev Postgres (root `docker-compose.yml` `db`) and the provider serve
+   stack (`nominatim`, `ors`, `photon`).
+3. **Waits for the three engines to report `healthy`**, bounded by `SELFHOST_WAIT_SECS`
+   (default 300). If they don't — a fresh box still importing/building, or a crash — it exits
+   **without** starting the app, so the app is never pointed at dead engines. Raise the timeout
+   for a first cold serve on slow disks, or watch `docker compose -f docker/selfhost/docker-compose.yml logs -f nominatim ors`.
+4. Layers the provider overlay into the app's **process environment** (read straight from
+   `env.selfhost.example`, so the two never drift) and runs `next dev`. Next.js does not
+   override an env var already set in the process, so **`.env` is never touched** — it keeps
+   its public defaults, and only this command runs the app against the local engines. Your
+   existing `DATABASE_URL` / `AUTH_SECRET` in `.env` are still used (the overlay is providers
+   only). This is the automated equivalent of §6 without the merge-into-`.env` step. It also
+   prints a one-time **hard-reload** reminder: if this origin previously loaded a *different*
+   tile archive (e.g. the public Bucharest cut under a plain `npm run dev`), empty-cache reload
+   once or the map may render blank/garbled from stale byte ranges — the same cache trap §6
+   warns about.
+
+Stop the app with **Ctrl-C** (it runs in the foreground); stop everything the command started
+— the provider engines **and** the dev `db` — with `npm run dev:selfhost:down`, which runs
+`docker compose … stop` and **preserves the named volumes** so the next start is a ~15 s serve,
+not a ~24 min re-import. To keep the shared `db` running (another app is on :5433), stop only
+the engines with `docker compose -f docker/selfhost/docker-compose.yml --profile serve --profile import stop`.
+For a fuller teardown (remove containers, or delete the volumes) see [Teardown](#teardown).
+
+> **Not covered here.** `dev:selfhost` only starts the `db` **container**; applying the schema
+> (`prisma migrate deploy`) and importing the amenity catalogue (`npm run amenities:refresh`)
+> are the normal app setup (README Quick start), unchanged. And **transit is still not
+> self-hosted** — `/api/transit` and `/api/reach` keep their public provider (the MOTIS/GTFS
+> gate), so those routes hit the network even under `dev:selfhost`.
+
 ## 7 — Parity check (public vs local)
 
 The app reads provider env at process start, so run **two** instances from the SAME

@@ -7,8 +7,8 @@ score are planned next (not shipped yet).
 
 ![HowFar — public-transport reachability (15/30/45 min) for a central Bucharest address on the dark basemap](docs/screenshot.png)
 
-> **Status: M2 in progress — live at
-> [howfar-production-b31c.up.railway.app](https://howfar-production-b31c.up.railway.app).**
+> **Status: M2 in progress — runs locally; there is no public deployment right now**
+> (the earlier hosted preview is offline).
 > Working today: address search with type-ahead suggestions (or click anywhere on the map),
 > walking **and** public-transport isochrones (15/30/45 min), nearby essentials in five
 > categories, inspectable places and transit lines, and full route paths with named stops.
@@ -17,8 +17,8 @@ score are planned next (not shipped yet).
 > Transit reachability is computed in-process from per-stop travel times — no provider
 > offers transit isochrones. Foundation from
 > M0/M1 underneath: PostgreSQL/PostGIS + Prisma persistence, expiring provider cache, social
-> sign-in, tests + [CI green](https://github.com/joitamihnea1999/HowFar/actions), Railway
-> deploy over private networking. Next in M2: air-quality summary and the transparent
+> sign-in, tests + [CI green](https://github.com/joitamihnea1999/HowFar/actions), and a
+> deployment configuration with Postgres over private networking. Next in M2: air-quality summary and the transparent
 > livability score. Custom domain: not yet attached.
 > Docs: [`docs/BRIEF.md`](docs/BRIEF.md) (product brief) ·
 > [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (code tour, provider checklist) ·

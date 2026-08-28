@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:selfhost": "bash docker/selfhost/dev-selfhost.sh",
+    "dev:selfhost:down": "bash docker/selfhost/stop-selfhost.sh",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
@@ -17,8 +19,9 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
     "selfhost:harness-selftest": "node docker/selfhost/parity-check.mjs --self-test",
-    "check": "npm run security:google-keys && npm run lint && npm run typecheck && npm test && npm run selfhost:harness-selftest",
-    "check:ci": "npm run security:google-keys && npm run lint && npm run typecheck && npm run test:coverage && npm run build && npm run selfhost:harness-selftest"
+    "selfhost:script-check": "bash docker/selfhost/script-check.sh",
+    "check": "npm run security:google-keys && npm run lint && npm run typecheck && npm test && npm run selfhost:harness-selftest && npm run selfhost:script-check",
+    "check:ci": "npm run security:google-keys && npm run lint && npm run typecheck && npm run test:coverage && npm run build && npm run selfhost:harness-selftest && npm run selfhost:script-check"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.2",

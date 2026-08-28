@@ -15,7 +15,7 @@ import { createHash } from "node:crypto";
  */
 
 /** Identifies the app to providers that require a UA (Nominatim, Overpass). */
-export const USER_AGENT = "HowFar/1.0 (+https://howfar-production-b31c.up.railway.app)";
+export const USER_AGENT = "HowFar/1.0 (+https://github.com/joitamihnea1999/HowFar)";
 
 /** Thrown when an upstream provider fails (bad status, timeout, malformed body). */
 export class ProviderError extends Error {
