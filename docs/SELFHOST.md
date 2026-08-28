@@ -210,10 +210,10 @@ What it does, in order (`docker/selfhost/dev-selfhost.sh`):
    silently kick off the ~24-min Nominatim import that a bare `docker compose up` would after a
    `down -v` (drops the engine volumes) or `rm -rf data/osm` (drops the extract). `--dry-run`
    stops after this step. Two limits, kept honest: engine-volume verification needs the Docker
-   daemon (if it's unreachable the check is skipped and preflight says so, since `up` then fails
-   fast anyway), and it confirms the volumes *exist*, not that an import ran to completion — an
-   interrupted import leaves a volume behind, so watch the health wait on the first start after
-   an aborted import.
+   daemon — a `--dry-run` with the daemon down skips it and says so, but a real `dev:selfhost`
+   **refuses to start** when it can't verify the volumes (rather than risk a silent import) — and
+   it confirms the volumes *exist*, not that an import ran to completion; an interrupted import
+   leaves a volume behind, so watch the health wait on the first start after an aborted import.
 2. Brings up the app's dev Postgres (root `docker-compose.yml` `db`) and the provider serve
    stack (`nominatim`, `ors`, `photon`).
 3. **Waits for the dev `db` and the three engines to report `healthy`**, bounded by

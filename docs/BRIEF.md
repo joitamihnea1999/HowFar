@@ -1,6 +1,8 @@
 # HowFar — Neighborhood Livability Explorer
 
 > **As-built vs this brief:** shipped walk+transit isochrones, PostGIS amenity catalogue, map UX. Environment (Open-Meteo), 0–100 score, place-reviews, and several early stack notes (e.g. provisional MySQL) are goals or history — see `README.md` status and repo `ARCHITECTURE.md` for current code.
+>
+> **Hosting superseded (2026-08-29):** the brief's "Railway" / "deployed live on Railway with a custom domain" lines below are the original objective, not current state — the Railway preview is retired and there is no live deployment; the launch target is a self-managed Hetzner VPS (runs locally until then). See `README.md` for current status.
 
 **Build Brief**
 

@@ -107,20 +107,21 @@ if ! command -v docker >/dev/null 2>&1; then
   missing=1
 fi
 
-check_artifact() {   # $1 = path, $2 = -d (dir) | -f (file exists) | -s (file non-empty), $3 = description
+check_artifact() {   # $1 = path, $2 = -f (file) | -s (non-empty file) | -D (non-empty dir), $3 = description
   case "$2" in
-    -d) [ -d "$1" ] && { log "ok: $3 ($1)"; return; } ;;
     -f) [ -f "$1" ] && { log "ok: $3 ($1)"; return; } ;;
-    -s) [ -s "$1" ] && { log "ok: $3 ($1)"; return; } ;;   # exists AND non-empty (catches a truncated build)
+    -s) [ -s "$1" ] && { log "ok: $3 ($1)"; return; } ;;                       # exists AND non-empty
+    -D) [ -d "$1" ] && [ -n "$(ls -A "$1" 2>/dev/null)" ] && { log "ok: $3 ($1)"; return; } ;;  # dir with contents
   esac
   log "MISSING: $3 ($1) -- missing or empty; run the one-time build in docs/SELFHOST.md (§1-§5) before dev:selfhost."
   missing=1
 }
 # Host files first (pure filesystem — no docker), so a not-yet-built tree fails here fast.
-# The two large binary artifacts must be NON-EMPTY (a 0-byte archive/extract is a broken build).
+# Binary artifacts must be NON-EMPTY and the Photon index dir non-empty (a 0-byte/empty build
+# would pass a bare existence check but then stall or serve a broken map).
 check_artifact "$TILES"        -s "self-built tiles archive"
-check_artifact "$PHOTON_INDEX" -d "Photon index"
-check_artifact "$PHOTON_JAR"   -f "Photon jar"
+check_artifact "$PHOTON_INDEX" -D "Photon index"
+check_artifact "$PHOTON_JAR"   -s "Photon jar"
 check_artifact "$PBF"          -s "OSM extract (PBF)"
 
 # Required provider overlay keys — a partial overlay would let a provider silently fall
@@ -166,6 +167,15 @@ if [ "$DRY_RUN" -eq 1 ]; then
   log "           wait up to ${WAIT_SECS}s for db + engine health, then run the app with the overlay from ${OVERLAY}."
   log "--dry-run: no containers started, no app launched, .env untouched."
   exit 0
+fi
+
+# A real startup MUST have verified the engine volumes (daemon reachable). If the daemon was
+# unreachable at preflight it is skipped there for --dry-run convenience — but proceeding to a
+# real `up` could then create empty volumes and silently start the ~24-min import, so refuse.
+if [ "$volumes_verified" -ne 1 ]; then
+  log "Cannot start: the Docker daemon was unreachable at preflight, so engine volumes could not"
+  log "be verified — starting now risks a silent first-run import. Start Docker and re-run."
+  exit 2
 fi
 
 # ── Bring the stack up ────────────────────────────────────────────────────────

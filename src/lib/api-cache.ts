@@ -9,7 +9,7 @@ import { db } from "@/lib/db";
  * identity of a request.
  *
  * A small process-local L1 sits in front of Postgres so warm keys in the same
- * Node process avoid a DB round-trip (Railway single-instance friendly). L1 is
+ * Node process avoid a DB round-trip (single-instance friendly). L1 is
  * best-effort and bounded; multi-instance deployments still share via Postgres.
  */
 

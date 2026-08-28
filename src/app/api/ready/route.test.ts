@@ -22,7 +22,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllEnvs());
 
-describe("GET /api/ready (readiness — Railway healthcheck + Playwright gate)", () => {
+describe("GET /api/ready (readiness — deployment healthcheck + Playwright gate)", () => {
   it("200 {ready:true} when the database is reachable and the provider config parses", async () => {
     probeDb.mockResolvedValue(true);
     const res = await GET();

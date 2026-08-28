@@ -30,9 +30,10 @@ TypeScript (strict) · Next.js 16 (App Router, one full-stack repo) · Tailwind 
 MapLibre GL + self-hosted [Protomaps](https://protomaps.com) tiles · PostgreSQL 17/PostGIS 3.5 + Prisma 7 ·
 Auth.js v5 (Google/GitHub) · Vitest + Playwright · runs locally (no public host yet)
 
-Data (live): Nominatim (geocoding) · OpenRouteService (walking isochrones) ·
-[Transitous](https://transitous.org) / MOTIS (transit reachability) · a weekly OSM/Overpass
-amenity snapshot stored in PostGIS. **Planned:** Open-Meteo (climate + air quality) and the
+Data sources: Nominatim (geocoding) · OpenRouteService (walking isochrones) ·
+[Transitous](https://transitous.org) / MOTIS (transit reachability) · a periodically-imported
+OSM/Overpass amenity snapshot stored in PostGIS (`npm run amenities:refresh`; the retired deploy
+ran it weekly). **Planned:** Open-Meteo (climate + air quality) and the
 0–100 score. External calls are server-side and cached where appropriate; amenity discovery
 itself is a local spatial query, so nearby user clicks never hit Overpass. Tiles are served
 from a 25 MB Bucharest extract by the app itself — **no client-side API keys anywhere**.

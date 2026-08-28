@@ -7,7 +7,7 @@ import { withTimeout } from "@/lib/timeout";
 
 // Readiness: non-200 unless PostgreSQL is reachable (probeDb also proves PostGIS +
 // the migration history), the provider/region configuration parses, AND the active
-// amenity catalogue's recorded region matches the configured extent — Railway's
+// amenity catalogue's recorded region matches the configured extent — the deployment's
 // healthcheck target, so a deploy with a broken DATABASE_URL, a malformed provider
 // env var (task 007), or a catalogue belonging to a different city than the
 // configured extent (task 013) is reported unhealthy rather than passing the
@@ -44,7 +44,7 @@ export async function GET() {
   let regionOk = true;
   if (dbUp) {
     // Bounded like probeDb (2s): a locked/slow AmenityDataset read must DEGRADE the
-    // status, not hang the Railway readiness probe. A timeout or query error ⇒ not
+    // status, not hang the deployment's readiness probe. A timeout or query error ⇒ not
     // ready (fail closed — an unverifiable region must not pass).
     const probe = await withTimeout(activeDatasetRegionOk(), DB_PROBE_TIMEOUT_MS);
     if (!probe.ok) {

@@ -33,7 +33,7 @@ function buildConfig(): NextAuthConfig {
     adapter: PrismaAdapter(db()),
     providers,
     secret: env.authSecret,
-    // Railway terminates TLS at its proxy; the app must trust X-Forwarded-Host.
+    // A reverse proxy terminates TLS in deployment; the app must trust X-Forwarded-Host.
     trustHost: true,
   };
 }

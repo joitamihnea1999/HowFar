@@ -3,8 +3,9 @@
 # `check:ci` (and CI, .github/workflows/ci.yml) so a future edit that breaks them is caught
 # by a gate, not just the one-off manual run that first validated them.
 #
-# Hermetic: needs only bash + mktemp, and runs the child with an UNREACHABLE DOCKER_HOST so
-# it never touches a real daemon (the daemon-reachable branch is skipped); writes only to a
+# Hermetic: needs bash + mktemp + the docker CLI on PATH (the positive-control case reaches the
+# docker-present check), but NO running daemon — it forces an UNREACHABLE DOCKER_HOST so the
+# child never touches a real daemon (the daemon-reachable branch is skipped); writes only to a
 # private mktemp dir; parallel-safe. Coverage — each guard is watched-fail on its OWN
 # diagnostic (rule #3), not just on a shared exit 2:
 #   1. all three scripts parse                              -> bash -n
@@ -36,9 +37,10 @@ run_case() {
   [ -n "$sedprog" ] && sed -i "$sedprog" "$tmp/docker/selfhost/env.selfhost.example"
   if [ "$stub" = "1" ]; then
     mkdir -p "$tmp/data/tiles" "$tmp/data/selfhost/photon/photon_data" "$tmp/data/osm"
-    [[ " $skip " == *" tiles "* ]] || printf 'x' > "$tmp/data/tiles/selfhost-romania.pmtiles"
-    [[ " $skip " == *" jar "*   ]] || printf 'x' > "$tmp/data/selfhost/photon/photon.jar"
-    [[ " $skip " == *" pbf "*   ]] || printf 'x' > "$tmp/data/osm/romania-260824.osm.pbf"
+    [[ " $skip " == *" tiles "*  ]] || printf 'x' > "$tmp/data/tiles/selfhost-romania.pmtiles"
+    [[ " $skip " == *" jar "*    ]] || printf 'x' > "$tmp/data/selfhost/photon/photon.jar"
+    [[ " $skip " == *" photon "* ]] || printf 'x' > "$tmp/data/selfhost/photon/photon_data/marker"  # non-empty index dir
+    [[ " $skip " == *" pbf "*    ]] || printf 'x' > "$tmp/data/osm/romania-260824.osm.pbf"
   fi
   out="$(bash "$tmp/docker/selfhost/dev-selfhost.sh" --dry-run 2>&1)"; rc=$?
   rm -rf "$tmp"
@@ -63,4 +65,10 @@ echo "[script-check] overlay-key guard (artifacts present, NOMINATIM_BASE_URL bl
 set +e; out="$(run_case 1 's#^NOMINATIM_BASE_URL=.*#NOMINATIM_BASE_URL=""#')"; rc=$?; set -e
 assert "$rc" 2 "overlay key NOMINATIM_BASE_URL" "$out" "overlay-key"
 
-echo "[script-check] OK: scripts parse; host-artifact, OSM-extract, and overlay-key guards each fail loud (exit 2)."
+# Positive control: everything present + unmodified overlay must PASS (exit 0). Without this a
+# preflight that failed unconditionally would still satisfy the three fail cases above.
+echo "[script-check] positive control (all artifacts present, unmodified overlay) ..."
+set +e; out="$(run_case 1 "")"; rc=$?; set -e
+assert "$rc" 0 "Preflight OK" "$out" "positive-control"
+
+echo "[script-check] OK: scripts parse; 3 guards fail loud (exit 2) and the happy preflight passes (exit 0)."
