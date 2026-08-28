@@ -28,7 +28,7 @@ score are planned next (not shipped yet).
 
 TypeScript (strict) · Next.js 16 (App Router, one full-stack repo) · Tailwind CSS 4 ·
 MapLibre GL + self-hosted [Protomaps](https://protomaps.com) tiles · PostgreSQL 17/PostGIS 3.5 + Prisma 7 ·
-Auth.js v5 (Google/GitHub) · Vitest + Playwright · Railway
+Auth.js v5 (Google/GitHub) · Vitest + Playwright · runs locally (no public host yet)
 
 Data (live): Nominatim (geocoding) · OpenRouteService (walking isochrones) ·
 [Transitous](https://transitous.org) / MOTIS (transit reachability) · a weekly OSM/Overpass
@@ -68,8 +68,8 @@ npm run dev                 # http://localhost:3000
 
 ### Secret safety
 
-Keep real credentials only in ignored `.env` files locally and in Railway variables for
-deployment. Google credentials must remain server-side and must never use a `NEXT_PUBLIC_`
+Keep real credentials only in ignored `.env` files locally and in the deployment
+platform's environment variables when deployed. Google credentials must remain server-side and must never use a `NEXT_PUBLIC_`
 name. This clone uses the committed pre-commit scanner; enable it in another clone with
 `git config core.hooksPath .githooks`. CI repeats the scan against the complete Git history.
 

@@ -1,8 +1,10 @@
 # Architecture
 
 HowFar is a single Next.js (App Router) app: the map UI, the API routes and the
-data-provider clients live in one repo and deploy as one Railway app service backed
-by PostgreSQL/PostGIS, plus one short-lived weekly importer using the same code. Two rules shape everything:
+data-provider clients live in one repo and are built to deploy as one app service backed
+by PostgreSQL/PostGIS, plus one short-lived weekly importer using the same code. (Currently
+run locally — there is no live host; the earlier Railway preview is retired, launch target is
+a Hetzner VPS.) Two rules shape everything:
 
 1. **No external data call from the browser, ever.** Every provider request
    runs server-side, is rate-limited per provider (bucket `provider@host`), and is cached in PostgreSQL where appropriate — the

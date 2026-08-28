@@ -342,7 +342,11 @@ T&C above); a live TomTom layer would require an owner decision on a paid Permit
   self-hosting them in `public/` is the M4 polish item (also removes a third-party availability
   dependency).
 
-### Hosting — Railway (fixed by brief) — cost note
+### Hosting — Railway (RETIRED 2026-08-29; launch target Hetzner VPS, €0 until launch) — cost note
+
+> The Railway preview is retired (trial expired) and there is no live host today. The cost note
+> below is kept as historical context; the launch decision is a self-managed Hetzner VPS.
+
 - Pricing (<https://docs.railway.com/pricing/plans>): Trial = one-time $5 credit, services
   **pause** when it's spent or after 30 days → not suitable for a permanent CV link.
   **Hobby = $5/month including $5 of usage** — the realistic tier for app + PostGIS; the weekly
@@ -389,6 +393,6 @@ T&C above); a live TomTom layer would require an owner decision on a paid Permit
 | # | Item | Status (2026-07-21) |
 | --- | --- | --- |
 | 1 | Transitous courtesy hello before heavy isochrone use | **Owner skipped** (accepted risk; still non-commercial, cached, Bucharest-only) |
-| 2 | ORS free account → `ORS_API_KEY` (server-side) | **Done** — live in prod |
-| 3 | Railway Hobby plan ($5/mo) when trial ends | **Open** (trial pause ~2026-08-14 informational) |
+| 2 | ORS free account → `ORS_API_KEY` (server-side) | **Done** (server-side key; no live prod today — deployment retired) |
+| 3 | Hosting at launch | **Superseded** — owner ruling 2026-08-29: Hetzner VPS at launch, €0 until then; Railway trial expired/retired |
 | 4 | Keep the GitHub repo public (Transitous open-source-client + portfolio) | **Done** — public at github.com/joitamihnea1999/HowFar |

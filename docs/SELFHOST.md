@@ -208,14 +208,18 @@ What it does, in order (`docker/selfhost/dev-selfhost.sh`):
    `howfar-selfhost_ors-graphs`), and the required provider overlay keys are set. If anything
    is missing it prints what to build and exits `2`, pointing back here — it will **not**
    silently kick off the ~24-min Nominatim import that a bare `docker compose up` would after a
-   `down -v` or `rm -rf data/osm` (which leave the host files but drop the volumes). `--dry-run`
-   stops after this step. (Engine-volume verification needs the Docker daemon; if it's not
-   reachable the check is skipped, since `up` then fails fast anyway.)
+   `down -v` (drops the engine volumes) or `rm -rf data/osm` (drops the extract). `--dry-run`
+   stops after this step. Two limits, kept honest: engine-volume verification needs the Docker
+   daemon (if it's unreachable the check is skipped and preflight says so, since `up` then fails
+   fast anyway), and it confirms the volumes *exist*, not that an import ran to completion — an
+   interrupted import leaves a volume behind, so watch the health wait on the first start after
+   an aborted import.
 2. Brings up the app's dev Postgres (root `docker-compose.yml` `db`) and the provider serve
    stack (`nominatim`, `ors`, `photon`).
-3. **Waits for the three engines to report `healthy`**, bounded by `SELFHOST_WAIT_SECS`
-   (default 300). If they don't — a fresh box still importing/building, or a crash — it exits
-   **without** starting the app, so the app is never pointed at dead engines. Raise the timeout
+3. **Waits for the dev `db` and the three engines to report `healthy`**, bounded by
+   `SELFHOST_WAIT_SECS` (default 300). If they don't — a fresh box still importing/building, a
+   cold-starting db, or a crash — it exits **without** starting the app, so the app is never
+   pointed at a cold db or dead engines. Raise the timeout
    for a first cold serve on slow disks, or watch `docker compose -f docker/selfhost/docker-compose.yml logs -f nominatim ors`.
 4. Layers the provider overlay into the app's **process environment** (read straight from
    `env.selfhost.example`, so the two never drift) and runs `next dev`. Next.js does not
