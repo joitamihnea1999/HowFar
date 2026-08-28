@@ -178,7 +178,7 @@ app's `maxBounds`.
 
 Merge `docker/selfhost/env.selfhost.example` into `.env` (keep your existing
 `DATABASE_URL` / `AUTH_SECRET`), then run the app as usual. With none of those vars
-set the app is byte-identical to the public deployment.
+set the app is byte-identical to the default public-provider configuration (what the retired public preview ran).
 
 > **Tile cache after repointing `TILES_PMTILES_PATH`.** `/api/tiles` serves every archive
 > from the same URL with `Cache-Control: max-age=86400`, so if you point an already-loaded

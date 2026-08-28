@@ -52,8 +52,10 @@ SELF_COMPOSE="docker/selfhost/docker-compose.yml"
 APP_COMPOSE="docker-compose.yml"
 OVERLAY="docker/selfhost/env.selfhost.example"
 
-# Compose project name (docker-compose.yml `name:`), used to resolve the named volumes.
-SELF_PROJECT="howfar-selfhost"
+# Compose project name, used to resolve the named volumes. Compose honours
+# COMPOSE_PROJECT_NAME over the compose-file `name:` key, so respect it here too or the
+# volume check would inspect the wrong project's volumes.
+SELF_PROJECT="${COMPOSE_PROJECT_NAME:-howfar-selfhost}"
 # Imported engine volumes — present once §2/§4 have run, removed by `down -v`.
 VOLUMES=("${SELF_PROJECT}_nominatim-data" "${SELF_PROJECT}_ors-graphs")
 # Built host artifacts (gitignored). PHOTON index+jar live under data/selfhost/photon/.
@@ -105,17 +107,21 @@ if ! command -v docker >/dev/null 2>&1; then
   missing=1
 fi
 
-check_artifact() {   # $1 = path, $2 = -f|-d, $3 = human description
-  if [ "$2" = "-d" ] && [ -d "$1" ]; then log "ok: $3 ($1)"; return; fi
-  if [ "$2" = "-f" ] && [ -f "$1" ]; then log "ok: $3 ($1)"; return; fi
-  log "MISSING: $3 ($1) -- run the one-time build in docs/SELFHOST.md (§1-§5) before dev:selfhost."
+check_artifact() {   # $1 = path, $2 = -d (dir) | -f (file exists) | -s (file non-empty), $3 = description
+  case "$2" in
+    -d) [ -d "$1" ] && { log "ok: $3 ($1)"; return; } ;;
+    -f) [ -f "$1" ] && { log "ok: $3 ($1)"; return; } ;;
+    -s) [ -s "$1" ] && { log "ok: $3 ($1)"; return; } ;;   # exists AND non-empty (catches a truncated build)
+  esac
+  log "MISSING: $3 ($1) -- missing or empty; run the one-time build in docs/SELFHOST.md (§1-§5) before dev:selfhost."
   missing=1
 }
 # Host files first (pure filesystem — no docker), so a not-yet-built tree fails here fast.
-check_artifact "$TILES"        -f "self-built tiles archive"
+# The two large binary artifacts must be NON-EMPTY (a 0-byte archive/extract is a broken build).
+check_artifact "$TILES"        -s "self-built tiles archive"
 check_artifact "$PHOTON_INDEX" -d "Photon index"
 check_artifact "$PHOTON_JAR"   -f "Photon jar"
-check_artifact "$PBF"          -f "OSM extract (PBF)"
+check_artifact "$PBF"          -s "OSM extract (PBF)"
 
 # Required provider overlay keys — a partial overlay would let a provider silently fall
 # back to its PUBLIC host while we claim local routing.

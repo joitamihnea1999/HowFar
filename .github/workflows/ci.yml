@@ -33,6 +33,9 @@ jobs:
       # Hermetic geometry-instrument self-test (no Docker/stack needed): guards the
       # parity harness's area/residual/verdict math so a refactor can't silently break it.
       - run: npm run selfhost:harness-selftest
+      # Hermetic dev:selfhost script checks (no Docker/stack needed): bash -n + fail-loud
+      # preflight guards (host-artifact / OSM-extract / overlay-key).
+      - run: npm run selfhost:script-check
 
   e2e:
     name: e2e (Playwright + PostGIS)
