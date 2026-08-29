@@ -71,6 +71,25 @@ export async function applyEmulation(page) {
   return client;
 }
 
+// Read the UNMASKED WebGL renderer for the page's GL context. On a display-less CI/dev host
+// this is SwiftShader (software rasterization), which materially inflates GL-bound metrics
+// (pan/zoom fps especially) — so every report records it and the audit discloses it. Returns
+// { renderer, software } where `software` is true for SwiftShader/llvmpipe/software backends.
+export async function webglRenderer(page) {
+  try {
+    const renderer = await page.evaluate(() => {
+      const cv = document.createElement("canvas");
+      const gl = cv.getContext("webgl") || cv.getContext("experimental-webgl");
+      if (!gl) return "NO_WEBGL";
+      const ext = gl.getExtension("WEBGL_debug_renderer_info");
+      return ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : "UNKNOWN";
+    });
+    return { renderer, software: /swiftshader|llvmpipe|software|swrast/i.test(renderer) };
+  } catch {
+    return { renderer: "UNAVAILABLE", software: null };
+  }
+}
+
 export async function closeBrowser(ctx) {
   try {
     if (ctx.chrome) {

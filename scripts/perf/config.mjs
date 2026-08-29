@@ -49,6 +49,13 @@ export const TEST_ORIGIN = { lat: 44.4268, lng: 26.1025 };
 // Real, varied Bucharest inputs so each COLD sample is a distinct ApiCache key AND a valid
 // query that exercises the real provider path (not a 404 on gibberish). We cycle a fixed
 // list + a small coord jitter, so cold is representative first-touch latency, not error-path.
+//
+// ⚠ RE-RUNNABILITY: the coord-jittered endpoints (reverse/isochrone/car/amenities) are unique
+// every run, so they are genuinely cold on each run. suggest/geocode use a FIXED list, and
+// ApiCache persists (Photon 7d, Nominatim 30d) — so a SECOND harness run without a cache
+// flush measures those two as WARM, not cold. For a true cold re-measure of suggest/geocode,
+// flush first:  docker exec howfar-postgis psql -U howfar -d howfar -c 'DELETE FROM "ApiCache";'
+// The run-api-latency runner prints this reminder.
 const COLD_STREETS = [
   "Bulevardul Magheru", "Calea Victoriei", "Strada Lipscani", "Bulevardul Unirii",
   "Calea Dorobanti", "Strada Batistei", "Bulevardul Dacia", "Strada Franceza",

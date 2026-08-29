@@ -1,25 +1,31 @@
-// Runtime profile of the three hot interactions (deliverable 3):
+// Runtime profile of the three hot interactions (deliverable 3), repeated over N runs:
 //   A. address select → ring reveal
 //   B. mode toggle (walk → car)
-//   C. pan/zoom gesture
-// For each we capture main-thread long-task time, and React COMMIT count. For (C) we also
-// capture frame cadence (median fps + worst frame) during the gesture.
+//   C. pan/zoom gesture  (real TOUCH: one-finger pan + two-finger pinch, via CDP)
+// For each we capture main-thread long-task time and React COMMIT count; for (C) also frame
+// cadence (median fps + worst frame) during the gesture, against an equal-length IDLE control.
 //
 // React commit counting works WITHOUT touching app code: we install a minimal
 // __REACT_DEVTOOLS_GLOBAL_HOOK__ before any script runs; production React still calls
-// onCommitFiberRoot on every commit if the hook is present (this is what DevTools relies
-// on). A commit == one React render pass reaching the DOM. The owner's architecture claim
-// is that pan/zoom is render-free — i.e. interaction C should produce ~0 commits.
+// onCommitFiberRoot on every commit if the hook is present. A commit == one render pass. The
+// owner's architecture claim is that pan/zoom is render-free — interaction C should add no
+// commits over idle.
+//
+// Reported numbers are the MEDIAN across PERF_RUNS runs (each a fresh page load), with the
+// per-run range, so run-to-run variance is visible (not a single-shot claim).
+//
+// CAVEAT recorded in every report: on a display-less host the WebGL renderer is SwiftShader
+// (software rasterization), which inflates the pan/zoom fps figure — real-device re-measure
+// is mandatory for that row, not advisory.
 import { writeFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { openBrowser, closeBrowser } from "./browser.mjs";
-import { TARGET_URL, BUDGETS, median, percentile } from "./config.mjs";
+import { openBrowser, closeBrowser, webglRenderer } from "./browser.mjs";
+import { TARGET_URL, RUNS, BUDGETS, median, percentile } from "./config.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 const INSTRUMENT = () => {
-  // React commit counter (installed before React loads).
   const hook = {
     supportsFiber: true,
     renderers: new Map(),
@@ -34,16 +40,12 @@ const INSTRUMENT = () => {
   };
   Object.defineProperty(window, "__REACT_DEVTOOLS_GLOBAL_HOOK__", { value: hook, configurable: false });
   window.__perfCommits = 0;
-
-  // Long-task observer (cumulative).
   window.__longtasks = [];
   try {
     new PerformanceObserver((list) => {
       for (const e of list.getEntries()) window.__longtasks.push(e.duration);
     }).observe({ type: "longtask", buffered: true });
   } catch {}
-
-  // Frame recorder (rAF interval sampling), started/stopped on demand.
   window.__frameRec = { on: false, times: [] };
   const tick = (t) => {
     if (window.__frameRec.on) window.__frameRec.times.push(t);
@@ -72,17 +74,62 @@ async function delta(page, fn, label) {
   return { label, wallMs, ...m };
 }
 
-async function main() {
-  const ctx = await openBrowser();
-  const { page } = ctx;
-  await page.evaluateOnNewDocument(INSTRUMENT);
+const readFrames = (page) =>
+  page.evaluate(() => {
+    window.__frameRec.on = false;
+    const t = window.__frameRec.times;
+    const d = [];
+    for (let i = 1; i < t.length; i++) d.push(t[i] - t[i - 1]);
+    return d;
+  });
+const startFrames = (page) => page.evaluate(() => {
+  window.__frameRec = { on: true, times: [] };
+});
+function frameStats(raw) {
+  // Keep real stalls (a 500 ms frozen frame is exactly what the worst-frame budget targets);
+  // drop only clearly-bogus intervals (rAF paused when the tab is backgrounded, > 5 s).
+  const intervals = raw.filter((x) => x > 0 && x < 5000);
+  const medFrame = median(intervals);
+  return {
+    frames: intervals.length,
+    medianFrameMs: +medFrame.toFixed(2),
+    medianFps: +(1000 / medFrame).toFixed(1),
+    maxFrameMs: +Math.max(...intervals, 0).toFixed(2),
+    p95FrameMs: +percentile(intervals, 95).toFixed(2),
+    framesOver32ms: intervals.filter((x) => x > BUDGETS.panZoomMaxFrameMs).length,
+  };
+}
 
-  const results = [];
+// ---- CDP touch helpers (drive MapLibre's Touch* handlers, the real mobile path) ----
+async function touchPan(client, cx, cy) {
+  const pt = (x, y) => [{ x: Math.round(x), y: Math.round(y) }];
+  await client.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: pt(cx, cy) });
+  for (let i = 1; i <= 30; i++) {
+    await client.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: pt(cx - i * 4, cy - i * 2) });
+    await new Promise((r) => setTimeout(r, 16));
+  }
+  await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+}
+async function touchPinch(client, cx, cy) {
+  // Two fingers starting close together, spreading apart → pinch-zoom in.
+  const two = (d) => [
+    { x: Math.round(cx - d), y: Math.round(cy), id: 0 },
+    { x: Math.round(cx + d), y: Math.round(cy), id: 1 },
+  ];
+  await client.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: two(20) });
+  for (let i = 1; i <= 20; i++) {
+    await client.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: two(20 + i * 6) });
+    await new Promise((r) => setTimeout(r, 24));
+  }
+  await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+}
+
+async function oneRun(page, client) {
   await page.goto(TARGET_URL, { waitUntil: "networkidle0", timeout: 60000 });
   await page.waitForSelector('[data-testid="app-map"] canvas', { timeout: 30000 });
-  await new Promise((r) => setTimeout(r, 1500)); // let the initial camera settle
+  await new Promise((r) => setTimeout(r, 1500));
 
-  // ---- A. address select → ring reveal ----
+  // A. address select → ring reveal
   const a = await delta(
     page,
     async () => {
@@ -92,17 +139,13 @@ async function main() {
       await page.waitForSelector('[role="option"]', { timeout: 15000 });
       await page.click('[role="option"]');
       await iso;
-      await new Promise((r) => setTimeout(r, 2500)); // ring reveal animation + amenities
+      await new Promise((r) => setTimeout(r, 2500));
     },
     "A: address select → ring reveal",
   );
-  results.push(a);
 
-  // ---- B. mode toggle (walk → car) ----
-  // On the mobile shell, selecting an address COLLAPSES the top command dock to a
-  // StatePill to give the map the screen (shell.dock === "collapsed"). The Travel-mode
-  // control only re-mounts when the pill is expanded, so expand it FIRST (setup, outside
-  // the measured window) — otherwise the toggle isn't in the DOM.
+  // B. mode toggle (walk → car). On mobile the dock collapses to a state-pill after
+  // selection; expand it first (setup, outside the measured window) to re-mount ModeToggle.
   const pill = await page.$('[data-testid="state-pill"]');
   if (pill) {
     await pill.click();
@@ -114,23 +157,27 @@ async function main() {
     async () => {
       const car = page.waitForResponse((r) => /\/api\/car/.test(r.url()), { timeout: 15000 }).catch(() => null);
       const btns = await page.$$('[role="group"][aria-label="Travel mode"] button');
-      if (btns.length >= 3) await btns[2].click(); // walk[0] transit[1] car[2]
+      if (btns.length < 3) throw new Error("mode toggle: fewer than 3 mode buttons found — interaction cannot be measured");
+      await btns[2].click(); // walk[0] transit[1] car[2]
       await car;
       await new Promise((r) => setTimeout(r, 2000));
     },
     "B: mode toggle (walk→car)",
   );
-  results.push(b);
+  // Fail loudly unless the mode actually changed — a silently-missed click would report a
+  // bogus "toggle" result.
+  const carPressed = await page.$eval(
+    '[role="group"][aria-label="Travel mode"] button:nth-child(3)',
+    (el) => el.getAttribute("aria-pressed"),
+  ).catch(() => null);
+  if (carPressed !== "true") throw new Error(`mode toggle did NOT switch to car (aria-pressed=${carPressed}) — refusing to report a bogus interaction`);
 
-  // ---- C. pan/zoom gesture (should be render-free) ----
-  // Find a point that actually hits the map canvas (not the command dock or result sheet).
-  // If the drag started on an overlay the map wouldn't move and we'd falsely read ~60fps
-  // idle — so verify elementFromPoint lands on the canvas before dragging.
+  // C. pan/zoom (touch). Settle first so the idle window is truly idle.
+  await new Promise((r) => setTimeout(r, 2500));
   const box = await page.$eval('[data-testid="app-map"] canvas', (el) => {
     const r = el.getBoundingClientRect();
     return { x: r.x, y: r.y, w: r.width, h: r.height };
   });
-  const cx = box.x + box.w / 2;
   const pick = await page.evaluate(
     (bx, by, bw, bh) => {
       for (const frac of [0.5, 0.55, 0.45, 0.6, 0.4, 0.65]) {
@@ -140,120 +187,107 @@ async function main() {
       }
       return { y: by + bh * 0.5, hit: false };
     },
-    box.x,
-    box.y,
-    box.w,
-    box.h,
+    box.x, box.y, box.w, box.h,
   );
-  if (!pick.hit) console.error("[profile] WARNING: could not find a clear canvas point; pan may hit an overlay");
+  if (!pick.hit) throw new Error("pan/zoom: no clear canvas point found (overlays cover the map) — refusing to report a gesture that may hit an overlay");
+  const cx = box.x + box.w / 2;
   const cy = pick.y;
 
-  const readFrames = () =>
-    page.evaluate(() => {
-      window.__frameRec.on = false;
-      const t = window.__frameRec.times;
-      const d = [];
-      for (let i = 1; i < t.length; i++) d.push(t[i] - t[i - 1]);
-      return d;
-    });
-  const frameStats = (raw) => {
-    const intervals = raw.filter((x) => x > 0 && x < 1000);
-    const medFrame = median(intervals);
-    return {
-      frames: intervals.length,
-      medianFrameMs: +medFrame.toFixed(2),
-      medianFps: +(1000 / medFrame).toFixed(1),
-      maxFrameMs: +Math.max(...intervals, 0).toFixed(2),
-      p95FrameMs: +percentile(intervals, 95).toFixed(2),
-      framesOver32ms: intervals.filter((x) => x > BUDGETS.panZoomMaxFrameMs).length,
-    };
-  };
+  await startFrames(page);
+  const idle = await delta(page, async () => new Promise((r) => setTimeout(r, 3500)), "IDLE baseline");
+  idle._frames = frameStats(await readFrames(page));
 
-  // Let the mode-toggle's ring reveal + amenity placement fully settle so the idle window
-  // is genuinely idle (not measuring the tail of interaction B).
-  await new Promise((r) => setTimeout(r, 2500));
-
-  // Idle BASELINE (control): same ~3.5s window, no input. Establishes the throttled render
-  // ceiling and the ambient React-commit rate, so "render-free gesture" means gesture
-  // commits are no more than idle commits — a single settle-commit is not per-frame churn.
-  await page.evaluate(() => {
-    window.__frameRec = { on: true, times: [] };
-  });
-  const idle = await delta(page, async () => new Promise((r) => setTimeout(r, 3500)), "IDLE baseline (no input)");
-  idle._frames = frameStats(await readFrames());
-
-  await page.evaluate(() => {
-    window.__frameRec = { on: true, times: [] };
-  });
+  await startFrames(page);
   const c = await delta(
     page,
     async () => {
-      // Pan: a slow drag across the map (mouse == MapLibre DragPan handler).
-      await page.mouse.move(cx, cy);
-      await page.mouse.down();
-      for (let i = 1; i <= 30; i++) {
-        await page.mouse.move(cx - i * 4, cy - i * 2);
-        await new Promise((r) => setTimeout(r, 16));
-      }
-      await page.mouse.up();
-      // Zoom: a few wheel steps.
-      for (let i = 0; i < 8; i++) {
-        await page.mouse.wheel({ deltaY: -120 });
-        await new Promise((r) => setTimeout(r, 60));
-      }
+      await touchPan(client, cx, cy);
+      await new Promise((r) => setTimeout(r, 200));
+      await touchPinch(client, cx, cy);
       await new Promise((r) => setTimeout(r, 400));
     },
-    "C: pan/zoom gesture",
+    "C: pan/zoom (touch)",
   );
-  Object.assign(c, frameStats(await readFrames()));
-  c.idleCommits = idle.commits;
-  c.idleMedianFps = idle._frames.medianFps;
-  results.splice(2, 0, idle); // keep idle before the gesture in the printed order
-  results.push(c);
+  Object.assign(c, frameStats(await readFrames(page)));
 
+  return { a, b, idle, c };
+}
+
+async function main() {
+  const ctx = await openBrowser();
+  const { page } = ctx;
+  const client = await page.createCDPSession();
+  await page.evaluateOnNewDocument(INSTRUMENT);
+
+  const gl = await (async () => {
+    await page.goto(TARGET_URL, { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => {});
+    return webglRenderer(page);
+  })();
+
+  const runs = [];
+  for (let i = 0; i < RUNS; i++) {
+    process.stderr.write(`[profile] run ${i + 1}/${RUNS} ...\n`);
+    runs.push(await oneRun(page, client));
+  }
+
+  // Aggregate: median (+ range) across runs of each per-run figure.
+  const across = (sel) => runs.map(sel);
+  const agg = (xs) => ({ median: +median(xs).toFixed(2), min: +Math.min(...xs).toFixed(2), max: +Math.max(...xs).toFixed(2) });
+
+  const panZoom = {
+    medianFps: agg(across((r) => r.c.medianFps)),
+    maxFrameMs: agg(across((r) => r.c.maxFrameMs)),
+    framesOver32ms: agg(across((r) => r.c.framesOver32ms)),
+    commitsDuringGesture: agg(across((r) => r.c.commits)),
+    idleCommits: agg(across((r) => r.idle.commits)),
+    idleFps: agg(across((r) => r.idle._frames.medianFps)),
+    longtaskMs: agg(across((r) => r.c.longtaskMs)),
+  };
+  const interactionA = { commits: agg(across((r) => r.a.commits)), longtaskMs: agg(across((r) => r.a.longtaskMs)) };
+  const interactionB = { commits: agg(across((r) => r.b.commits)), longtaskMs: agg(across((r) => r.b.longtaskMs)) };
+
+  const renderFree = runs.every((r) => r.c.commits <= r.idle.commits);
   const report = {
     takenAt: new Date().toISOString(),
     target: TARGET_URL,
+    runs: RUNS,
     device: ctx.emulated ? "emulated (4x CPU, Slow 4G, mobile viewport)" : "real-android (attached)",
     emulationBased: ctx.emulated,
+    webglRenderer: gl.renderer,
+    softwareWebgl: gl.software,
+    gesture: "touch (one-finger pan + two-finger pinch, via CDP Input.dispatchTouchEvent)",
     note:
-      "React COMMIT count via an injected __REACT_DEVTOOLS_GLOBAL_HOOK__ (prod React still " +
-      "fires onCommitFiberRoot). Interaction C (pan/zoom) is expected render-free (~0 commits) " +
-      "if the controller architecture keeps gestures out of React. Frame cadence via rAF sampling.",
-    interactions: results,
-    panZoom: {
-      medianFps: c.medianFps,
-      maxFrameMs: c.maxFrameMs,
-      p95FrameMs: c.p95FrameMs,
-      framesOver32ms: c.framesOver32ms,
-      totalFrames: c.frames,
-      commitsDuringGesture: c.commits,
-      idleCommitsSameWindow: c.idleCommits,
-      idleMedianFps: c.idleMedianFps,
-      budgets: { medianFps: BUDGETS.panZoomMedianFps, maxFrameMs: BUDGETS.panZoomMaxFrameMs },
-      verdictFps: c.medianFps >= BUDGETS.panZoomMedianFps ? "PASS" : "FAIL",
-      verdictMaxFrame: c.maxFrameMs <= BUDGETS.panZoomMaxFrameMs ? "PASS" : "FAIL",
-      // Render-free == the gesture adds no React commits beyond the ambient idle rate.
-      renderFree: c.commits <= c.idleCommits,
-      renderFreeNote: `gesture ${c.commits} commit(s) vs idle ${c.idleCommits} in an equal window`,
-    },
+      "Median (+range) across N runs. React commits via injected __REACT_DEVTOOLS_GLOBAL_HOOK__. " +
+      (gl.software
+        ? "WebGL is SOFTWARE (SwiftShader) on this host — the pan/zoom fps is inflated by software rasterization; real-device re-measure is MANDATORY for that row."
+        : "WebGL renderer recorded above."),
+    perRun: runs.map((r, i) => ({
+      run: i + 1,
+      A: { commits: r.a.commits, longtaskMs: Math.round(r.a.longtaskMs) },
+      B: { commits: r.b.commits, longtaskMs: Math.round(r.b.longtaskMs) },
+      idle: { fps: r.idle._frames.medianFps, commits: r.idle.commits },
+      panZoom: { fps: r.c.medianFps, maxFrameMs: r.c.maxFrameMs, over32: r.c.framesOver32ms, commits: r.c.commits },
+    })),
+    interactionA,
+    interactionB,
+    panZoom,
+    renderFree,
+    verdictFps: panZoom.medianFps.median >= BUDGETS.panZoomMedianFps ? "PASS" : "FAIL",
+    verdictMaxFrame: panZoom.maxFrameMs.median <= BUDGETS.panZoomMaxFrameMs ? "PASS" : "FAIL",
   };
 
   const outDir = join(HERE, "results");
   mkdirSync(outDir, { recursive: true });
   writeFileSync(join(outDir, "runtime-profile.json"), JSON.stringify(report, null, 2));
 
-  console.log(`\n=== RUNTIME PROFILE — ${report.device} ===`);
-  for (const r of results) {
-    console.log(`\n${r.label}`);
-    console.log(`  wall ${r.wallMs} ms · React commits ${r.commits} · main-thread long-task ${Math.round(r.longtaskMs)} ms (${r.longtaskCount} tasks)`);
-    if (r._frames) console.log(`  idle: median ${r._frames.medianFps} fps · worst ${r._frames.maxFrameMs} ms (throttled render ceiling)`);
-    if (r.medianFps !== undefined)
-      console.log(`  pan/zoom: median ${r.medianFps} fps (${r.medianFrameMs} ms/frame) · worst ${r.maxFrameMs} ms · p95 ${r.p95FrameMs} ms · frames>32ms: ${r.framesOver32ms}/${r.frames}`);
-  }
-  console.log(`\nGesture render-free (gesture commits ≤ idle commits): ${report.panZoom.renderFree ? "YES ✓ (claim holds — " + report.panZoom.renderFreeNote + ")" : "NO ✗ — " + report.panZoom.renderFreeNote + " (claim in doubt)"}`);
-  console.log(`pan/zoom median fps ${report.panZoom.medianFps} (budget ≥55 → ${report.panZoom.verdictFps}) · worst frame ${report.panZoom.maxFrameMs} ms (budget ≤32 → ${report.panZoom.verdictMaxFrame})`);
-  if (report.emulationBased) console.log(`[EMU] emulation-based — re-measure on a real Android (see README).`);
+  console.log(`\n=== RUNTIME PROFILE — ${report.device}, median of ${RUNS} runs ===`);
+  console.log(`WebGL renderer: ${gl.renderer}${gl.software ? "  ⚠ SOFTWARE (inflates pan/zoom fps)" : ""}`);
+  console.log(`A address→rings: ${interactionA.commits.median} commits, ${Math.round(interactionA.longtaskMs.median)} ms long-task`);
+  console.log(`B mode toggle  : ${interactionB.commits.median} commits, ${Math.round(interactionB.longtaskMs.median)} ms long-task`);
+  console.log(`Idle baseline  : ${panZoom.idleFps.median} fps, ${panZoom.idleCommits.median} commits`);
+  console.log(`Pan/zoom (touch): median ${panZoom.medianFps.median} fps [${panZoom.medianFps.min}–${panZoom.medianFps.max}] (budget ≥55 → ${report.verdictFps}) · worst ${panZoom.maxFrameMs.median} ms [${panZoom.maxFrameMs.min}–${panZoom.maxFrameMs.max}] (budget ≤32 → ${report.verdictMaxFrame})`);
+  console.log(`Gesture render-free (commits ≤ idle every run): ${renderFree ? "YES ✓ (claim holds)" : "NO ✗"} — gesture commits ${panZoom.commitsDuringGesture.min}–${panZoom.commitsDuringGesture.max} vs idle ${panZoom.idleCommits.min}–${panZoom.idleCommits.max}`);
+  if (report.emulationBased) console.log(`[EMU] emulation-based${gl.software ? " + SOFTWARE WebGL" : ""} — re-measure on a real Android (see README).`);
   console.log(`Wrote ${join(outDir, "runtime-profile.json")}`);
 
   await closeBrowser(ctx);

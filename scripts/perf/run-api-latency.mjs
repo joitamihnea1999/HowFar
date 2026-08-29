@@ -82,8 +82,12 @@ async function main() {
     device: ctx.emulated ? "throttled" : "unthrottled (stack latency; add real-device network RTT on-device)",
     note:
       "cold = ApiCache miss (fresh key per sample) → full provider/PostGIS round trip; warm = " +
-      "ApiCache hit. Budget verdict on warm p95. Transit/reach excluded (not self-hosted). " +
-      "Real-device network RTT (~50-150ms on 4G) adds on top of these local numbers.",
+      "ApiCache hit. Budget verdict on COLD p95 (first-touch). Transit/reach excluded (not " +
+      "self-hosted). Real-device network RTT (~50-150ms on 4G) adds on top of these local " +
+      "numbers. NB the amenities endpoint's cold cost INCLUDES a cold ORS isochrone call " +
+      "(resolveClip→walkingIsochrone), not just the PostGIS intersect. These are single-" +
+      "request/serial numbers, not load-tested. Re-running the harness without flushing " +
+      "ApiCache turns fixed-list cold keys (suggest/geocode) warm — see the cache-flush note.",
     endpoints: out,
   };
 
@@ -92,6 +96,8 @@ async function main() {
   writeFileSync(join(outDir, "api-latency.json"), JSON.stringify(report, null, 2));
 
   console.log(`\n=== API LATENCY (browser → local stack, ${SAMPLES} samples/cell, unthrottled) ===`);
+  console.log(`NB cold suggest/geocode use fixed keys + ApiCache persists — for a true cold RE-RUN, first:`);
+  console.log(`   docker exec howfar-postgis psql -U howfar -d howfar -c 'DELETE FROM "ApiCache";'`);
   console.log(`endpoint     cold p50/p95      warm p50/p95     budget   cold-p95 verdict`);
   for (const r of out) {
     const cold = r.cold ? `${r.cold.p50}/${r.cold.p95}`.padEnd(14) : "—".padEnd(14);

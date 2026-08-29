@@ -8,10 +8,12 @@
 // (screenEmulation disabled, throttlingMethod 'provided') — see README.
 import lighthouse from "lighthouse";
 import { launch } from "chrome-launcher";
+import puppeteer from "puppeteer-core";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { TARGET_URL, RUNS, IS_REAL_DEVICE, CDP_PORT, BUDGETS, median } from "./config.mjs";
+import { webglRenderer } from "./browser.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -52,6 +54,18 @@ async function main() {
     port = chrome.port;
   }
 
+  // Record the WebGL renderer once (software rasterization on a display-less host inflates
+  // paint-bound metrics like LCP/TBT). Best-effort; never blocks the run.
+  let gl = { renderer: "unknown", software: null };
+  if (!IS_REAL_DEVICE) {
+    try {
+      const b = await puppeteer.connect({ browserURL: `http://localhost:${port}`, defaultViewport: null });
+      const pg = (await b.pages())[0] ?? (await b.newPage());
+      gl = await webglRenderer(pg);
+      b.disconnect();
+    } catch {}
+  }
+
   const runs = [];
   for (let i = 0; i < RUNS; i++) {
     process.stderr.write(`[lighthouse] run ${i + 1}/${RUNS} ...\n`);
@@ -72,6 +86,8 @@ async function main() {
     target: TARGET_URL,
     device: IS_REAL_DEVICE ? "real-android (provided throttling)" : "emulated (Lighthouse mobile preset: Moto G-class, 4x CPU, Slow 4G, simulated)",
     emulationBased: !IS_REAL_DEVICE,
+    webglRenderer: gl.renderer,
+    softwareWebgl: gl.software,
     runs,
     medians,
     budgets: { ttiMs: BUDGETS.ttiMs, lighthouseMobile: BUDGETS.lighthouseMobile },
@@ -92,6 +108,7 @@ async function main() {
   console.log(`TBT               : ${Math.round(medians.tbtMs)} ms`);
   console.log(`CLS               : ${medians.cls?.toFixed?.(3)}`);
   console.log(`FCP / SpeedIndex  : ${Math.round(medians.fcpMs)} ms / ${Math.round(medians.speedIndexMs)} ms`);
+  if (!IS_REAL_DEVICE) console.log(`WebGL renderer   : ${gl.renderer}${gl.software ? "  ⚠ SOFTWARE (inflates paint-bound metrics)" : ""}`);
   if (report.emulationBased) console.log(`[EMU] emulation-based — re-measure on a real Android (see README).`);
   console.log(`Wrote ${join(outDir, "lighthouse.json")}`);
 

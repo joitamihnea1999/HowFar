@@ -8,16 +8,23 @@ follow-up task; the gap list below is that task's work plan.
 - **Providers:** local self-host stack (Nominatim / Photon / ORS / self-built pmtiles) via
   the `docker/selfhost` overlay; catalogue = **8,774 places** imported from Overpass.
 - **Emulated device:** Lighthouse "mobile" preset — Moto G-class, **4× CPU** slowdown +
-  **Slow 4G** (simulated). Runtime profile uses the same 4× CPU + 4G via CDP.
+  **Slow 4G** (simulated). Runtime profile uses the same 4× CPU + 4G via CDP, median of 5
+  runs, with **real touch gestures** (one-finger pan + two-finger pinch via CDP touch events).
+- **⚠ WebGL renderer:** `SwiftShader` (software rasterization) — this measurement host has no
+  GPU, so all WebGL is CPU-rendered. This **inflates GL-bound metrics**, the pan/zoom fps
+  above all (and, more mildly, LCP/TBT). It is an additional confound stacked on the 4× CPU
+  throttle. **A real Android has a real GPU**, so the on-device numbers will be materially
+  better — real-device re-measurement is therefore **mandatory**, not advisory, for pan/zoom.
 - **Tooling:** Lighthouse 12.8.2, puppeteer-core 24.43.1, chrome-launcher 1.2.1, Chrome 150.
 - **Harness:** `scripts/perf/` (re-runnable; one command re-measures on a real Android — see
-  §"Re-measure on a real device"). Raw results: `scripts/perf/results/*.json`.
+  §"Re-measure on a real device"). Raw results: `scripts/perf/results/*.json` (gitignored).
 
-> **[EMU] = emulation-based.** Every number tagged `[EMU]` was taken on a throttled
-> desktop emulator and **must be re-measured on a real Android** before it is treated as the
-> shipping number. The pan/zoom fps number is the most emulation-sensitive (the 4× CPU
-> throttle dominates it); the bundle-size and API-latency numbers are not device-emulated and
-> are firm (API latency still needs real-network RTT added — see its note).
+> **[EMU] = emulation-based.** Every number tagged `[EMU]` was taken on a throttled,
+> **software-WebGL** desktop emulator and **must be re-measured on a real Android** before it
+> is treated as the shipping number. The pan/zoom fps number is the most emulation-sensitive
+> — it is hit by BOTH the 4× CPU throttle AND software rasterization, so treat 15 fps as a
+> pessimistic floor, not the real-device figure. Bundle-size numbers are device-independent
+> and firm; API-latency numbers are not device-emulated (still need real-network RTT added).
 
 ---
 
@@ -26,13 +33,15 @@ follow-up task; the gap list below is that task's work plan.
 | # | Budget | Measured | Verdict | Suspected cause | Proposed fix | Effort |
 |---|--------|----------|---------|-----------------|--------------|--------|
 | 1 | **TTI ≤ 2.5 s** (mid-range, 4G) | **7.72 s** `[EMU]` | ❌ FAIL (~3×) | 470 KB gz JS (mostly MapLibre) parsed + executed on the main thread before the map is interactive; MapLibre is eagerly loaded on first paint | Defer MapLibre off the critical path: `next/dynamic(AppMap, { ssr:false })` behind a lightweight map skeleton, so first interactive doesn't wait on the 327 KB engine chunk | **M** |
-| 2 | **Initial JS ≤ 350 KB gz** (incl. MapLibre) | **470.7 KB gz** | ❌ FAIL (+34%) | MapLibre+pmtiles **327 KB gz** (statically imported), react-dom 70 KB, app+vendor 74 KB; **nothing lazy-loaded** | Same root fix as #1 (lazy MapLibre → initial ≈ 143 KB gz). Optionally route-split the amenity/reach controllers | **M** |
+| 2 | **Initial JS ≤ 350 KB gz** (incl. MapLibre) | **470.7 KB gz** | ❌ FAIL (+34%) | MapLibre+pmtiles **327 KB gz** (statically imported), react-dom 70 KB, app+vendor 74 KB; **nothing lazy-loaded** | Same root fix as #1. **Caveat:** a naive `next/dynamic` that still renders the map immediately keeps MapLibre in the initial download (this audit counts everything fetched at `networkidle0` as "initial"), so the ~143 KB figure only holds if MapLibre is deferred behind a real boundary (idle/interaction/skeleton-then-hydrate) — the follow-up task must re-measure, not assume | **M** |
 | 3 | **Lighthouse mobile ≥ 90** | **67** `[EMU]` | ❌ FAIL | Composite of #1/#2 — TBT **2386 ms** dominates the score (main-thread blocked by JS parse/exec) | Fixing #1/#2 lifts TBT and TTI together; expect the score to move most from the MapLibre-defer alone | **M** (same work as #1) |
-| 4 | **Pan/zoom ≥ 55 fps median, no frame > 32 ms** | **20 fps median, worst 83 ms** `[EMU]` | ❌ FAIL | MapLibre **GL scene repaint** (ring fill/line + amenity symbol/label layers) under the 4× CPU throttle. **Not React** (0 commits during the gesture — the controller architecture keeps gestures render-free ✓) and **not DOM markers** (amenities are a GeoJSON GL layer). Idle is a clean 60 fps | **Re-measure on a real device FIRST** — the 4× throttle likely explains most of the gap. If it still fails on-device: reduce per-frame GL work (simplify ring geometry / label density, `symbol-sort-key`, cap amenity symbols by zoom) | **Re-measure (S), then L if needed** |
-| 5 | **API p95 — suggest ≤ 150 ms** | cold **393 ms** / warm 4 ms | ❌ FAIL (tail) | Photon cold-query **tail** spikes (p50 is 52 ms — fine); warm is a cache hit | Investigate Photon cold tail (JVM/query warmup); consider a tiny server-side prefetch/warm on first keystroke. Low user impact (p50 fine) | **S/M** |
-| 6 | **API p95 — geocode ≤ 300 ms** | cold **149 ms** / warm 2 ms | ✅ PASS | — | — | — |
-| 7 | **API p95 — isochrone ≤ 800 ms** | cold **183 ms** / warm 3 ms | ✅ PASS | — | — | — |
-| 8 | **API p95 — amenities ≤ 400 ms** | cold **865 ms** / warm 6 ms | ❌ FAIL (2.2×) | PostGIS spatial intersect of the reach polygon against **8,774 places**, cold (p50 already 795 ms) | `EXPLAIN ANALYZE` the query; verify the GiST index is used; consider simplifying the reach polygon before the intersect, a `representativePoint` pre-filter, or caching per (mode,pace,cell) | **M** |
+| 4 | **Pan/zoom ≥ 55 fps median, no frame > 32 ms** | **15 fps median [15–15], worst 150 ms [133–150]** `[EMU, SOFTWARE-GL]` (touch, median of 5) | ❌ FAIL — but instrument-confounded, see cause | Two stacked confounds inflate this: **(a) software WebGL (SwiftShader)** — no GPU on the host, so every frame is CPU-rasterized; **(b) 4× CPU throttle**. The residual real cost is MapLibre GL scene repaint (ring fill/line + amenity symbol/label layers). **Not React** (0 commits during the gesture, every run — the controller architecture keeps gestures render-free ✓) and **not DOM markers** (amenities are a GeoJSON GL layer). Idle is a clean 60 fps | **Re-measure on a real device (real GPU) FIRST — the software-GL confound likely explains most of the gap and this row may PASS on-device.** Only if it still fails: reduce per-frame GL work (simplify ring geometry / label density, `symbol-sort-key`, cap amenity symbols by zoom) | **Re-measure (S), then L only if it still fails** |
+| 5 | **API p95 — suggest ≤ 150 ms** | cold **393 ms** / warm 4 ms | ❌ FAIL (tail) | Photon cold-query **tail** spikes (p50 is 52 ms — fine); warm is a cache hit. **Open question:** cold uses partial 3–6 char prefixes (real typing) while warm uses a full string — the tail may be prefix-search cost (broader index scan), which is orthogonal to cache/JVM warmth and would not be fixed by warming | Confirm the cause (prefix cost vs JVM warmup) with server-side Photon timing before choosing a fix; low user impact (p50 fine) | **S/M** |
+| 6 | **API p95 — geocode ≤ 300 ms** | cold **149 ms** / warm 2 ms | ✅ PASS¹ | — | — | — |
+| 7 | **API p95 — isochrone ≤ 800 ms** | cold **183 ms** / warm 3 ms | ✅ PASS¹ | — | — | — |
+| 8 | **API p95 — amenities ≤ 400 ms** | cold **865 ms** / warm 6 ms | ❌ FAIL (2.2×) | **Compound**, not pure PostGIS: the endpoint first makes a cold ORS isochrone call (`resolveClip`→`walkingIsochrone`, ~180 ms cold, see #7) and only then runs the PostGIS spatial intersect of the reach polygon against **8,774 places** — so the PostGIS portion is ≈ 865−180 ≈ **~685 ms** (still over budget) | Decompose with server-side timing first; then on the PostGIS term: `EXPLAIN ANALYZE`, verify the GiST index is used, simplify the reach polygon before the intersect, a `representativePoint` pre-filter, or cache per (mode,pace,cell). The shared cold-isochrone cost also argues for reusing the mode's already-computed rings | **M** |
+
+¹ **PASS = single-request, serial, local-stack latency** — not load-tested. Under real concurrent multi-user load (or with real-network RTT added) these could differ; the follow-up work should not treat them as headroom-proven.
 
 **Additional measured metrics (context, not owner budgets):**
 
@@ -50,10 +59,11 @@ follow-up task; the gap list below is that task's work plan.
 ## The single highest-leverage fix
 
 Gaps **#1, #2, #3** (and much of LCP) are **one root cause**: MapLibre GL (327 KB gz) is on
-the initial critical path and blocks the main thread. Deferring it off first-load — a dynamic
-import of the map with a skeleton — is expected to move all three budgets at once and is the
-recommended first move for the follow-up task. Gaps **#4** (pan/zoom) and **#8** (amenities
-cold) are independent and each needs its own investigation.
+the initial critical path and blocks the main thread. Deferring it off first-load — behind a
+real idle/interaction boundary, not just a `next/dynamic` that renders immediately (see gap
+#2's caveat) — should move all three budgets at once and is the recommended first move for
+the follow-up task, which must **re-measure** rather than assume the projected numbers. Gaps
+**#4** (pan/zoom — re-measure on real GPU first) and **#8** (amenities cold) are independent.
 
 ## Detail
 
@@ -66,13 +76,17 @@ cold) are independent and each needs its own investigation.
   browser pulls over the wire (`transferSize` == gz), cross-checked against `gzip` of each
   on-disk chunk. They agree.
 
-### Runtime profile (three hot interactions)
-- **Address select → ring reveal:** 17 React commits, 517 ms main-thread long-task.
-- **Mode toggle (walk→car):** 3 commits, 3018 ms long-task (car ring render + amenity re-placement).
-- **Pan/zoom:** 20 fps median, worst frame 83 ms, 44/84 frames > 32 ms, **0 React commits**.
+### Runtime profile (three hot interactions — median of 5 runs, real touch gestures)
+- **Address select → ring reveal:** 17 React commits, ~680 ms main-thread long-task.
+- **Mode toggle (walk→car):** 3 commits, ~2860 ms long-task (car ring render + amenity re-placement).
+- **Pan/zoom (touch pan + pinch):** 15 fps median [15–15 across runs], worst frame 150 ms
+  [133–150], **0 React commits every run**. Measured with SwiftShader software WebGL — treat
+  as a pessimistic floor (see the WebGL-renderer note at the top).
 - **Idle baseline:** 60 fps, 0 commits, 0 ms long-task.
-- **Render-free gesture claim: HOLDS** — pan/zoom adds no React commits over idle (0 == 0).
-  The frame-rate gap is MapLibre GL repaint under the CPU throttle, not re-renders.
+- **Render-free gesture claim: HOLDS** — pan/zoom adds no React commits over idle (0 vs 0,
+  every run). The frame-rate gap is MapLibre GL repaint under software-GL + CPU throttle, not
+  re-renders. Gestures are driven as real touch events (CDP `Input.dispatchTouchEvent`), so
+  MapLibre's `Touch*` handlers (the actual mobile path), not the mouse/wheel handlers.
 
 ### API latency (browser → local stack, 12 samples/cell, unthrottled)
 - Cold = fresh ApiCache key (real varied Bucharest inputs) → provider/PostGIS round trip.
@@ -107,6 +121,14 @@ gap). Bundle size is device-independent (firm as measured). API latency should b
 over a real radio to capture network RTT.
 
 ## What measurement could not settle (for the follow-up task)
-- Whether pan/zoom actually fails on real hardware, or only under the 4× emulator throttle.
-- The amenities query plan — needs `EXPLAIN ANALYZE` on the live PostGIS to name the exact cost.
-- The Photon cold-tail cause behind the suggest p95 spike (p50 is fine).
+- Whether pan/zoom actually fails on real hardware, or only under the software-GL + 4× CPU
+  emulator. **This is the biggest open question** — the 15 fps was measured with software
+  rasterization (no GPU on the host), so a real-GPU device could pass outright.
+- The amenities query plan — needs `EXPLAIN ANALYZE` on the live PostGIS to name the exact
+  PostGIS cost after subtracting the cold-isochrone term (~180 ms).
+- The Photon cold-tail cause behind the suggest p95 spike — prefix-search cost vs JVM/cache
+  warmup (p50 is fine either way).
+- Whether the projected MapLibre-defer bundle/TTI wins hold — depends on a real deferral
+  boundary, and must be re-measured, not assumed.
+- Load behavior: all API numbers are single-request/serial; concurrent multi-user latency is
+  out of scope here.
