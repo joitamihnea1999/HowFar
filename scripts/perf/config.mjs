@@ -56,13 +56,27 @@ export const TEST_ORIGIN = { lat: 44.4268, lng: 26.1025 };
 // flush measures those two as WARM, not cold. For a true cold re-measure of suggest/geocode,
 // flush first:  docker exec howfar-postgis psql -U howfar -d howfar -c 'DELETE FROM "ApiCache";'
 // The run-api-latency runner prints this reminder.
+// ≥40 distinct real Bucharest streets/landmarks so a single run's cold cells (SAMPLES=30)
+// are ALL unique keys — a true p95 (index 28/30), not the max of a tiny sample, and genuinely
+// cold without a DB flush as long as the run's keys weren't queried before (flush for repeats).
 const COLD_STREETS = [
-  "Bulevardul Magheru", "Calea Victoriei", "Strada Lipscani", "Bulevardul Unirii",
-  "Calea Dorobanti", "Strada Batistei", "Bulevardul Dacia", "Strada Franceza",
-  "Calea Mosilor", "Bulevardul Carol I", "Strada Doamnei", "Calea Grivitei",
-  "Strada Academiei", "Bulevardul Kogalniceanu", "Piata Romana", "Piata Victoriei",
+  "Strada Blanari", "Strada Selari", "Strada Gabroveni", "Strada Covaci", "Strada Sepcari",
+  "Bulevardul Nicolae Balcescu", "Strada Edgar Quinet", "Strada Ion Ghica", "Strada Doamnei",
+  "Strada Smardan", "Strada Stavropoleos", "Strada Postei", "Bulevardul Regina Elisabeta",
+  "Strada Brezoianu", "Strada Matei Millo", "Strada Constantin Mille", "Strada Luterana",
+  "Strada Berzei", "Calea Plevnei", "Strada Stirbei Voda", "Bulevardul Schitu Magureanu",
+  "Strada Vasile Lascar", "Strada Icoanei", "Strada Polona", "Strada Viitorului",
+  "Strada Toamnei", "Strada Traian", "Strada Mantuleasa", "Strada Negustori",
+  "Bulevardul Ferdinand", "Calea Calarasilor", "Strada Popa Nan", "Strada Labirint",
+  "Strada Delea Veche", "Bulevardul Basarabia", "Strada Matei Voievod", "Strada Vaselor",
+  "Strada Lizeanu", "Strada Maica Domnului", "Strada Reinvierii", "Strada Doamna Ghica",
 ];
-const COLD_SUGGEST = ["Magh", "Victor", "Dorob", "Unir", "Lips", "Bati", "Franc", "Mosil", "Grivi", "Acade", "Roma", "Carol"];
+const COLD_SUGGEST = [
+  "Blana", "Selar", "Gabro", "Covac", "Sepca", "Balce", "Quine", "Ghica", "Doamn", "Smard",
+  "Stavr", "Poste", "Elisa", "Brezo", "Millo", "Mille", "Luter", "Berze", "Plevn", "Stirb",
+  "Schit", "Lasca", "Icoan", "Polon", "Viito", "Toamn", "Traia", "Mantu", "Negus", "Ferdi",
+  "Calar", "Popan", "Labir", "Delea", "Basar", "Voievo", "Vasel", "Lizea", "Domnu", "Reinv",
+];
 
 export function endpointProbes({ lat, lng } = TEST_ORIGIN) {
   const j = (n) => (n + (Math.random() - 0.5) * 0.02).toFixed(6); // ~±1km jitter for cold keys

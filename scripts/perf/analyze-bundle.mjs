@@ -23,6 +23,12 @@ function bucketOf(fileName) {
   if (/maplibregl|maplibre-gl/i.test(txt)) return "maplibre";
   if (/\bpmtiles\b|PMTiles/.test(txt)) return "pmtiles";
   if (/react-dom|scheduler\.production|react\.production/.test(txt)) return "react";
+  // NB turf/d3 detection by name is BEST-EFFORT: production minification mangles function
+  // names, so a chunk that bundles @turf/boolean-point-in-polygon (pulled in by the client
+  // reach-band helper, src/features/map/reach.ts) usually shows NO "turf" string. Absence of
+  // a match is therefore NOT proof of absence in the bundle — only presence is conclusive.
+  if (/@turf|booleanPointInPolygon|turf/.test(txt)) return "turf";
+  if (/d3-contour|contourDensity|d3\.contours/.test(txt)) return "d3-contour";
   return "app+vendor";
 }
 
@@ -105,8 +111,11 @@ async function main() {
     target: TARGET_URL,
     note:
       "transferSize == gzipped bytes on the wire (cache disabled). Buckets attributed by " +
-      "signature-grepping the on-disk Turbopack chunk. turf/d3-contour are absent from the " +
-      "client bundle by design — isochrone geometry is computed in server/ modules.",
+      "signature-grepping the on-disk Turbopack chunk; turf/d3 detection is name-based and " +
+      "BEST-EFFORT (minification mangles names, so absence of a match is not proof of absence). " +
+      "@turf/boolean-point-in-polygon IS pulled into the client via the reach-band helper " +
+      "(src/features/map/reach.ts) but is tiny; d3-contour is server-only (transit grid). " +
+      "Either way both are immaterial to the ~470 KB total, which is MapLibre-dominated.",
     initial: {
       totalGzBytes: initSum.totalGz,
       totalGzKB: +(initSum.totalGz / 1024).toFixed(1),

@@ -35,13 +35,13 @@ follow-up task; the gap list below is that task's work plan.
 | 1 | **TTI ≤ 2.5 s** (mid-range, 4G) | **7.72 s** `[EMU]` | ❌ FAIL (~3×) | 470 KB gz JS (mostly MapLibre) parsed + executed on the main thread before the map is interactive; MapLibre is eagerly loaded on first paint | Defer MapLibre off the critical path: `next/dynamic(AppMap, { ssr:false })` behind a lightweight map skeleton, so first interactive doesn't wait on the 327 KB engine chunk | **M** |
 | 2 | **Initial JS ≤ 350 KB gz** (incl. MapLibre) | **470.7 KB gz** | ❌ FAIL (+34%) | MapLibre+pmtiles **327 KB gz** (statically imported), react-dom 70 KB, app+vendor 74 KB; **nothing lazy-loaded** | Same root fix as #1. **Caveat:** a naive `next/dynamic` that still renders the map immediately keeps MapLibre in the initial download (this audit counts everything fetched at `networkidle0` as "initial"), so the ~143 KB figure only holds if MapLibre is deferred behind a real boundary (idle/interaction/skeleton-then-hydrate) — the follow-up task must re-measure, not assume | **M** |
 | 3 | **Lighthouse mobile ≥ 90** | **67** `[EMU]` | ❌ FAIL | Composite of #1/#2 — TBT **2386 ms** dominates the score (main-thread blocked by JS parse/exec) | Fixing #1/#2 lifts TBT and TTI together; expect the score to move most from the MapLibre-defer alone | **M** (same work as #1) |
-| 4 | **Pan/zoom ≥ 55 fps median, no frame > 32 ms** | **15 fps median [15–15], worst 150 ms [133–150]** `[EMU, SOFTWARE-GL]` (touch, median of 5) | ❌ FAIL — but instrument-confounded, see cause | Two stacked confounds inflate this: **(a) software WebGL (SwiftShader)** — no GPU on the host, so every frame is CPU-rasterized; **(b) 4× CPU throttle**. The residual real cost is MapLibre GL scene repaint (ring fill/line + amenity symbol/label layers). **Not React** (0 commits during the gesture, every run — the controller architecture keeps gestures render-free ✓) and **not DOM markers** (amenities are a GeoJSON GL layer). Idle is a clean 60 fps | **Re-measure on a real device (real GPU) FIRST — the software-GL confound likely explains most of the gap and this row may PASS on-device.** Only if it still fails: reduce per-frame GL work (simplify ring geometry / label density, `symbol-sort-key`, cap amenity symbols by zoom) | **Re-measure (S), then L only if it still fails** |
-| 5 | **API p95 — suggest ≤ 150 ms** | cold **393 ms** / warm 4 ms | ❌ FAIL (tail) | Photon cold-query **tail** spikes (p50 is 52 ms — fine); warm is a cache hit. **Open question:** cold uses partial 3–6 char prefixes (real typing) while warm uses a full string — the tail may be prefix-search cost (broader index scan), which is orthogonal to cache/JVM warmth and would not be fixed by warming | Confirm the cause (prefix cost vs JVM warmup) with server-side Photon timing before choosing a fix; low user impact (p50 fine) | **S/M** |
-| 6 | **API p95 — geocode ≤ 300 ms** | cold **149 ms** / warm 2 ms | ✅ PASS¹ | — | — | — |
-| 7 | **API p95 — isochrone ≤ 800 ms** | cold **183 ms** / warm 3 ms | ✅ PASS¹ | — | — | — |
-| 8 | **API p95 — amenities ≤ 400 ms** | cold **865 ms** / warm 6 ms | ❌ FAIL (2.2×) | **Compound**, not pure PostGIS: the endpoint first makes a cold ORS isochrone call (`resolveClip`→`walkingIsochrone`, ~180 ms cold, see #7) and only then runs the PostGIS spatial intersect of the reach polygon against **8,774 places** — so the PostGIS portion is ≈ 865−180 ≈ **~685 ms** (still over budget) | Decompose with server-side timing first; then on the PostGIS term: `EXPLAIN ANALYZE`, verify the GiST index is used, simplify the reach polygon before the intersect, a `representativePoint` pre-filter, or cache per (mode,pace,cell). The shared cold-isochrone cost also argues for reusing the mode's already-computed rings | **M** |
+| 4 | **Pan/zoom ≥ 55 fps median, no frame > 32 ms** | **15 fps median [15–15], worst frame (all runs) 133 ms** `[EMU, SOFTWARE-GL]` (touch pan+pinch, median of 5, worst-frame = max across all runs) | ❌ FAIL — but instrument-confounded, see cause | Two stacked confounds inflate this: **(a) software WebGL (SwiftShader)** — no GPU on the host, so every frame is CPU-rasterized; **(b) 4× CPU throttle**. The residual real cost is MapLibre GL scene repaint (ring fill/line + amenity symbol/label layers). **Not React** (0 commits during the gesture, every run — verified by comparing gesture vs idle commit RATE over matched windows; the controller architecture keeps gestures render-free ✓) and **not DOM markers** (amenities are a GeoJSON GL layer). Idle is a clean 60 fps | **Re-measure on a real device (real GPU) FIRST — the software-GL confound likely explains most of the gap and this row may PASS on-device.** Only if it still fails: reduce per-frame GL work (simplify ring geometry / label density, `symbol-sort-key`, cap amenity symbols by zoom) | **Re-measure (S), then L only if it still fails** |
+| 5 | **API p95 — suggest ≤ 150 ms** | cold **167 ms** / warm 3 ms (n=30) | ❌ FAIL (marginal) | Photon cold tail just over budget (p50 31 ms — fine); warm is a cache hit. **At n=12 this read 393 ms — an undersampled outlier; the honest n=30 p95 is 167 ms.** **Open question:** cold uses partial 3–6 char prefixes (real typing) vs a full warm string — the tail may be prefix-search cost (broader index scan), orthogonal to JVM/cache warmth | Confirm the cause (prefix cost vs warmup) with server-side Photon timing before spending effort; low user impact (p50 fine, only 17 ms over) | **S** |
+| 6 | **API p95 — geocode ≤ 300 ms** | cold **316 ms** / warm 2 ms (n=30) | ❌ FAIL (marginal) | Nominatim cold tail just over budget (p50 23 ms — fine). **At n=12 this read 149 ms / PASS — the small sample missed the tail; n=30 reveals a 316 ms p95.** A textbook case of the deeper-sampling lesson | Confirm with more samples / server-side Nominatim timing; low user impact (p50 fine, 16 ms over). Same warmup family as #5 | **S** |
+| 7 | **API p95 — isochrone ≤ 800 ms** | cold **185 ms** / warm 2 ms (n=30) | ✅ PASS¹ | — | — | — |
+| 8 | **API p95 — amenities ≤ 400 ms** | cold **905 ms** / warm 6 ms (n=30) | ❌ FAIL (2.3×) | **Compound**, not pure PostGIS: on an amenities cache miss the endpoint first makes a cold ORS isochrone call (`clipRingsFor`→`walkingIsochrone`, ~185 ms cold, see #7) and only then runs the PostGIS spatial intersect of the reach polygon against **8,774 places** — so the PostGIS portion is ≈ 905−185 ≈ **~720 ms** (still well over budget) | Decompose with server-side timing first; then on the PostGIS term: `EXPLAIN ANALYZE`, verify the GiST index is used, simplify the reach polygon before the intersect, a `representativePoint` pre-filter, or cache per (mode,pace,cell). The shared cold-isochrone cost also argues for reusing the mode's already-computed rings | **M** |
 
-¹ **PASS = single-request, serial, local-stack latency** — not load-tested. Under real concurrent multi-user load (or with real-network RTT added) these could differ; the follow-up work should not treat them as headroom-proven.
+¹ **PASS = single-request, serial, local-stack latency** — not load-tested. Under real concurrent multi-user load (or with real-network RTT added) these could differ; the follow-up work should not treat them as headroom-proven. All API p95 are nearest-rank over **n=30** (a real tail percentile, not the sample max that n=12 collapsed to).
 
 **Additional measured metrics (context, not owner budgets):**
 
@@ -51,8 +51,8 @@ follow-up task; the gap list below is that task's work plan.
 | CLS | 0.098 `[EMU]` | ✅ under the 0.1 "good" threshold — no fix needed, monitor |
 | FCP | 904 ms `[EMU]` | Good |
 | Speed Index | 2349 ms `[EMU]` | — |
-| API reverse | cold 48 ms / warm 3 ms | ✅ (budget 300, treated as geocode sibling) |
-| API car | cold 188 ms / warm 2 ms | ✅ (budget 800, treated as isochrone sibling) |
+| API reverse | cold 38 ms / warm 3 ms (n=30) | ✅ (budget 300, treated as geocode sibling) |
+| API car | cold 185 ms / warm 2 ms (n=30) | ✅ (budget 800, treated as isochrone sibling) |
 
 ---
 
@@ -70,8 +70,11 @@ the follow-up task, which must **re-measure** rather than assume the projected n
 ### Bundle (initial / critical-path JS, gzipped)
 - Total **470.7 KB gz** (raw 1704.7 KB). Budget 350 → **FAIL**.
 - MapLibre+pmtiles **327.1 KB gz** (one 1.20 MB-raw chunk) · react-dom **69.6 KB** · app+vendor **74 KB**.
-- **Lazy-loaded: 0 KB.** turf & d3-contour are **absent** from the client bundle (isochrone
-  geometry is computed server-side in `server/` modules) — correct, no client cost.
+- **Lazy-loaded: 0 KB.** `d3-contour` is server-only (transit-grid contour math), so it is
+  not in the client bundle. `@turf/boolean-point-in-polygon` **IS** pulled into the client via
+  the transit reach-band helper (`src/features/map/reach.ts`), but it is tiny (a few KB) and
+  folds into `app+vendor`; production minification mangles its name, so a name-grep can't spot
+  it — presence is confirmed by the static import chain, not by the bucketer.
 - Method: Turbopack (Next 16) prints no per-route sizes, so the ground truth is the JS the
   browser pulls over the wire (`transferSize` == gz), cross-checked against `gzip` of each
   on-disk chunk. They agree.
@@ -79,22 +82,28 @@ the follow-up task, which must **re-measure** rather than assume the projected n
 ### Runtime profile (three hot interactions — median of 5 runs, real touch gestures)
 - **Address select → ring reveal:** 17 React commits, ~680 ms main-thread long-task.
 - **Mode toggle (walk→car):** 3 commits, ~2860 ms long-task (car ring render + amenity re-placement).
-- **Pan/zoom (touch pan + pinch):** 15 fps median [15–15 across runs], worst frame 150 ms
-  [133–150], **0 React commits every run**. Measured with SwiftShader software WebGL — treat
-  as a pessimistic floor (see the WebGL-renderer note at the top).
-- **Idle baseline:** 60 fps, 0 commits, 0 ms long-task.
-- **Render-free gesture claim: HOLDS** — pan/zoom adds no React commits over idle (0 vs 0,
-  every run). The frame-rate gap is MapLibre GL repaint under software-GL + CPU throttle, not
-  re-renders. Gestures are driven as real touch events (CDP `Input.dispatchTouchEvent`), so
-  MapLibre's `Touch*` handlers (the actual mobile path), not the mouse/wheel handlers.
+- **Pan/zoom (touch pan + pinch):** 15 fps median [15–15 across runs], worst frame **133 ms
+  (max across all 5 runs)**, **0 React commits every run**. A screenshot hash before/after the
+  gesture proves the map actually moved (else a no-op gesture would falsely read ~60 fps idle).
+  Measured with SwiftShader software WebGL — treat as a pessimistic floor (see the top note).
+- **Idle baseline:** 60 fps, 0 commits, 0 ms long-task (window sized to match the gesture).
+- **Render-free gesture claim: HOLDS** — pan/zoom's React commit RATE does not exceed idle's
+  (0/s vs 0/s, matched-duration windows, every run). The frame-rate gap is MapLibre GL repaint
+  under software-GL + CPU throttle, not re-renders. Gestures are driven as real touch events
+  (CDP `Input.dispatchTouchEvent`), exercising MapLibre's `Touch*` handlers (the actual mobile
+  path), not the mouse/wheel handlers.
 
-### API latency (browser → local stack, 12 samples/cell, unthrottled)
-- Cold = fresh ApiCache key (real varied Bucharest inputs) → provider/PostGIS round trip.
-  Warm = repeat → ApiCache hit. Budget compared against **cold p95** (first-touch).
+### API latency (browser → local stack, **n=30** samples/cell, unthrottled)
+- Cold = fresh unique ApiCache key per sample (real varied Bucharest inputs) → provider/PostGIS
+  round trip. Warm = repeat → ApiCache hit. Budget compared against **cold p95** (first-touch),
+  and only on a reliable cell (all 30 samples 2xx; the runner fails closed otherwise).
+- **n=30 matters:** at n=12 the nearest-rank "p95" was just the single max sample — it read
+  suggest as 393 ms (an outlier) and geocode as 149 ms/PASS (missing the tail). The n=30
+  numbers (suggest 167, geocode 316) are true tail percentiles and flip geocode to FAIL.
 - **Warm is 2–6 ms across the board** (ApiCache hits) — returning-user latency is a non-issue.
-- **Real-device caveat:** these are local/unthrottled; a real phone on 4G adds ~50–150 ms
-  network RTT **per request** on top — which alone would push suggest/geocode/reverse near
-  their budgets. Re-measure on-device.
+- **Real-device caveat:** these are local/unthrottled; a real phone on 4G adds real network RTT
+  **per request** on top. Note the real-device harness path uses `adb reverse` (a USB tunnel),
+  which is NOT a cellular link — see the README for how to take a real-network number.
 - Transit / reach are **excluded**: not self-hosted (MOTIS/GTFS gate), they hit the public
   network under the overlay, so their latency is not a property of the local stack.
 

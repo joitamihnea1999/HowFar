@@ -73,10 +73,16 @@ applied (the device is the device). This is the authoritative re-measurement for
    PERF_DEVICE=real npm run api
    ```
 
-Lighthouse uses the device's real screen + network (`throttlingMethod: provided`); the
-runtime profile drives the device's Chrome directly. Re-take **TTI, Lighthouse score, LCP,
-TBT, CLS, and especially pan/zoom fps** — the emulator's 4× CPU throttle overstates the
-pan/zoom gap. Bundle size is device-independent.
+Re-take **TTI, Lighthouse score, LCP, TBT, CLS, and especially pan/zoom fps** — the emulator
+runs on the CPU-throttled host with **software WebGL (SwiftShader)**, so it overstates the
+paint/pan-zoom gap; a real device has a real GPU. Bundle size is device-independent.
+
+> **⚠ `adb reverse` is a USB tunnel, not a cellular link.** With `adb reverse tcp:3000`, the
+> phone reaches the host's server over USB — so the **rendering/CPU/GPU** numbers are real
+> (this is the point), but the **API-latency** numbers over this path carry USB/local
+> transport, NOT real 4G RTT. For a real-network API figure, put the phone on wifi/cellular
+> and point `PERF_URL` at the host's routable IP (or apply device-side network shaping), and
+> treat the adb-reverse API run as local-transport-only.
 
 ## Notes / gotchas
 
