@@ -33,6 +33,12 @@ async function timeFetch(page, url) {
 }
 
 async function main() {
+  // Reminder BEFORE measuring (not after): cold suggest/geocode reuse a fixed input pool and
+  // ApiCache persists, so a repeat run without a flush measures warm values labeled "cold".
+  console.error(`[api] For a true COLD run, flush ApiCache FIRST (else fixed suggest/geocode keys are warm):`);
+  console.error(`      docker exec howfar-postgis psql -U howfar -d howfar -c 'DELETE FROM "ApiCache";'`);
+  console.error(`[api] Sampling ${SAMPLES}/cell; cells with any non-2xx sample are marked UNRELIABLE and exit non-zero.\n`);
+
   const ctx = await openBrowser({ throttle: false });
   const { page } = ctx;
   await page.goto(TARGET_URL, { waitUntil: "domcontentloaded", timeout: 60000 });

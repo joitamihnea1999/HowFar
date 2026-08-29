@@ -9,7 +9,8 @@
     "profile": "node run-runtime-profile.mjs",
     "api": "node run-api-latency.mjs",
     "bundle": "node analyze-bundle.mjs",
-    "all": "node run-all.mjs"
+    "all": "node run-all.mjs",
+    "real": "bash measure-real.sh"
   },
   "dependencies": {
     "chrome-launcher": "^1.1.2",

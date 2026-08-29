@@ -58,7 +58,7 @@ if (lh) push(`TTI ≤ ${BUDGETS.ttiMs} ms`, `${Math.round(lh.medians.ttiMs)} ms`
 if (bundle) push(`initial JS ≤ ${BUDGETS.initialJsGzKB} KB gz`, `${bundle.initial.totalGzKB} KB`, bundle.initial.totalGzKB <= BUDGETS.initialJsGzKB, false);
 if (lh) push(`Lighthouse mobile ≥ ${BUDGETS.lighthouseMobile}`, `${lh.medians.performanceScore}`, lh.medians.performanceScore >= BUDGETS.lighthouseMobile, lh.emulationBased);
 if (rt) push(`pan/zoom ≥ ${BUDGETS.panZoomMedianFps} fps`, `${rt.panZoom.medianFps.median} fps`, rt.panZoom.medianFps.median >= BUDGETS.panZoomMedianFps, rt.emulationBased || rt.softwareWebgl);
-if (rt) push(`pan/zoom worst frame ≤ ${BUDGETS.panZoomMaxFrameMs} ms`, `${rt.panZoom.maxFrameMs.median} ms`, rt.panZoom.maxFrameMs.median <= BUDGETS.panZoomMaxFrameMs, rt.emulationBased || rt.softwareWebgl);
+if (rt) push(`pan/zoom worst frame ≤ ${BUDGETS.panZoomMaxFrameMs} ms`, `${rt.panZoom.worstFrameAllRunsMs} ms`, rt.panZoom.worstFrameAllRunsMs <= BUDGETS.panZoomMaxFrameMs, rt.emulationBased || rt.softwareWebgl);
 if (api) for (const e of api.endpoints) push(`API ${e.endpoint} p95 ≤ ${e.budgetMs} ms`, `cold ${e.coldP95 ?? "—"} ms`, e.coldP95PassesBudget, false);
 
 console.log(`\n================= COMBINED SUMMARY vs OWNER BUDGETS =================`);

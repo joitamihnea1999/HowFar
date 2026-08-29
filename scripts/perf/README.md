@@ -48,7 +48,7 @@ Each writes JSON to `results/` and prints a summary with pass/fail vs the owner 
 |-----|---------|---------|
 | `PERF_URL` | `http://localhost:3000/` | target |
 | `PERF_RUNS` | `5` | Lighthouse / trace repeats (median reported) |
-| `PERF_API_SAMPLES` | `12` | samples per cold/warm cell |
+| `PERF_API_SAMPLES` | `30` | samples per cold/warm cell (≥30 so cold p95 is a real nearest-rank tail percentile, not the single max sample) |
 | `PERF_DEVICE` | `emulated` | `emulated` (throttle here) or `real` (attach to a device) |
 | `PERF_CDP_PORT` | `9222` | remote-debug port for real-device attach |
 | `PERF_CPU_SLOWDOWN` | `4` | CPU throttle multiplier (emulated) |
@@ -59,19 +59,23 @@ The same scripts run against a real phone over Chrome remote debugging — no em
 applied (the device is the device). This is the authoritative re-measurement for every
 `[EMU]` number in the audit.
 
-1. On the phone: enable **Developer options → USB debugging**, connect USB, open Chrome.
-2. On the host:
-   ```bash
-   adb devices                                                  # confirm the phone is listed
-   adb reverse tcp:3000 tcp:3000                                # phone → host prod server
-   adb forward tcp:9222 localabstract:chrome_devtools_remote    # host → phone Chrome
-   ```
-3. Run any measurement with `PERF_DEVICE=real` (and point `PERF_URL` at the reversed port):
-   ```bash
-   PERF_DEVICE=real PERF_URL=http://localhost:3000/ npm run lighthouse
-   PERF_DEVICE=real npm run profile
-   PERF_DEVICE=real npm run api
-   ```
+On the phone: enable **Developer options → USB debugging**, connect USB, open Chrome. Then,
+with the prod server already serving on the host, **one command** validates the device, sets
+up both adb mappings, verifies the device Chrome is reachable, and runs the metrics:
+
+```bash
+npm run real              # all metrics (lighthouse + profile + api) on the real device
+npm run real -- profile   # just one: lighthouse | profile | api | bundle
+```
+
+Manual equivalent, if you prefer to drive it yourself:
+```bash
+adb reverse tcp:3000 tcp:3000                                # phone → host prod server
+adb forward tcp:9222 localabstract:chrome_devtools_remote    # host → phone Chrome
+PERF_DEVICE=real PERF_URL=http://localhost:3000/ npm run lighthouse
+PERF_DEVICE=real npm run profile
+PERF_DEVICE=real npm run api
+```
 
 Re-take **TTI, Lighthouse score, LCP, TBT, CLS, and especially pan/zoom fps** — the emulator
 runs on the CPU-throttled host with **software WebGL (SwiftShader)**, so it overstates the

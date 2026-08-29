@@ -85,13 +85,19 @@ const readFrames = (page) =>
 const startFrames = (page) => page.evaluate(() => {
   window.__frameRec = { on: true, times: [] };
 });
+const MIN_FRAMES = 20;
 function frameStats(raw) {
   // Keep real stalls (a 500 ms frozen frame is exactly what the worst-frame budget targets);
   // drop only clearly-bogus intervals (rAF paused when the tab is backgrounded, > 5 s).
   const intervals = raw.filter((x) => x > 0 && x < 5000);
   const medFrame = median(intervals);
+  // Fail CLOSED on too few frames: a frozen main thread records few ticks, which would make
+  // maxFrameMs collapse to Math.max(...[],0)=0 and falsely PASS the "no frame >32ms" budget —
+  // the worse the stall, the better the score. Mark the run unreliable instead.
+  const reliable = intervals.length >= MIN_FRAMES;
   return {
     frames: intervals.length,
+    reliable,
     medianFrameMs: +medFrame.toFixed(2),
     medianFps: +(1000 / medFrame).toFixed(1),
     maxFrameMs: +Math.max(...intervals, 0).toFixed(2),
@@ -101,39 +107,91 @@ function frameStats(raw) {
 }
 
 // ---- CDP touch helpers (drive MapLibre's Touch* handlers, the real mobile path) ----
+// Frames are dispatched on a FIXED wall-clock cadence and NOT awaited one-by-one — awaiting
+// each dispatchTouchEvent (it resolves on the renderer's ACK) would let a slow renderer set
+// the input rate, so the emulator and a real device would receive different gestures and the
+// fps figures wouldn't be comparable. We schedule every frame at step·interval and await the
+// whole batch at the end.
+const CADENCE_MS = 16;
+async function dispatchSequence(client, frames) {
+  const promises = [];
+  const t0 = Date.now();
+  for (let i = 0; i < frames.length; i++) {
+    const due = t0 + i * CADENCE_MS;
+    const wait = due - Date.now();
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    promises.push(client.send("Input.dispatchTouchEvent", frames[i]).catch(() => {}));
+  }
+  await Promise.all(promises);
+}
 async function touchPan(client, cx, cy) {
   const pt = (x, y) => [{ x: Math.round(x), y: Math.round(y) }];
-  await client.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: pt(cx, cy) });
-  for (let i = 1; i <= 30; i++) {
-    await client.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: pt(cx - i * 4, cy - i * 2) });
-    await new Promise((r) => setTimeout(r, 16));
-  }
-  await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  const frames = [{ type: "touchStart", touchPoints: pt(cx, cy) }];
+  for (let i = 1; i <= 30; i++) frames.push({ type: "touchMove", touchPoints: pt(cx - i * 4, cy - i * 2) });
+  frames.push({ type: "touchEnd", touchPoints: [] });
+  await dispatchSequence(client, frames);
 }
 async function touchPinch(client, cx, cy) {
-  // Two fingers starting close together, spreading apart → pinch-zoom in.
   const two = (d) => [
     { x: Math.round(cx - d), y: Math.round(cy), id: 0 },
     { x: Math.round(cx + d), y: Math.round(cy), id: 1 },
   ];
-  await client.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: two(20) });
-  for (let i = 1; i <= 20; i++) {
-    await client.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: two(20 + i * 6) });
-    await new Promise((r) => setTimeout(r, 24));
-  }
-  await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  const frames = [{ type: "touchStart", touchPoints: two(20) }];
+  for (let i = 1; i <= 20; i++) frames.push({ type: "touchMove", touchPoints: two(20 + i * 6) });
+  frames.push({ type: "touchEnd", touchPoints: [] });
+  await dispatchSequence(client, frames);
 }
 
-// Hash the composited map canvas region via a CDP screenshot, to PROVE a gesture actually
-// moved the map. Without this, a no-op gesture (ignored touch, handler change, real device
-// swallowing synthetic touch) would report ~60 fps idle cadence as a pan/zoom PASS.
-async function canvasHash(page, box) {
-  const buf = await page.screenshot({
-    clip: { x: box.x, y: box.y, width: box.w, height: box.h },
-    encoding: "binary",
+// Read the MapLibre camera (exposed at window.__hfMap by AppMap) — a SOUND movement proof:
+// unlike a canvas screenshot hash, an unchanged center+zoom means the gesture truly did
+// nothing, and background tile/label repaint can't spoof it.
+async function camera(page) {
+  return page.evaluate(() => {
+    const m = window.__hfMap;
+    if (!m) return null;
+    const c = m.getCenter();
+    return { lng: c.lng, lat: c.lat, zoom: m.getZoom(), bearing: m.getBearing() };
   });
-  const { createHash } = await import("node:crypto");
-  return createHash("sha1").update(buf).digest("hex");
+}
+function cameraMoved(a, b) {
+  if (!a || !b) return null; // map not reachable — can't prove either way
+  return Math.abs(a.lng - b.lng) > 1e-6 || Math.abs(a.lat - b.lat) > 1e-6 || Math.abs(a.zoom - b.zoom) > 1e-3;
+}
+
+// One touch pan+pinch over a clear canvas point, with frame capture. Returns frame stats +
+// whether the camera actually moved.
+async function gestureOnce(page, client, box, label) {
+  const cx = box.x + box.w / 2;
+  const pick = await page.evaluate(
+    (bx, by, bw, bh) => {
+      for (const frac of [0.5, 0.55, 0.45, 0.6, 0.4, 0.65]) {
+        const y = by + bh * frac;
+        const el = document.elementFromPoint(bx + bw / 2, y);
+        if (el && el.tagName === "CANVAS") return { y, hit: true };
+      }
+      return { y: by + bh * 0.5, hit: false };
+    },
+    box.x, box.y, box.w, box.h,
+  );
+  if (!pick.hit) throw new Error(`${label}: no clear canvas point (overlays cover the map)`);
+  const cy = pick.y;
+  const before = await camera(page);
+  await startFrames(page);
+  const d = await delta(
+    page,
+    async () => {
+      await touchPan(client, cx, cy);
+      await new Promise((r) => setTimeout(r, 200));
+      await touchPinch(client, cx, cy);
+      await new Promise((r) => setTimeout(r, 400));
+    },
+    label,
+  );
+  Object.assign(d, frameStats(await readFrames(page)));
+  const after = await camera(page);
+  d.cameraMoved = cameraMoved(before, after);
+  if (d.cameraMoved === false) throw new Error(`${label}: the MapLibre camera did not change — the synthetic touch had NO effect; refusing to report an idle cadence as a pan/zoom result`);
+  return d;
 }
 
 // A different address per run so each run's ring-reveal is genuinely cold (the server-side
@@ -144,6 +202,15 @@ async function oneRun(page, client, runIdx) {
   await page.goto(TARGET_URL, { waitUntil: "networkidle0", timeout: 60000 });
   await page.waitForSelector('[data-testid="app-map"] canvas', { timeout: 30000 });
   await new Promise((r) => setTimeout(r, 1500));
+  const boxOf = () => page.$eval('[data-testid="app-map"] canvas', (el) => {
+    const r = el.getBoundingClientRect();
+    return { x: r.x, y: r.y, w: r.width, h: r.height };
+  });
+
+  // CONTROL: a pan/zoom on the BARE BASEMAP (before any address is selected), so the cost of
+  // the app layers (rings + amenity symbols/labels) can be isolated from MapLibre's baseline
+  // — otherwise "15 fps" can't tell us whether simplifying those layers (the gap #4 fix) helps.
+  const bare = await gestureOnce(page, client, await boxOf(), "BARE basemap pan/zoom (control)");
 
   // A. address select → ring reveal. Assert the isochrone call SUCCEEDS (don't swallow a
   // failure and then report a bogus "interaction").
@@ -192,57 +259,21 @@ async function oneRun(page, client, runIdx) {
   ).catch(() => null);
   if (carPressed !== "true") throw new Error(`mode toggle did NOT switch to car (aria-pressed=${carPressed}) — refusing to report a bogus interaction`);
 
-  // C. pan/zoom (touch). Settle first so the idle window is truly idle.
+  // C. pan/zoom (touch) WITH the app layers loaded. Settle first so the following idle window
+  // is truly idle. Sound movement proof via the MapLibre camera (window.__hfMap).
   await new Promise((r) => setTimeout(r, 2500));
-  const box = await page.$eval('[data-testid="app-map"] canvas', (el) => {
-    const r = el.getBoundingClientRect();
-    return { x: r.x, y: r.y, w: r.width, h: r.height };
-  });
-  const pick = await page.evaluate(
-    (bx, by, bw, bh) => {
-      for (const frac of [0.5, 0.55, 0.45, 0.6, 0.4, 0.65]) {
-        const y = by + bh * frac;
-        const el = document.elementFromPoint(bx + bw / 2, y);
-        if (el && el.tagName === "CANVAS") return { y, hit: true };
-      }
-      return { y: by + bh * 0.5, hit: false };
-    },
-    box.x, box.y, box.w, box.h,
-  );
-  if (!pick.hit) throw new Error("pan/zoom: no clear canvas point found (overlays cover the map) — refusing to report a gesture that may hit an overlay");
-  const cx = box.x + box.w / 2;
-  const cy = pick.y;
+  const c = await gestureOnce(page, client, await boxOf(), "C: pan/zoom (touch, app layers)");
 
-  // Gesture window first (so we can size the idle control to match its duration exactly —
-  // comparing commit COUNTS over unequal windows would bias the render-free verdict).
-  const before = await canvasHash(page, box);
-  await startFrames(page);
-  const c = await delta(
-    page,
-    async () => {
-      await touchPan(client, cx, cy);
-      await new Promise((r) => setTimeout(r, 200));
-      await touchPinch(client, cx, cy);
-      await new Promise((r) => setTimeout(r, 400));
-    },
-    "C: pan/zoom (touch)",
-  );
-  Object.assign(c, frameStats(await readFrames(page)));
-  const after = await canvasHash(page, box);
-  if (before === after) throw new Error("pan/zoom: the map canvas did not change — the synthetic touch gesture had NO effect; refusing to report an idle cadence as a pan/zoom result");
-
-  // Idle control over the SAME duration as the gesture window, so render-free compares like
-  // with like. Verdict is on commit RATE, not raw count.
-  await new Promise((r) => setTimeout(r, 1500)); // let the gesture settle before the control
+  // Idle control sized to the gesture's wall time, so render-free compares like with like.
+  await new Promise((r) => setTimeout(r, 1500));
   await startFrames(page);
   const idle = await delta(page, async () => new Promise((r) => setTimeout(r, Math.max(1000, c.wallMs))), "IDLE baseline");
   idle._frames = frameStats(await readFrames(page));
 
   c.commitRate = +(c.commits / (c.wallMs / 1000)).toFixed(3);
   idle.commitRate = +(idle.commits / (idle.wallMs / 1000)).toFixed(3);
-  c.movedCanvas = before !== after;
 
-  return { a, b, idle, c };
+  return { bare, a, b, idle, c };
 }
 
 async function main() {
@@ -286,6 +317,9 @@ async function main() {
 
   // Render-free == the gesture's commit RATE does not exceed idle's (matched-duration windows).
   const renderFree = runs.every((r) => r.c.commitRate <= r.idle.commitRate + 0.01);
+  // Every gesture must have (a) actually moved the camera and (b) recorded enough frames.
+  const allReliable = runs.every((r) => r.c.reliable && r.bare.reliable && r.c.cameraMoved !== false);
+  const bareFps = agg(across((r) => r.bare.medianFps));
   const report = {
     takenAt: new Date().toISOString(),
     target: TARGET_URL,
@@ -309,9 +343,12 @@ async function main() {
     })),
     interactionA,
     interactionB,
+    barePanZoomFps: bareFps, // control: bare basemap, no app layers
     panZoom,
+    reliable: allReliable,
     renderFree,
     renderFreeBasis: "gesture commit RATE ≤ idle commit RATE, matched-duration windows, every run",
+    cameraMoveProof: "window.__hfMap center/zoom changed by the gesture (sound; not a pixel hash)",
     verdictFps: panZoom.medianFps.median >= BUDGETS.panZoomMedianFps ? "PASS" : "FAIL",
     verdictMaxFrame: panZoom.worstFrameAllRunsMs <= BUDGETS.panZoomMaxFrameMs ? "PASS" : "FAIL",
   };
@@ -325,7 +362,9 @@ async function main() {
   console.log(`A address→rings: ${interactionA.commits.median} commits, ${Math.round(interactionA.longtaskMs.median)} ms long-task`);
   console.log(`B mode toggle  : ${interactionB.commits.median} commits, ${Math.round(interactionB.longtaskMs.median)} ms long-task`);
   console.log(`Idle baseline  : ${panZoom.idleFps.median} fps, ${panZoom.idleCommits.median} commits`);
-  console.log(`Pan/zoom (touch): median ${panZoom.medianFps.median} fps [${panZoom.medianFps.min}–${panZoom.medianFps.max}] (budget ≥55 → ${report.verdictFps}) · worst frame (all runs) ${panZoom.worstFrameAllRunsMs} ms (budget ≤32 → ${report.verdictMaxFrame})`);
+  console.log(`Bare basemap pan/zoom (control, no app layers): median ${bareFps.median} fps [${bareFps.min}–${bareFps.max}]`);
+  console.log(`Pan/zoom (touch, app layers): median ${panZoom.medianFps.median} fps [${panZoom.medianFps.min}–${panZoom.medianFps.max}] (budget ≥55 → ${report.verdictFps}) · worst frame (all runs) ${panZoom.worstFrameAllRunsMs} ms (budget ≤32 → ${report.verdictMaxFrame})`);
+  if (!allReliable) console.log(`⚠ some run was UNRELIABLE (too few frames or camera did not move) — treat with caution`);
   console.log(`Gesture render-free (commit RATE ≤ idle, matched windows, every run): ${renderFree ? "YES ✓ (claim holds)" : "NO ✗"} — gesture ${panZoom.commitRate.min}–${panZoom.commitRate.max}/s vs idle ${panZoom.idleCommitRate.min}–${panZoom.idleCommitRate.max}/s`);
   if (report.emulationBased) console.log(`[EMU] emulation-based${gl.software ? " + SOFTWARE WebGL" : ""} — re-measure on a real Android (see README).`);
   console.log(`Wrote ${join(outDir, "runtime-profile.json")}`);
