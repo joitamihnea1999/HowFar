@@ -84,6 +84,7 @@ async function main() {
   const initialNames = new Set(initial.map((e) => basename(e.name)));
 
   // Drive one interaction (address select + car toggle) to trigger lazy chunks, if any.
+  let interactionOk = false;
   try {
     await page.waitForSelector('input[role="combobox"]', { timeout: 10000 });
     await page.click('input[role="combobox"]');
@@ -92,12 +93,12 @@ async function main() {
     await page.click('[role="option"]');
     await new Promise((r) => setTimeout(r, 2500));
     const carBtn = await page.$$('[role="group"][aria-label="Travel mode"] button');
-    if (carBtn.length >= 3) {
-      await carBtn[2].click();
-      await new Promise((r) => setTimeout(r, 2000));
-    }
+    if (carBtn.length < 3) throw new Error("mode toggle not reached");
+    await carBtn[2].click();
+    await new Promise((r) => setTimeout(r, 2000));
+    interactionOk = true;
   } catch (e) {
-    console.error("[bundle] interaction pass partial:", e.message);
+    console.error("[bundle] interaction pass INCOMPLETE:", e.message, "— lazy-chunk result marked unreliable");
   }
 
   const afterAll = await collectJs(page);
@@ -109,6 +110,7 @@ async function main() {
   const report = {
     takenAt: new Date().toISOString(),
     target: TARGET_URL,
+    lazyReliable: interactionOk, // false ⇒ the interaction didn't complete; "0 lazy" is unproven
     note:
       "transferSize == gzipped bytes on the wire (cache disabled). Buckets attributed by " +
       "signature-grepping the on-disk Turbopack chunk; turf/d3 detection is name-based and " +

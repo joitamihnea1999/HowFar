@@ -67,15 +67,28 @@ async function main() {
   }
 
   const runs = [];
+  let failedRuns = 0;
   for (let i = 0; i < RUNS; i++) {
     process.stderr.write(`[lighthouse] run ${i + 1}/${RUNS} ...\n`);
     const lhr = await oneRun(port);
+    // A run that errored (Lighthouse `runtimeError`, or a null category score) must NOT be
+    // scored as a real 0 and folded into the median — drop it and count the failure.
+    if (lhr.runtimeError || lhr.categories?.performance?.score == null) {
+      failedRuns++;
+      process.stderr.write(`           run FAILED (${lhr.runtimeError?.code ?? "null score"}) — excluded\n`);
+      continue;
+    }
     const row = {};
     for (const [k, f] of METRICS) row[k] = f(lhr);
     runs.push(row);
     process.stderr.write(
       `           perf=${row.performanceScore} TTI=${Math.round(row.ttiMs)}ms LCP=${Math.round(row.lcpMs)}ms TBT=${Math.round(row.tbtMs)}ms CLS=${row.cls?.toFixed?.(3)}\n`,
     );
+  }
+  if (runs.length === 0) {
+    console.error(`[lighthouse] all ${RUNS} runs failed — no reliable result. Exiting non-zero.`);
+    if (chrome) await chrome.kill();
+    process.exit(1);
   }
 
   const medians = {};
@@ -88,6 +101,9 @@ async function main() {
     emulationBased: !IS_REAL_DEVICE,
     webglRenderer: gl.renderer,
     softwareWebgl: gl.software,
+    completedRuns: runs.length,
+    failedRuns,
+    reliable: failedRuns === 0,
     runs,
     medians,
     budgets: { ttiMs: BUDGETS.ttiMs, lighthouseMobile: BUDGETS.lighthouseMobile },

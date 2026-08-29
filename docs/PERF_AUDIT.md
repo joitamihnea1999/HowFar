@@ -35,7 +35,7 @@ follow-up task; the gap list below is that task's work plan.
 | 1 | **TTI ≤ 2.5 s** (mid-range, 4G) | **7.72 s** `[EMU]` | ❌ FAIL (~3×) | 470 KB gz JS (mostly MapLibre) parsed + executed on the main thread before the map is interactive; MapLibre is eagerly loaded on first paint | Defer MapLibre off the critical path: `next/dynamic(AppMap, { ssr:false })` behind a lightweight map skeleton, so first interactive doesn't wait on the 327 KB engine chunk | **M** |
 | 2 | **Initial JS ≤ 350 KB gz** (incl. MapLibre) | **470.7 KB gz** | ❌ FAIL (+34%) | MapLibre+pmtiles **327 KB gz** (statically imported), react-dom 70 KB, app+vendor 74 KB; **nothing lazy-loaded** | Same root fix as #1. **Caveat:** a naive `next/dynamic` that still renders the map immediately keeps MapLibre in the initial download (this audit counts everything fetched at `networkidle0` as "initial"), so the ~143 KB figure only holds if MapLibre is deferred behind a real boundary (idle/interaction/skeleton-then-hydrate) — the follow-up task must re-measure, not assume | **M** |
 | 3 | **Lighthouse mobile ≥ 90** | **67** `[EMU]` | ❌ FAIL | Composite of #1/#2 — TBT **2386 ms** dominates the score (main-thread blocked by JS parse/exec) | Fixing #1/#2 lifts TBT and TTI together; expect the score to move most from the MapLibre-defer alone | **M** (same work as #1) |
-| 4 | **Pan/zoom ≥ 55 fps median, no frame > 32 ms** | app-layers **15 fps [15–15]**; **bare basemap (control) 20 fps [20–24]**; worst frame (all runs) **150 ms** `[EMU, SOFTWARE-GL]` (touch pan+pinch, median of 5) | ❌ FAIL — but instrument-confounded, see cause | Two stacked confounds inflate this: **(a) software WebGL (SwiftShader)** — no GPU on the host, so every frame is CPU-rasterized; **(b) 4× CPU throttle**. **The bare-basemap control (20 fps, no rings/amenities) shows most of the cost is MapLibre's baseline raster under software GL — the app layers add only ~5 fps (20→15).** Confirmed **not React** (0 commits every run — gesture vs idle commit RATE over matched windows; controllers keep gestures render-free ✓), **not DOM markers** (amenities are a GeoJSON GL layer), and the gesture provably moved the map (`window.__hfMap` center/zoom changed). Idle is a clean 60 fps | **Re-measure on a real device (real GPU) FIRST — with a real GPU even the bare basemap should jump, and this row may PASS outright.** Because the app layers cost only ~5 fps here, simplifying rings/amenity labels is a SECONDARY lever, not the primary fix | **Re-measure (S); app-layer simplification only a minor follow-on** |
+| 4 | **Pan/zoom ≥ 55 fps median, no frame > 32 ms** | app-layers **15 fps [15–15]**; bare-basemap rough control **20 fps [20–24]**; worst frame (all runs) **150 ms** `[EMU, SOFTWARE-GL]` (touch pan+pinch, median of 5) | ❌ FAIL — but instrument-confounded, see cause | Two stacked confounds inflate this: **(a) software WebGL (SwiftShader)** — no GPU on the host, so every frame is CPU-rasterized; **(b) 4× CPU throttle**. **Even the bare basemap manages only ~20 fps under software GL — so the dominant cost is MapLibre's baseline raster, not the app layers.** (The 20→15 delta is only a rough indication of app-layer cost — the two gestures are at different camera/zoom/scene, not a controlled layer toggle — so don't over-read it.) Confirmed **not React** (0 commits every run — gesture vs idle commit RATE over matched windows; controllers keep gestures render-free ✓), **not DOM markers** (amenities are a GeoJSON GL layer), and the gesture provably moved the map (`window.__hfMap` center/zoom changed). Idle is a clean 60 fps | **Re-measure on a real device (real GPU) FIRST — with a real GPU even the bare basemap should jump, and this row may PASS outright.** App-layer simplification (rings/labels) is a secondary lever to weigh only if it still fails on-device | **Re-measure (S); app-layer simplification only a minor follow-on** |
 | 5 | **API p95 — suggest ≤ 150 ms** | cold **167 ms** / warm 3 ms (n=30) | ❌ FAIL (marginal) | Photon cold tail just over budget (p50 31 ms — fine); warm is a cache hit. **At n=12 this read 393 ms — an undersampled outlier; the honest n=30 p95 is 167 ms.** **Open question:** cold uses partial 3–6 char prefixes (real typing) vs a full warm string — the tail may be prefix-search cost (broader index scan), orthogonal to JVM/cache warmth | Confirm the cause (prefix cost vs warmup) with server-side Photon timing before spending effort; low user impact (p50 fine, only 17 ms over) | **S** |
 | 6 | **API p95 — geocode ≤ 300 ms** | cold **316 ms** / warm 2 ms (n=30) | ❌ FAIL (marginal) | Nominatim cold tail just over budget (p50 23 ms — fine). **At n=12 this read 149 ms / PASS — the small sample missed the tail; n=30 reveals a 316 ms p95.** A textbook case of the deeper-sampling lesson | Confirm with more samples / server-side Nominatim timing; low user impact (p50 fine, 16 ms over). Same warmup family as #5 | **S** |
 | 7 | **API p95 — isochrone ≤ 800 ms** | cold **185 ms** / warm 2 ms (n=30) | ✅ PASS¹ | — | — | — |
@@ -69,7 +69,11 @@ the follow-up task, which must **re-measure** rather than assume the projected n
 
 ### Bundle (initial / critical-path JS, gzipped)
 - Total **470.7 KB gz** (raw 1704.7 KB). Budget 350 → **FAIL**.
-- MapLibre+pmtiles **327.1 KB gz** (one 1.20 MB-raw chunk) · react-dom **69.6 KB** · app+vendor **74 KB**.
+- MapLibre+pmtiles **327.1 KB gz** — this is the gz size of the ONE chunk that contains
+  MapLibre (attributed by signature-grep), i.e. the whole-chunk total, not a per-module figure;
+  a small amount of co-bundled app code may ride in it. react-dom **69.6 KB** · app+vendor **74 KB**.
+  The ~143 KB "after deferral" projection is therefore approximate (it assumes the whole
+  MapLibre chunk moves off the critical path) and must be re-measured.
 - **Lazy-loaded: 0 KB.** `d3-contour` is server-only (transit-grid contour math), so it is
   not in the client bundle. `@turf/boolean-point-in-polygon` **IS** pulled into the client via
   the transit reach-band helper (`src/features/map/reach.ts`), but it is tiny (a few KB) and
@@ -90,9 +94,11 @@ the follow-up task, which must **re-measure** rather than assume the projected n
   actually moved the map by reading `window.__hfMap` center/zoom before/after (sound; a pixel
   hash could be spoofed by background tile repaint). A run with too few frames or an unmoved
   camera is marked unreliable rather than scoring a false pass.
-- **Bare-basemap control (no address selected, no app layers):** 20 fps [20–24]. So the ring +
-  amenity layers add only ~5 fps — most of the cost is MapLibre's baseline raster under
-  software GL, which reframes the fix (real GPU first; app-layer simplification is secondary).
+- **Bare-basemap rough control (no address selected):** 20 fps [20–24]. Even the bare basemap
+  is far under 55 fps, so the dominant cost is MapLibre's baseline raster under software GL.
+  (This is NOT a clean layer-isolation — the app-layer gesture is at a different camera/zoom
+  and over different tiles — so the 20→15 delta indicates app layers aren't dominant, but is
+  not a precise app-layer cost.) Fix framing: real GPU first; app-layer simplification secondary.
 - **Idle baseline:** 60 fps, 0 commits, 0 ms long-task (window sized to match the gesture).
 - **Render-free gesture claim: HOLDS** — pan/zoom's React commit RATE does not exceed idle's
   (0/s vs 0/s, matched-duration windows, every run). The frame-rate gap is MapLibre GL repaint
@@ -109,6 +115,10 @@ the follow-up task, which must **re-measure** rather than assume the projected n
 - **Real-device caveat:** these are local/unthrottled; a real phone on 4G adds real network RTT
   **per request** on top. Note the real-device harness path uses `adb reverse` (a USB tunnel),
   which is NOT a cellular link — see the README for how to take a real-network number.
+- **amenities worst-case caveat:** the amenities cold number pays a cold ORS isochrone, but in
+  the real user flow the isochrone is already computed (mode selected → rings drawn) before the
+  amenities call, so a returning-to-that-origin user pays closer to the PostGIS-only portion.
+  The 905 ms is the true cold-cold worst case (fresh origin), not the typical in-session cost.
 - Transit / reach are **excluded**: not self-hosted (MOTIS/GTFS gate), they hit the public
   network under the overlay, so their latency is not a property of the local stack.
 

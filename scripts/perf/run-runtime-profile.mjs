@@ -86,17 +86,18 @@ const startFrames = (page) => page.evaluate(() => {
   window.__frameRec = { on: true, times: [] };
 });
 const MIN_FRAMES = 20;
+const STALL_MS = 5000; // an interval this long is a catastrophic freeze, not a normal frame
 function frameStats(raw) {
-  // Keep real stalls (a 500 ms frozen frame is exactly what the worst-frame budget targets);
-  // drop only clearly-bogus intervals (rAF paused when the tab is backgrounded, > 5 s).
-  const intervals = raw.filter((x) => x > 0 && x < 5000);
+  const intervals = raw.filter((x) => x > 0 && x < STALL_MS);
+  const stalls = raw.filter((x) => x >= STALL_MS).length; // ≥5s intervals — do NOT silently drop
   const medFrame = median(intervals);
-  // Fail CLOSED on too few frames: a frozen main thread records few ticks, which would make
-  // maxFrameMs collapse to Math.max(...[],0)=0 and falsely PASS the "no frame >32ms" budget —
-  // the worse the stall, the better the score. Mark the run unreliable instead.
-  const reliable = intervals.length >= MIN_FRAMES;
+  // Fail CLOSED: (a) too few frames — a frozen main thread records few ticks, which would make
+  // maxFrameMs collapse to Math.max(...[],0)=0 and falsely PASS the "no frame >32ms" budget;
+  // (b) any ≥5s stall — filtering it out would hide exactly the worst frame the budget targets.
+  const reliable = intervals.length >= MIN_FRAMES && stalls === 0;
   return {
     frames: intervals.length,
+    stalls,
     reliable,
     medianFrameMs: +medFrame.toFixed(2),
     medianFps: +(1000 / medFrame).toFixed(1),
@@ -190,7 +191,11 @@ async function gestureOnce(page, client, box, label) {
   Object.assign(d, frameStats(await readFrames(page)));
   const after = await camera(page);
   d.cameraMoved = cameraMoved(before, after);
-  if (d.cameraMoved === false) throw new Error(`${label}: the MapLibre camera did not change — the synthetic touch had NO effect; refusing to report an idle cadence as a pan/zoom result`);
+  // Require a POSITIVE movement proof: false = the gesture did nothing; null = the map handle
+  // (window.__hfMap) was unreachable so we can't prove it moved — both are unacceptable for a
+  // measurement whose whole point is that a gesture happened.
+  if (d.cameraMoved !== true) throw new Error(`${label}: could not prove the MapLibre camera moved (cameraMoved=${d.cameraMoved}) — refusing to report a possibly-idle cadence as a pan/zoom result`);
+  if (!d.reliable) throw new Error(`${label}: too few frames or a ≥5s stall (frames=${d.frames}, stalls=${d.stalls}) — run is unreliable, refusing to report it`);
   return d;
 }
 
@@ -207,10 +212,12 @@ async function oneRun(page, client, runIdx) {
     return { x: r.x, y: r.y, w: r.width, h: r.height };
   });
 
-  // CONTROL: a pan/zoom on the BARE BASEMAP (before any address is selected), so the cost of
-  // the app layers (rings + amenity symbols/labels) can be isolated from MapLibre's baseline
-  // — otherwise "15 fps" can't tell us whether simplifying those layers (the gap #4 fix) helps.
-  const bare = await gestureOnce(page, client, await boxOf(), "BARE basemap pan/zoom (control)");
+  // ROUGH CONTROL: a pan/zoom on the bare basemap (before any address is selected). This is
+  // NOT a clean layer-isolation — the later app-layer gesture is at a different camera/zoom and
+  // over different tiles — so read the bare↔app delta as indicative only. Its real value is the
+  // ABSOLUTE bare number: if even the bare basemap is far below 55 fps, the dominant cost is
+  // MapLibre's baseline raster (here, under software GL), not the app layers.
+  const bare = await gestureOnce(page, client, await boxOf(), "BARE basemap pan/zoom (rough control)");
 
   // A. address select → ring reveal. Assert the isochrone call SUCCEEDS (don't swallow a
   // failure and then report a bogus "interaction").
@@ -362,7 +369,7 @@ async function main() {
   console.log(`A address→rings: ${interactionA.commits.median} commits, ${Math.round(interactionA.longtaskMs.median)} ms long-task`);
   console.log(`B mode toggle  : ${interactionB.commits.median} commits, ${Math.round(interactionB.longtaskMs.median)} ms long-task`);
   console.log(`Idle baseline  : ${panZoom.idleFps.median} fps, ${panZoom.idleCommits.median} commits`);
-  console.log(`Bare basemap pan/zoom (control, no app layers): median ${bareFps.median} fps [${bareFps.min}–${bareFps.max}]`);
+  console.log(`Bare basemap pan/zoom (rough control, different camera/scene): median ${bareFps.median} fps [${bareFps.min}–${bareFps.max}]`);
   console.log(`Pan/zoom (touch, app layers): median ${panZoom.medianFps.median} fps [${panZoom.medianFps.min}–${panZoom.medianFps.max}] (budget ≥55 → ${report.verdictFps}) · worst frame (all runs) ${panZoom.worstFrameAllRunsMs} ms (budget ≤32 → ${report.verdictMaxFrame})`);
   if (!allReliable) console.log(`⚠ some run was UNRELIABLE (too few frames or camera did not move) — treat with caution`);
   console.log(`Gesture render-free (commit RATE ≤ idle, matched windows, every run): ${renderFree ? "YES ✓ (claim holds)" : "NO ✗"} — gesture ${panZoom.commitRate.min}–${panZoom.commitRate.max}/s vs idle ${panZoom.idleCommitRate.min}–${panZoom.idleCommitRate.max}/s`);

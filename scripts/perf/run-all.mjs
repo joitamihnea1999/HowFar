@@ -57,8 +57,12 @@ const push = (budget, measured, pass, emu) => rows.push({ budget, measured, verd
 if (lh) push(`TTI ≤ ${BUDGETS.ttiMs} ms`, `${Math.round(lh.medians.ttiMs)} ms`, lh.medians.ttiMs <= BUDGETS.ttiMs, lh.emulationBased);
 if (bundle) push(`initial JS ≤ ${BUDGETS.initialJsGzKB} KB gz`, `${bundle.initial.totalGzKB} KB`, bundle.initial.totalGzKB <= BUDGETS.initialJsGzKB, false);
 if (lh) push(`Lighthouse mobile ≥ ${BUDGETS.lighthouseMobile}`, `${lh.medians.performanceScore}`, lh.medians.performanceScore >= BUDGETS.lighthouseMobile, lh.emulationBased);
-if (rt) push(`pan/zoom ≥ ${BUDGETS.panZoomMedianFps} fps`, `${rt.panZoom.medianFps.median} fps`, rt.panZoom.medianFps.median >= BUDGETS.panZoomMedianFps, rt.emulationBased || rt.softwareWebgl);
-if (rt) push(`pan/zoom worst frame ≤ ${BUDGETS.panZoomMaxFrameMs} ms`, `${rt.panZoom.worstFrameAllRunsMs} ms`, rt.panZoom.worstFrameAllRunsMs <= BUDGETS.panZoomMaxFrameMs, rt.emulationBased || rt.softwareWebgl);
+// Honor the runtime report's own reliability flag — an unreliable profile (too few frames, a
+// ≥5s stall, or an unproven camera move) must NOT publish a pan/zoom verdict.
+const rtOk = rt && rt.reliable !== false;
+if (rt && !rtOk) { console.error(`[all] runtime-profile.json is UNRELIABLE — pan/zoom verdicts suppressed.`); failed++; }
+if (rtOk) push(`pan/zoom ≥ ${BUDGETS.panZoomMedianFps} fps`, `${rt.panZoom.medianFps.median} fps`, rt.panZoom.medianFps.median >= BUDGETS.panZoomMedianFps, rt.emulationBased || rt.softwareWebgl);
+if (rtOk) push(`pan/zoom worst frame ≤ ${BUDGETS.panZoomMaxFrameMs} ms`, `${rt.panZoom.worstFrameAllRunsMs} ms`, rt.panZoom.worstFrameAllRunsMs <= BUDGETS.panZoomMaxFrameMs, rt.emulationBased || rt.softwareWebgl);
 if (api) for (const e of api.endpoints) push(`API ${e.endpoint} p95 ≤ ${e.budgetMs} ms`, `cold ${e.coldP95 ?? "—"} ms`, e.coldP95PassesBudget, false);
 
 console.log(`\n================= COMBINED SUMMARY vs OWNER BUDGETS =================`);
