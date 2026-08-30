@@ -1,4 +1,5 @@
-import maplibregl from "maplibre-gl";
+import type maplibregl from "maplibre-gl";
+import { mapGl } from "@/features/map/map-runtime";
 
 import { buildIsochroneFeatures, MARKER_COLOR } from "@/features/isochrones/isochrone-view";
 import type { LoadState } from "@/features/map/load-state";
@@ -64,7 +65,7 @@ export function createSelectionRender({
     const core = document.createElement("span");
     core.className = "hf-origin-marker__core";
     markerElement.append(aura, core);
-    marker = new maplibregl.Marker({ element: markerElement, anchor: "center" });
+    marker = new (mapGl().Marker)({ element: markerElement, anchor: "center" });
     // Pointer-transparent: the origin pin is display-only, so it must never
     // swallow a click/hover meant for an amenity marker underneath (task 024
     // — closes the exact-origin transit stop limitation parked in task 021).

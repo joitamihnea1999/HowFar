@@ -173,7 +173,23 @@ export async function queryCatalogueSummaryInRing(
         ST_SetSRID(ST_GeomFromGeoJSON(${JSON.stringify(midRing)}), 4326) AS ring_mid,
         ST_SetSRID(ST_GeomFromGeoJSON(${JSON.stringify(outerRing)}), 4326) AS ring_outer,
         ST_SetSRID(ST_Point(${origin.lng}, ${origin.lat}), 4326) AS origin
-    ), intersections AS (
+    ), intersections AS MATERIALIZED (
+      -- MATERIALIZED (task 017, gap #8) — the load-bearing perf fix, EXPLAIN-justified. The band
+      -- column is a nested ST_Intersects(geom, ring_inner/mid) CASE. Without materialization
+      -- Postgres INLINES this CTE, so band (and the geography ST_Distance downstream) get
+      -- re-evaluated inside every window-function sort key (bucketed/stratified/ranked all
+      -- PARTITION/ORDER on category, band, distance). Measured on the real 8.7k-place dataset:
+      -- inlined 457 ms vs materialized 100 ms (3-4.5x), ALL from cutting recomputation — the
+      -- buffers were already shared-hit (warm), so this is CPU, not I/O (a startup warmup that
+      -- only warmed shared_buffers did NOT move it — the incomplete first EXPLAIN missed this).
+      -- Materializing intersections computes band+geom once; clipped_rows below holds the
+      -- ST_Intersection result once. Output is IDENTICAL (a plan hint) — proven by diffing the
+      -- returned rows with/without the hint (942==942) and by the catalogue integration test.
+      --
+      -- The rings + origin from params are USED here (band) but NOT projected forward, and
+      -- clipped_rows/measured re-CROSS JOIN the 1-row params for what they need — so the
+      -- materialized tuplestore never stores the 3 ring polygons per row (which would be ~2× the
+      -- reach's ring bytes × N rows, spilling to temp files on a big car/transit reach).
       SELECT
         place.id,
         place.name,
@@ -182,10 +198,6 @@ export async function queryCatalogueSummaryInRing(
         place."sourceId",
         place."sourceTags",
         place.geom,
-        params.ring_inner,
-        params.ring_mid,
-        params.ring_outer,
-        params.origin,
         -- The band is decided on the FULL stored geometry, so a park straddling a
         -- ring boundary is attributed to the innermost band it reaches into.
         (CASE
@@ -197,7 +209,10 @@ export async function queryCatalogueSummaryInRing(
       CROSS JOIN params
       WHERE place."datasetId" = ${datasetId}
         AND ST_Intersects(place.geom, params.ring_outer)
-    ), clipped_rows AS (
+    ), clipped_rows AS MATERIALIZED (
+      -- MATERIALIZED with intersections above (task 017) — holds the per-row ST_Intersection
+      -- clip once so the downstream ST_PointOnSurface/window sorts don't re-run it. Re-joins the
+      -- 1-row params for the band's ring rather than carrying it forward from intersections.
       SELECT
         intersections.*,
         -- Clip to the ring of the band this row was ATTRIBUTED to — not to the outer
@@ -214,11 +229,12 @@ export async function queryCatalogueSummaryInRing(
         -- computing a polygon intersection for each was measurable dead work.
         CASE
           WHEN GeometryType(geom) = 'POINT' THEN geom
-          WHEN band = ${innerBand} THEN ST_Intersection(geom, ring_inner)
-          WHEN band = ${midBand} THEN ST_Intersection(geom, ring_mid)
-          ELSE ST_Intersection(geom, ring_outer)
+          WHEN band = ${innerBand} THEN ST_Intersection(geom, params.ring_inner)
+          WHEN band = ${midBand} THEN ST_Intersection(geom, params.ring_mid)
+          ELSE ST_Intersection(geom, params.ring_outer)
         END AS clipped
       FROM intersections
+      CROSS JOIN params
     ), display_points AS (
       SELECT clipped_rows.*, ST_PointOnSurface(clipped) AS display_point
       FROM clipped_rows
@@ -236,14 +252,16 @@ export async function queryCatalogueSummaryInRing(
         CASE WHEN category = 'transit' THEN "sourceTags" ELSE NULL END AS "transitTags",
         ST_Y(display_point)::double precision AS lat,
         ST_X(display_point)::double precision AS lng,
-        ST_Distance(display_point::geography, origin::geography)::double precision AS distance,
+        ST_Distance(display_point::geography, params.origin::geography)::double precision AS distance,
         ST_SnapToGrid(display_point, ${AMENITY_STRATIFY_GRID_DEG}) AS bucket
       FROM display_points
+      -- Re-join the 1-row params for origin + the band ring (not carried through the tuplestore).
+      CROSS JOIN params
       -- Belt-and-braces: the display point must sit inside the ring of its own band,
       -- which is what makes "no marker outside the shading" true at EVERY filter, not
       -- only at "all".
       WHERE ST_Covers(
-        CASE WHEN band = ${innerBand} THEN ring_inner WHEN band = ${midBand} THEN ring_mid ELSE ring_outer END,
+        CASE WHEN band = ${innerBand} THEN params.ring_inner WHEN band = ${midBand} THEN params.ring_mid ELSE params.ring_outer END,
         display_point
       )
     ), bucketed AS (

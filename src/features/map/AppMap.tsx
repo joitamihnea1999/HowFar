@@ -1,7 +1,7 @@
 "use client";
 
-import maplibregl from "maplibre-gl";
-import { Protocol } from "pmtiles";
+import type maplibregl from "maplibre-gl";
+import type { Protocol as PmtilesProtocol } from "pmtiles";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
@@ -53,6 +53,7 @@ import { createHoverController } from "@/features/map/hover-controller";
 import { deriveShell, type ShellState } from "@/features/map/shell-state";
 import StatePill from "@/features/map/StatePill";
 import { createLoadState } from "@/features/map/load-state";
+import { setMapGl, type MapGl } from "@/features/map/map-runtime";
 import { createPopupController } from "@/features/map/popup-controller";
 import {
   createReachDirectionsController,
@@ -161,6 +162,10 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
   // The most recent user SelectInput, so a pace/time change before the first
   // selection resolves can re-issue it rather than lose the change (finding G).
   const pendingInputRef = useRef<SelectInput | null>(null);
+  // A user selection made while the deferred map engine is still loading (task 017). The search
+  // box is interactive in the eager shell before the map exists, so a submit before `selectRef`
+  // is wired is buffered here and replayed once the map is ready — never dropped.
+  const pendingSelectRef = useRef<SelectInput | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   // The rings + mode of the last resolved selection, stashed so a right-click
   // ("how do I get there?") can classify a clicked point against the EXACT
@@ -345,16 +350,80 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
     return () => controller.dispose();
   }, []);
 
+  // Defer the MapLibre engine (327 KB gz) off the first-load critical path (task 017): the eager
+  // shell above (search, header, controls) is already interactive; only the map canvas waits.
+  // `hf:interactive` marks the split the bundle instrument reads (JS requested AFTER it is LAZY);
+  // the engine is dynamically imported on the first idle slot after that mark, so it lands in a
+  // lazy chunk and never blocks TTI. The map then fades in behind the shell.
+  const [mapEngine, setMapEngine] = useState<{ gl: MapGl; Protocol: typeof PmtilesProtocol } | null>(null);
+  // A deferred dynamic import CAN fail in ways the old eager bundle could not — a flaky mobile
+  // network, or (routinely) a stale client whose cached HTML points at a hashed chunk a redeploy
+  // has purged (ChunkLoadError). Without handling, `mapEngine` stays null forever: the shell looks
+  // fully interactive but the map — the headline surface — never appears, which violates the
+  // "core flow survives degradation" invariant [node 1]. So: one silent auto-retry, then surface a
+  // retryable error. `mapReloadToken` re-runs this effect for the manual retry.
+  const [mapLoadFailed, setMapLoadFailed] = useState(false);
+  const [mapReloadToken, setMapReloadToken] = useState(0);
   useEffect(() => {
+    let cancelled = false;
+    if (mapReloadToken === 0 && typeof performance !== "undefined" && performance.mark) {
+      performance.mark("hf:interactive");
+    }
+    let attempts = 0;
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    const load = () => {
+      Promise.all([import("maplibre-gl"), import("pmtiles")])
+        .then(([gl, pm]) => {
+          if (cancelled) return;
+          setMapLoadFailed(false);
+          setMapGl(gl);
+          setMapEngine({ gl, Protocol: pm.Protocol });
+        })
+        .catch((error: unknown) => {
+          if (cancelled) return;
+          console.error(`[map] engine chunk failed to load: ${(error as Error)?.message ?? error}`);
+          attempts += 1;
+          if (attempts < 2) {
+            retry = setTimeout(load, 1500); // one silent retry (transient network / CDN blip)
+          } else {
+            setMapLoadFailed(true); // give the user a visible, retryable error instead of a blank map
+          }
+        });
+    };
+    const win = window as typeof window & {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    };
+    let idleHandle: number | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    if (typeof win.requestIdleCallback === "function") {
+      idleHandle = win.requestIdleCallback(load, { timeout: 2000 });
+    } else {
+      timer = setTimeout(load, 200);
+    }
+    return () => {
+      cancelled = true;
+      if (idleHandle !== null && typeof win.cancelIdleCallback === "function") win.cancelIdleCallback(idleHandle);
+      if (timer !== null) clearTimeout(timer);
+      if (retry !== null) clearTimeout(retry);
+    };
+  }, [mapReloadToken]);
+
+  useEffect(() => {
+    if (!mapEngine) return;
+    // The engine, dynamically imported off the critical path (effect above). `gl` is the loaded
+    // runtime namespace; the type-only `maplibregl` module import still serves every TYPE use.
+    const gl = mapEngine.gl;
+    const Protocol = mapEngine.Protocol;
     const container = containerRef.current;
     if (!container) return;
     // Non-null capture so nested closures (renderSelection, load) keep the type.
     const el: HTMLDivElement = container;
 
     const protocol = new Protocol();
-    maplibregl.addProtocol("pmtiles", protocol.tile);
+    gl.addProtocol("pmtiles", protocol.tile);
 
-    const map = new maplibregl.Map({
+    const map = new gl.Map({
       container,
       style: createMapStyle(`${window.location.origin}/api/tiles`),
       center: BUCHAREST_CENTER,
@@ -375,7 +444,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
     // (which can false-pass). Harmless in prod (a handle
     // to the already-visible map); cleared on teardown.
     (window as unknown as { __hfMap?: maplibregl.Map }).__hfMap = map;
-    map.addControl(new maplibregl.NavigationControl({ showCompass: true, showZoom: true }), "bottom-right");
+    map.addControl(new gl.NavigationControl({ showCompass: true, showZoom: true }), "bottom-right");
 
     // Shared lifecycle cell replayed at `load` (see load-state.ts). Buffers a
     // selection / amenities response that arrived before the style existed.
@@ -622,6 +691,14 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       renderSelection: renderSelectionStash,
     });
     selectRef.current = selectFlow.select;
+    // Replay a selection the user made while the engine was still loading (task 017): the shell's
+    // search was interactive before this point, so an early submit was buffered — apply it now.
+    // load-state's pre-`load` replay buffer handles rendering if the style hasn't settled yet.
+    if (pendingSelectRef.current) {
+      const buffered = pendingSelectRef.current;
+      pendingSelectRef.current = null;
+      selectFlow.select(buffered);
+    }
 
     map.on("load", () => {
       // Source + layer specs live in map-setup (unit-tested). Add order = draw
@@ -685,6 +762,10 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       // dock open (review/review). No-op when nothing was drawn.
       reachDirections.reframe();
       el.dataset.mapLoaded = "true";
+      // Symmetric with `hf:interactive` (task 017): marks when the deferred engine has finished
+      // loading and the map is visible unprompted — the perf harness reports both, so shell-
+      // interactive vs map-visible are separable on the emulator AND a real device.
+      if (typeof performance !== "undefined" && performance.mark) performance.mark("hf:map-ready");
       const center = map.getCenter();
       el.dataset.cameraCenter = `${center.lng.toFixed(5)},${center.lat.toFixed(5)}`;
     });
@@ -975,11 +1056,16 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
             delete (window as unknown as { __hfMap?: maplibregl.Map }).__hfMap;
           }
           map.remove();
-          maplibregl.removeProtocol("pmtiles");
+          gl.removeProtocol("pmtiles");
           mapRef.current = null;
         },
       );
-  }, []);
+    // Runs once, when the deferred engine finishes loading (mapEngine: null → set, never back).
+    // Deliberately depends ONLY on mapEngine: this builds the map + all controllers exactly once.
+    // `switchMode` (a non-memoized component function) is called inside but must NOT be a dep —
+    // it changes identity every render, and re-running would tear down and rebuild the whole map.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapEngine]);
 
   // Combobox autocomplete wiring: the debounce timer + AbortController live in
   // search-suggest-controller; these handlers only dispatch reducer transitions
@@ -997,7 +1083,15 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
   function pickSuggestion(s: Suggestion) {
     suggestRef.current?.cancel();
     dispatchCombo({ type: "pick", suggestion: s });
-    selectRef.current?.({ kind: "point", lat: s.lat, lng: s.lng, label: s.label });
+    runUserSelect({ kind: "point", lat: s.lat, lng: s.lng, label: s.label });
+  }
+
+  // Route a user-initiated selection so it survives the deferred-map window (task 017): if the
+  // map engine has not finished loading yet, `selectRef` is null — buffer the input and replay it
+  // on map-ready (effect above) instead of dropping the user's search.
+  function runUserSelect(input: SelectInput) {
+    if (selectRef.current) selectRef.current(input);
+    else pendingSelectRef.current = input;
   }
 
   function switchMode(next: Mode) {
@@ -1078,7 +1172,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
     const q = combo.query.trim();
     if (q) {
       closeSuggest();
-      selectRef.current?.({ kind: "search", query: q });
+      runUserSelect({ kind: "search", query: q });
     }
   }
 
@@ -1446,6 +1540,29 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
         tabIndex={-1}
         className="h-full w-full outline-none"
       />
+
+      {/* Deferred map engine failed to load (task 017): the shell stays usable, but rather than
+          leave the headline canvas silently blank we surface a retryable message. Retry re-runs
+          the load effect via mapReloadToken. */}
+      {mapLoadFailed && (
+        <div
+          role="alert"
+          data-testid="map-load-error"
+          className="pointer-events-auto absolute inset-x-0 bottom-24 z-30 mx-auto flex w-fit max-w-[90%] items-center gap-3 rounded-xl border border-white/10 bg-[#111614]/95 px-4 py-3 text-sm text-[#f4f7f2] shadow-lg"
+        >
+          <span>The map couldn’t load. Your search still works.</span>
+          <button
+            type="button"
+            className="shrink-0 rounded-lg border border-[#d8ff87]/25 bg-[#c7f36b] px-3 py-1.5 font-medium text-[#172008]"
+            onClick={() => {
+              setMapLoadFailed(false);
+              setMapReloadToken((t) => t + 1);
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       <AttributionBadge elevated={hasResults} />
     </div>

@@ -81,7 +81,11 @@ class FakeMarker {
   }
 }
 
-vi.mock("maplibre-gl", () => ({ default: { Marker: FakeMarker } }));
+// The controller reaches the MapLibre runtime through the lazy `mapGl()` holder (task 017 —
+// the engine is dynamically imported off the critical path), so the test installs a fake runtime
+// via setMapGl rather than mocking the maplibre-gl module.
+const { setMapGl } = await import("./map-runtime");
+setMapGl({ Marker: FakeMarker } as unknown as import("./map-runtime").MapGl);
 
 const { createAmenityClusterController } = await import("./amenity-cluster-controller");
 const { createAmenityClusterController: _ctor, MIN_MARK_TAP_RADIUS_PX } = await import(

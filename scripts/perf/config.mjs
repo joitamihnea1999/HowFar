@@ -78,18 +78,59 @@ const COLD_SUGGEST = [
   "Calar", "Popan", "Labir", "Delea", "Basar", "Voievo", "Vasel", "Lizea", "Domnu", "Reinv",
 ];
 
+// Deterministic coord jitter (task 017: paired before/after must exercise the SAME
+// polygons or the comparison is not causal — rule 13). The street/suggest lists were
+// already fixed; only reverse/isochrone/car/amenities jittered, and they used Math.random(),
+// so two runs hit different coordinates. `PERF_JITTER_SEED` (default fixed) makes every
+// (endpoint, sampleIndex) map to a STABLE offset — same coords every run, still all-unique
+// within a run. The trade this makes explicit: because the coords are now identical across
+// runs, a SECOND run is only genuinely COLD after an ApiCache flush (regenerable provider
+// cache — the harness/README documents the flush). Set PERF_JITTER_SEED to re-randomize.
+export const JITTER_SEED = Number(process.env.PERF_JITTER_SEED ?? 20170830);
+function seededUnit(i, salt) {
+  // mulberry32-style avalanche of (seed, salt, index) → [0,1). Pure + order-independent:
+  // the offset depends only on the sample index, never on call order or prior draws.
+  let t = (JITTER_SEED ^ Math.imul(salt, 0x9e3779b1) ^ Math.imul(i + 1, 0x85ebca77)) >>> 0;
+  t = Math.imul(t ^ (t >>> 15), t | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+
 export function endpointProbes({ lat, lng } = TEST_ORIGIN) {
-  const j = (n) => (n + (Math.random() - 0.5) * 0.02).toFixed(6); // ~±1km jitter for cold keys
+  // ~±1 km jitter, deterministic per (sampleIndex, salt). Distinct salts for lat vs lng and
+  // per endpoint keep every cold key unique within a run while reproducible across runs.
+  const jit = (n, i, salt) => (n + (seededUnit(i, salt) - 0.5) * 0.02).toFixed(6);
   let si = 0;
   let gi = 0;
+  let ri = 0;
+  let ii = 0;
+  let ci = 0;
+  let ai = 0;
   return [
     { key: "suggest", budgetMs: 150, warm: `/api/suggest?q=Piata+Unirii`, cold: () => `/api/suggest?q=${encodeURIComponent(COLD_SUGGEST[si++ % COLD_SUGGEST.length])}` },
     { key: "geocode", budgetMs: 300, warm: `/api/geocode?q=${encodeURIComponent(TEST_ADDRESS)}`, cold: () => `/api/geocode?q=${encodeURIComponent(COLD_STREETS[gi++ % COLD_STREETS.length] + " Bucuresti")}` },
-    { key: "reverse", budgetMs: 300, warm: `/api/reverse?lat=${lat}&lng=${lng}`, cold: () => `/api/reverse?lat=${j(lat)}&lng=${j(lng)}` },
-    { key: "isochrone", budgetMs: 800, warm: `/api/isochrone?lat=${lat}&lng=${lng}&pace=normal`, cold: () => `/api/isochrone?lat=${j(lat)}&lng=${j(lng)}&pace=normal` },
-    { key: "car", budgetMs: 800, warm: `/api/car?lat=${lat}&lng=${lng}`, cold: () => `/api/car?lat=${j(lat)}&lng=${j(lng)}` },
-    { key: "amenities", budgetMs: 400, warm: `/api/amenities?lat=${lat}&lng=${lng}&pace=normal&mode=walk`, cold: () => `/api/amenities?lat=${j(lat)}&lng=${j(lng)}&pace=normal&mode=walk` },
+    { key: "reverse", budgetMs: 300, warm: `/api/reverse?lat=${lat}&lng=${lng}`, cold: () => { const i = ri++; return `/api/reverse?lat=${jit(lat, i, 11)}&lng=${jit(lng, i, 12)}`; } },
+    { key: "isochrone", budgetMs: 800, warm: `/api/isochrone?lat=${lat}&lng=${lng}&pace=normal`, cold: () => { const i = ii++; return `/api/isochrone?lat=${jit(lat, i, 21)}&lng=${jit(lng, i, 22)}&pace=normal`; } },
+    { key: "car", budgetMs: 800, warm: `/api/car?lat=${lat}&lng=${lng}`, cold: () => { const i = ci++; return `/api/car?lat=${jit(lat, i, 31)}&lng=${jit(lng, i, 32)}`; } },
+    { key: "amenities", budgetMs: 400, warm: `/api/amenities?lat=${lat}&lng=${lng}&pace=normal&mode=walk`, cold: () => { const i = ai++; return `/api/amenities?lat=${jit(lat, i, 41)}&lng=${jit(lng, i, 42)}&pace=normal&mode=walk`; } },
   ];
+}
+
+// Matched (isochrone, amenities) URL pairs at the SAME deterministic origin, for the
+// in-session amenities cell (task 017): the real flow draws the ring first (/api/isochrone),
+// then requests amenities — so the amenities call's ORS ring is already cached/coalesced. This
+// pair lets the harness measure "amenities cost with the ring already drawn" as a SEPARATE cell,
+// WITHOUT replacing the cold-cold verdict probe (which stays the same instrument before/after).
+export function amenityInSessionPairs({ lat, lng } = TEST_ORIGIN) {
+  const jit = (n, i, salt) => (n + (seededUnit(i, salt) - 0.5) * 0.02).toFixed(6);
+  return (i) => {
+    const la = jit(lat, i, 51);
+    const ln = jit(lng, i, 52);
+    return {
+      iso: `/api/isochrone?lat=${la}&lng=${ln}&pace=normal`,
+      amenities: `/api/amenities?lat=${la}&lng=${ln}&pace=normal&mode=walk`,
+    };
+  };
 }
 
 // Owner budgets (the gap list is measured against these). Kept here so every runner and
@@ -98,7 +139,7 @@ export const BUDGETS = {
   ttiMs: 2500,
   panZoomMedianFps: 55,
   panZoomMaxFrameMs: 32,
-  initialJsGzKB: 350, // includes MapLibre
+  initialJsGzKB: 350, // the CRITICAL-PATH initial JS; MapLibre is deferred (lazy) and excluded
   lighthouseMobile: 90,
   api: { suggest: 150, geocode: 300, isochrone: 800, amenities: 400, car: 800, reverse: 300 },
 };

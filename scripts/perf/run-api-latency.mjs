@@ -13,7 +13,7 @@ import { writeFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { openBrowser, closeBrowser } from "./browser.mjs";
-import { ORIGIN, TARGET_URL, endpointProbes, percentile, median } from "./config.mjs";
+import { ORIGIN, TARGET_URL, endpointProbes, amenityInSessionPairs, percentile, median } from "./config.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // ≥30 so cold p95 (nearest-rank index ⌈0.95·n⌉−1) is an actual tail percentile, not the
@@ -91,10 +91,53 @@ async function main() {
     );
   }
 
+  // Cold-vs-warm sanity guard (task 017): the coord-jittered endpoints (reverse/isochrone/car/
+  // amenities) must pay a real provider/PostGIS round trip on a genuinely cold key. If a fresh
+  // cache namespace was NOT used (the deterministic coords repeat, so a re-run without bumping
+  // PROVIDER_DATA_REVISION serves ApiCache HITS), their "cold" p50 collapses to a few ms — a warm
+  // reading masquerading as cold, which would falsely PASS the verdict. Flag it and fail closed.
+  // (suggest/geocode are EXCLUDED: they use fixed keys and are documented as warm-on-repeat.)
+  const WARM_MASQUERADE_FLOOR_MS = 15;
+  const JITTERED = new Set(["reverse", "isochrone", "car", "amenities"]);
+  for (const r of out) {
+    if (JITTERED.has(r.endpoint) && r.cold && r.cold.p50 < WARM_MASQUERADE_FLOOR_MS) {
+      hardFail = true;
+      console.error(
+        `[api] ${r.endpoint}: cold p50 ${r.cold.p50} ms < ${WARM_MASQUERADE_FLOOR_MS} ms — this is a WARM cache hit, not a cold provider call. ` +
+          `Bump PROVIDER_DATA_REVISION (or flush ApiCache) for a true cold run; the "cold" verdict here is INVALID.`,
+      );
+    }
+  }
+
+  // IN-SESSION amenities cell (task 017) — a SEPARATE label, NOT a replacement for the
+  // cold-cold verdict above. The real flow draws the ring first, so here we GET /api/isochrone
+  // at each origin (priming/coalescing the ORS ring) BEFORE timing /api/amenities at the same
+  // origin — isolating the amenities-per-selection cost (warm ORS ring + PostGIS). Its value
+  // still depends on PostGIS buffer warmth (cold-buffer disk I/O dominates a fresh area; a
+  // warmed stack is ~100ms), so it is reported alongside, not as the budget verdict.
+  const pairAt = amenityInSessionPairs();
+  const inSession = [];
+  let inSessionFail = 0;
+  for (let i = 0; i < SAMPLES; i++) {
+    const { iso, amenities } = pairAt(i);
+    await timeFetch(page, ORIGIN + iso); // draw the ring first (prime/coalesce ORS)
+    const r = await timeFetch(page, ORIGIN + amenities);
+    if (r.status < 400) inSession.push(r.ms);
+    else inSessionFail++;
+  }
+  if (inSessionFail > 0) hardFail = true;
+  const inSessionCell = inSession.length
+    ? { p50: +median(inSession).toFixed(1), p95: +percentile(inSession, 95).toFixed(1), n: inSession.length, fail: inSessionFail }
+    : null;
+  console.error(
+    `[api] amenities(in-session, ring pre-drawn) cold p50/p95 ${inSessionCell?.p50 ?? "—"}/${inSessionCell?.p95 ?? "—"} ms (budget 400) n=${inSession.length}/${SAMPLES}`,
+  );
+
   const report = {
     takenAt: new Date().toISOString(),
     target: TARGET_URL,
     samplesPerCell: SAMPLES,
+    amenitiesInSession: inSessionCell,
     device: ctx.emulated ? "throttled" : "unthrottled (stack latency; add real-device network RTT on-device)",
     percentile: `nearest-rank, n=${SAMPLES} per cell (p95 index ⌈0.95·n⌉−1)`,
     reliable: !hardFail,
@@ -125,6 +168,9 @@ async function main() {
     console.log(`${r.endpoint.padEnd(12)} ${cold}  ${warm}  ${String(r.budgetMs).padEnd(6)}  ${verdict}`);
   }
   console.log(`(verdict on COLD p95 = first-touch cache-miss, n=${SAMPLES}; warm = ApiCache hit, returning user)`);
+  if (inSessionCell) {
+    console.log(`amenities(in-session, ring pre-drawn): p50/p95 ${inSessionCell.p50}/${inSessionCell.p95} ms  — the per-selection amenities cost with the ORS ring already drawn (context, not the verdict; still PostGIS-buffer-sensitive)`);
+  }
   console.log(`\nWrote ${join(outDir, "api-latency.json")}`);
   await closeBrowser(ctx);
   if (hardFail) {

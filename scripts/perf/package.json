@@ -8,6 +8,7 @@
     "lighthouse": "node run-lighthouse.mjs",
     "profile": "node run-runtime-profile.mjs",
     "api": "node run-api-latency.mjs",
+    "shell": "node measure-shell-interactive.mjs",
     "bundle": "node analyze-bundle.mjs",
     "all": "node run-all.mjs",
     "real": "bash measure-real.sh"

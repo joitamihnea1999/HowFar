@@ -1,4 +1,5 @@
-import maplibregl from "maplibre-gl";
+import type maplibregl from "maplibre-gl";
+import { mapGl } from "@/features/map/map-runtime";
 
 import {
   AMENITY_CATEGORIES,
@@ -195,7 +196,7 @@ export function createPopupController({
     const props = feature.properties ?? {};
     const name = typeof props.name === "string" ? props.name.trim() : "";
     const category = typeof props.category === "string" ? props.category : "";
-    const popup = new maplibregl.Popup({ closeButton: true, closeOnClick: false, maxWidth: "280px" })
+    const popup = new (mapGl().Popup)({ closeButton: true, closeOnClick: false, maxWidth: "280px" })
       .setLngLat(coords)
       .setDOMContent(renderPoiPopup(name, category))
       .addTo(map);
@@ -523,7 +524,7 @@ export function createPopupController({
     note.textContent = "Details could not be loaded. Try again in a moment.";
     root.appendChild(heading);
     root.appendChild(note);
-    const popup = new maplibregl.Popup({ closeButton: true, closeOnClick: false, maxWidth: "268px" })
+    const popup = new (mapGl().Popup)({ closeButton: true, closeOnClick: false, maxWidth: "268px" })
       .setLngLat(coords)
       .setDOMContent(root)
       .addTo(map);
@@ -549,7 +550,7 @@ export function createPopupController({
       // Route into the normal detail path; it replaces this popup in the shared slot.
       inspectAmenity(item);
     });
-    const popup = new maplibregl.Popup({ closeButton: true, closeOnClick: false, maxWidth: "268px" })
+    const popup = new (mapGl().Popup)({ closeButton: true, closeOnClick: false, maxWidth: "268px" })
       .setLngLat(coords)
       .setDOMContent(content)
       .addTo(map);
@@ -741,7 +742,7 @@ export function createPopupController({
     const controller = new AbortController();
     stopLinesAbort = controller;
 
-    const popup = new maplibregl.Popup({ closeButton: true, closeOnClick: false, maxWidth: "280px" })
+    const popup = new (mapGl().Popup)({ closeButton: true, closeOnClick: false, maxWidth: "280px" })
       .setLngLat(coords)
       .setDOMContent(renderStopPopup(buildStopPopupModel(title, "loading"), coords))
       .addTo(map);

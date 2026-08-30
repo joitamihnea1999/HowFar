@@ -1,4 +1,5 @@
-import maplibregl from "maplibre-gl";
+import type maplibregl from "maplibre-gl";
+import { mapGl } from "@/features/map/map-runtime";
 
 import {
   AMENITY_CATEGORIES,
@@ -183,7 +184,7 @@ export function createAmenitySpiderController({
       event.preventDefault();
       close();
     });
-    hubMarker = new maplibregl.Marker({ element: button }).setLngLat(nextHub).addTo(map);
+    hubMarker = new (mapGl().Marker)({ element: button }).setLngLat(nextHub).addTo(map);
 
     el.dataset.amenitySpider = String(leaves.length);
     onActiveChange(true);

@@ -30,6 +30,14 @@ jobs:
       # Coverage thresholds (vitest.config.ts) gate the merge, not just tests.
       - run: npm run test:coverage
       - run: npm run build
+      # Perf budget (task 017): initial-route JS ≤ 350 KB gz with MapLibre deferred (lazy).
+      # The perf harness deps are intentionally isolated from the app tree, so install them
+      # here; the runner's pre-installed Chrome serves chrome-launcher. Serves a PLAIN
+      # `next start` (no provider stack) — a /api/tiles 404 does not change JS byte counts.
+      # The pure classifier is unit-tested with the built-in node:test (zero deps) first.
+      - run: npm run perf:budget:test
+      - run: cd scripts/perf && npm ci
+      - run: PERF_BUDGET_SKIP_BUILD=1 npm run perf:budget # build just ran above
       # Hermetic geometry-instrument self-test (no Docker/stack needed): guards the
       # parity harness's area/residual/verdict math so a refactor can't silently break it.
       - run: npm run selfhost:harness-selftest

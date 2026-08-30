@@ -411,7 +411,15 @@ async function computeNearbyAmenities(
   }
 
   // Miss path: the reach rings bound AND band the query, then a pinned dataset read.
+  // Server-side spans (task 017, gap #8) attribute the cold cost between the ORS reach-ring
+  // fetch and the PostGIS intersect — the audit could only INFER the split by subtracting two
+  // independently-sampled p95s (which don't subtract). Gated on AMENITY_SPANS so it's a
+  // diagnostic, not always-on log noise. `clip.rings` is already present for transit (resolveClip
+  // fetched them), so this ORS span is walk/car only — exactly the cold-cold probe's path.
+  const spansOn = !!process.env.AMENITY_SPANS;
+  const tStart = spansOn ? performance.now() : 0;
   const rings = clip.rings ?? (await clipRingsFor(latRaw, lngRaw, mode, pace, timeContext));
+  const tAfterRings = spansOn ? performance.now() : 0;
 
   let summary: {
     datasetId: string;
@@ -447,9 +455,17 @@ async function computeNearbyAmenities(
     throw new CatalogueUnavailableError("Amenity catalogue query failed", { cause: error });
   }
   if (!summary) throw new CatalogueUnavailableError("No active amenity catalogue");
+  const tAfterQuery = spansOn ? performance.now() : 0;
 
   // Fuse coincident transit stops into single markers (task 047). Read-time only.
   const merged = mergeCoincidentTransitStops(summary.amenities);
+  if (spansOn) {
+    const orsMs = (tAfterRings - tStart).toFixed(0);
+    const pgMs = (tAfterQuery - tAfterRings).toFixed(0);
+    const mergeMs = (performance.now() - tAfterQuery).toFixed(0);
+    // One line, no payloads (the [api:*] boundary-log convention, node [19]).
+    console.log(`[amenities:spans] mode=${mode} ors_rings=${orsMs}ms postgis=${pgMs}ms merge=${mergeMs}ms places=${summary.amenities.length}`);
+  }
   // `modes` is a server-only merge input; drop it so it never enters the client
   // payload/cache contract (a merged marker carries everything the popup needs in
   // `members`). (impl-panel finding F5.)

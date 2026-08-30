@@ -66,6 +66,9 @@ npm run dev                 # http://localhost:3000
 | `npm run tiles:fetch [YYYYMMDD]` | (Re)fetch the Bucharest basemap extract |
 | `npm run amenities:refresh` | Fetch, validate and atomically publish the weekly Bucharest OSM catalogue |
 | `npm run security:google-keys` | Value-safe scan of the working tree, Git index, and full history |
+| `npm run perf:budget` | **Enforced initial-JS budget** (builds if needed, serves a plain `next start`, asserts — see [Performance budgets](#performance-budgets)) |
+| `npm run perf:budget:test` | Unit tests for the bundle classifier (zero deps; runs in `check`) |
+| `npm run perf:lighthouse` · `npm run perf:shell` | Cited perf jobs: Lighthouse-mobile score/TTI · shell-interactive & map-visible timings (need `scripts/perf` deps + a running server) |
 
 ### Secret safety
 
@@ -86,6 +89,54 @@ name. This clone uses the committed pre-commit scanner; enable it in another clo
 `.github/workflows/ci.yml` runs on every push/PR: **lint → typecheck → unit (with coverage
 thresholds) → build**, plus an **e2e job** with PostGIS 3.5, empty-database migrations,
 real catalogue integration tests, a cached basemap extract, and Playwright against the production build.
+
+## Performance budgets
+
+The mobile map flow is measured against owner budgets by the re-runnable harness in `scripts/perf`
+(see `docs/PERF_AUDIT.md` for the full before/after and `scripts/perf/README.md` for the runbook,
+including a one-command real-Android re-run). Two of those budgets are **enforced**; the rest are
+**measured and reported** (not gamed into a hard gate).
+
+**Enforced — initial-JS ceiling (`npm run perf:budget`, in `check:ci`, the close, and CI).**
+The gate asserts, on the real production build served by a plain `next start`:
+
+- **initial-route JS ≤ 350 KB gz.** "Initial" = the JS the browser requests **before** the page
+  emits its `hf:interactive` mark (set the moment the search shell is hydrated and interactive,
+  before the map engine is scheduled). MapLibre GL (~268 KB gz) + pmtiles are dynamically imported
+  on the first idle slot **after** that mark, so they are classified LAZY, not initial. Measured
+  initial is **~190 KB gz** (React + app UI), down from ~470 KB before the split.
+- **MapLibre must still load.** The budget is "off the critical path", **not** "removed": the gate
+  also fails if MapLibre is missing from the LAZY set, and the map hydrates on its own behind the
+  shell (no interaction required). "Lazy" here means *not blocking first interactivity*, never
+  *hidden from the auditor*.
+
+The gate needs **no provider stack** — it only counts JS bytes, and a `/api/tiles` 404 does not
+change them. It fails **closed**: a page that will not load, an absent browser, or missing
+`scripts/perf` deps all fail the gate (never a silent pass). The pure classifier is unit-tested
+with the built-in `node:test` (`perf:budget:test`, zero deps).
+
+**Measured, not hard-gated — Lighthouse mobile & interactivity (`perf:lighthouse`, `perf:shell`).**
+Under the Lighthouse "mobile" emulation (Moto-G-class, 4× CPU, Slow 4G) the **Lighthouse score
+(currently 66) and TTI (~7.8 s) MISS** the ≥90 / ≤2.5 s targets — because Lighthouse's *interactive*
+metric counts the eventual 327 KB MapLibre parse on the throttled main thread, and this dev host has
+no GPU (software WebGL) which inflates paint metrics further. These are **not hard-gated**: the only
+way to make the score green is to defer the map until a user interaction, which Lighthouse never
+performs — that would please the auditor while giving real users a map that waits for a tap, a
+trade this project does not make. Instead the **primary, honest number is *shell-interactive* time**
+— when the search box is usable — which is **~1.84 s (≤ 2.5 s ✓)** on the same emulation: the paint-
+fast shell delivers the budget's real intent ("the user can act within 2.5 s"). The map then appears
+unprompted at ~6.9 s emulated (software-WebGL inflated; a real Android with a GPU should be much
+faster — a **mandatory** real-device re-measure, targets shell-interactive ≤ 2.5 s and
+map-visible ≤ 4 s).
+
+**Measured — API cold p95 (self-host stack, `mode=walk` verdict cell).** Amenities cold p95 is
+**~335 ms (≤ 400 ✓)** after the catalogue query was fixed (materializing the geometry CTEs — without
+the hint the window-function sorts re-evaluated `ST_Intersects`/`ST_Distance` per row; the rings are
+kept out of the materialized tuplestore so a big `car`/`transit` reach does not bloat it: server-side
+`mode=walk` 457→~50 ms, `mode=car` ~120 ms) and a process-start warmup primes the ORS engine +
+catalogue buffer. Isochrone/car/reverse cold p95 pass their budgets; suggest/geocode sit marginally
+over at n=30 and are left unaddressed (their cause — prefix-search cost vs warmth — is unconfirmed, so
+warming them would be an unproven fix).
 
 ## Deploying to Railway
 

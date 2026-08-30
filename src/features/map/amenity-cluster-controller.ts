@@ -1,4 +1,5 @@
-import maplibregl from "maplibre-gl";
+import type maplibregl from "maplibre-gl";
+import { mapGl } from "@/features/map/map-runtime";
 
 import { amenityCategoryLabel, type AmenityCategoryKey } from "@/features/amenities/amenities";
 import {
@@ -682,7 +683,7 @@ export function createAmenityClusterController({
           keyboard,
         );
       });
-      const marker = new maplibregl.Marker({ element: button }).setLngLat(anchor).addTo(map);
+      const marker = new (mapGl().Marker)({ element: button }).setLngLat(anchor).addTo(map);
       const entry: Entry = {
         key,
         marker,

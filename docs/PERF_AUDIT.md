@@ -1,7 +1,8 @@
 # Mobile performance audit — map flow
 
-**Measurement only. No optimization changes were made in this audit** — the fixes are the
-follow-up task; the gap list below is that task's work plan.
+**Original audit was measurement-only** (task 015); the gap list below was the work plan. **The
+design-independent gaps were FIXED in task 017** — see [Follow-up — H3a fixes](#follow-up--h3a-fixes-task-017-2026-08-30-before--after)
+for the before/after. The gap list below is preserved as the "before" record.
 
 - **Date:** 2026-08-29
 - **Build:** production (`next build`, Turbopack) served with `next start` (NOT `next dev`).
@@ -27,6 +28,66 @@ follow-up task; the gap list below is that task's work plan.
 > and firm; API-latency numbers are not device-emulated (still need real-network RTT added).
 
 ---
+
+## Follow-up — H3a fixes (task 017, 2026-08-30): before → after
+
+The gaps below were the work plan for task 017, which closed the **design-independent** ones (gap
+#4 pan/zoom fps stays open — owner: no software-WebGL chase; real device only). Re-measured on the
+shipped code with the same `scripts/perf` harness + deterministic sample. **Numbers, not adjectives:**
+
+| Metric | Before | After | Budget | Verdict |
+|---|---|---|---|---|
+| Initial-route JS gz | **470.7 KB** (MapLibre 327 eager) | **190.0 KB** (MapLibre lazy) | ≤ 350 | ✅ PASS (−60%) |
+| `[EMU]` Lighthouse mobile | 66 | **65** | ≥ 90 | ❌ MISS — honest (see below) |
+| `[EMU]` TTI | 7791 ms | **7941 ms** | ≤ 2500 | ❌ MISS — honest (see below) |
+| `[EMU]` **shell-interactive** (search usable) | — (new) | **1839 ms** | ≤ 2500¹ | ✅ PASS — the budget's real intent |
+| `[EMU]` TBT | 2498 ms | 2267 ms | — | improved |
+| `[EMU]` map-visible-unprompted | — (new) | 6.9–9.7 s `[EMU, sw-GL]` | ≤ 4000² | real-device follow-up |
+| amenities cold p95 (n=30, `mode=walk`) | **861 ms** | **335 ms** | ≤ 400 | ✅ PASS (−61%) |
+| amenities in-session (ring pre-drawn) | 745 ms | **89 ms** | (context) | — |
+| isochrone cold p95 | 289 ms | 175 ms | ≤ 800 | ✅ PASS |
+
+¹ ² **owner-defined intent budgets** for the honest interactivity numbers — see below.
+
+**What changed**
+
+- **Gaps #1/#2/#3 — MapLibre off the first-load critical path.** MapLibre GL (~268 KB gz) + pmtiles
+  are now dynamically `import()`ed on the first idle slot **after** the search shell is interactive
+  (a `map-runtime.ts` holder; the map controllers use `import type` + a `mapGl()` accessor, so the
+  only value import of the engine is that one dynamic import). AppMap stays eager, so **search works
+  immediately**; the map hydrates behind it (auto-load — no interaction required). Initial JS 470→190.
+- **TTI / Lighthouse — honest MISS, no metric-gaming (product decision).** The Lighthouse
+  *interactive* metric counts the eventual MapLibre parse on the 4×-throttled main thread, so TTI/
+  score barely move under auto-load — and this dev host has **no GPU** (software WebGL) which inflates
+  paint metrics further. The only way to make the score green is to defer the map until a user
+  interaction (which Lighthouse never performs) — that would please the auditor while giving real
+  users a map that waits for a tap. **This project doesn't make that trade.** The honest, un-gameable
+  number is **shell-interactive = 1.84 s** (search usable ≤ 2.5 s ✅): the paint-fast shell delivers
+  the budget's real intent. Measured for the record, interaction-gating would score 97 / TTI 2.8 s —
+  **rejected as metric-gaming.**
+- **Gap #8 — amenities cold p95 861 → 335 ms (`mode=walk`).** The dominant cost was NOT I/O and NOT
+  the index (the GiST index is used; buffers were already warm) — it was the un-materialized CTEs being
+  **inlined**, so the window-function sorts re-evaluated `ST_Intersects` (band) and `ST_Distance`
+  (::geography) per row. `MATERIALIZED` on the `intersections` + `clipped_rows` CTEs computes them
+  once, and the reach rings are kept OUT of the materialized tuplestore (re-joined from the 1-row
+  `params`) so a big reach doesn't bloat it: server-side **`mode=walk` 457 → ~50 ms, `mode=car`
+  ~120 ms** (the ring-carrying first draft was a 739 ms pessimisation on car — measured), identical
+  output at every mode (row counts diffed). A process-start warmup (`warmup.ts`
+  via `instrumentation.ts`) additionally primes the ORS foot/car engines (isochrone cold tail) and the
+  catalogue buffer — best-effort, single-flight, never awaited by `/api/ready`. The ORS ring is also
+  coalesced with the drawn isochrone in-session (one selection = one ORS call), so in-session amenities
+  is 141 ms. suggest/geocode stay marginally over at n=30 and are left unaddressed (their cause —
+  prefix-search vs warmth — is unconfirmed; warming them would be an unproven fix).
+- **CI enforcement (README §Performance budgets).** `npm run perf:budget` asserts initial-route JS
+  ≤ 350 KB gz **and** MapLibre-is-lazy (and still loads) on the real build — wired into `check:ci`, the
+  close verify contract (blocks closes), and `.github/workflows/ci.yml` (blocks PRs). Fails closed
+  (missing browser/deps ≠ pass); mutation-proved (a static maplibre import → gate FAILs). Lighthouse +
+  shell-interactive run as separate **cited** jobs (`perf:lighthouse`, `perf:shell`), not hard gates.
+
+**Real-device follow-ups (owner, mandatory).** ¹ shell-interactive ≤ 2.5 s and ² map-visible-unprompted
+≤ 4 s must be re-taken on a real Android (real GPU) — the `[EMU]` interactivity/paint numbers here are
+inflated by software WebGL + the 4× CPU throttle. `PERF_DEVICE=real npm run perf:shell` (+ `perf:lighthouse`).
+If the real device also misses, revisit load strategy with data — not before.
 
 ## Gap list vs owner budgets
 
