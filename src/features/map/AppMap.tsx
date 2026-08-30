@@ -361,12 +361,11 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
   // has purged (ChunkLoadError). Without handling, `mapEngine` stays null forever: the shell looks
   // fully interactive but the map — the headline surface — never appears, which violates the
   // "core flow survives degradation" invariant [node 1]. So: one silent auto-retry, then surface a
-  // retryable error. `mapReloadToken` re-runs this effect for the manual retry.
+  // actionable error whose manual recovery is a full page reload (see the overlay below).
   const [mapLoadFailed, setMapLoadFailed] = useState(false);
-  const [mapReloadToken, setMapReloadToken] = useState(0);
   useEffect(() => {
     let cancelled = false;
-    if (mapReloadToken === 0 && typeof performance !== "undefined" && performance.mark) {
+    if (typeof performance !== "undefined" && performance.mark) {
       performance.mark("hf:interactive");
     }
     let attempts = 0;
@@ -407,7 +406,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       if (timer !== null) clearTimeout(timer);
       if (retry !== null) clearTimeout(retry);
     };
-  }, [mapReloadToken]);
+  }, []);
 
   useEffect(() => {
     if (!mapEngine) return;
@@ -1541,25 +1540,28 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
         className="h-full w-full outline-none"
       />
 
-      {/* Deferred map engine failed to load (task 017): the shell stays usable, but rather than
-          leave the headline canvas silently blank we surface a retryable message. Retry re-runs
-          the load effect via mapReloadToken. */}
+      {/* Deferred map engine failed to load (task 017): rather than leave the headline canvas
+          silently blank we surface an actionable message. The dominant cause is a stale client
+          whose cached HTML points at a hashed chunk a redeploy has purged — for that case a same-
+          session re-import just replays the bundler's cached rejection, so the manual recovery is
+          a full page RELOAD (fresh HTML → fresh chunk hashes), not another in-page import. The copy
+          stays honest: a user-submitted search is buffered until the engine loads and is NOT served
+          while the map is down, so we do not claim otherwise. */}
       {mapLoadFailed && (
         <div
           role="alert"
           data-testid="map-load-error"
           className="pointer-events-auto absolute inset-x-0 bottom-24 z-30 mx-auto flex w-fit max-w-[90%] items-center gap-3 rounded-xl border border-white/10 bg-[#111614]/95 px-4 py-3 text-sm text-[#f4f7f2] shadow-lg"
         >
-          <span>The map couldn’t load. Your search still works.</span>
+          <span>The map couldn’t load. Reload to try again.</span>
           <button
             type="button"
             className="shrink-0 rounded-lg border border-[#d8ff87]/25 bg-[#c7f36b] px-3 py-1.5 font-medium text-[#172008]"
             onClick={() => {
-              setMapLoadFailed(false);
-              setMapReloadToken((t) => t + 1);
+              if (typeof window !== "undefined") window.location.reload();
             }}
           >
-            Retry
+            Reload
           </button>
         </div>
       )}

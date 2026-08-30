@@ -76,7 +76,8 @@ shipped code with the same `scripts/perf` harness + deterministic sample. **Numb
   via `instrumentation.ts`) additionally primes the ORS foot/car engines (isochrone cold tail) and the
   catalogue buffer — best-effort, single-flight, never awaited by `/api/ready`. The ORS ring is also
   coalesced with the drawn isochrone in-session (one selection = one ORS call), so in-session amenities
-  is 141 ms. suggest/geocode stay marginally over at n=30 and are left unaddressed (their cause —
+  is 89 ms (the shipped, post-restructure figure — matches the table above). suggest/geocode stay
+  marginally over at n=30 and are left unaddressed (their cause —
   prefix-search vs warmth — is unconfirmed; warming them would be an unproven fix).
 - **CI enforcement (README §Performance budgets).** `npm run perf:budget` asserts initial-route JS
   ≤ 350 KB gz **and** MapLibre-is-lazy (and still loads) on the real build — wired into `check:ci`, the

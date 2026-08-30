@@ -60,12 +60,12 @@ test("map defers but still auto-loads and draws rings", async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
-test("engine chunk load failure surfaces a retryable error, and the shell stays usable", async ({ page }) => {
+test("engine chunk load failure surfaces an honest, reload-able error, and the shell stays usable", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   await stubProviders(page);
   // Abort the MapLibre ENGINE chunk (shader signature) on every attempt → the deferred import
-  // rejects, the auto-retry also fails, and the app must show a retryable error, not a blank map.
+  // rejects, the auto-retry also fails, and the app must show a recoverable error, not a blank map.
   await page.route("**/_next/static/chunks/**", async (route) => {
     const res = await route.fetch();
     const body = await res.body();
@@ -76,10 +76,43 @@ test("engine chunk load failure surfaces a retryable error, and the shell stays 
   await page.goto("/");
   // Shell stays usable (search interactive) even though the map engine never loads.
   await expect(page.getByRole("combobox")).toBeVisible();
-  // The retryable error surfaces (after the one auto-retry) rather than an indefinite blank canvas.
+  // The recoverable error surfaces (after the one auto-retry) rather than an indefinite blank canvas.
   await expect(page.getByTestId("map-load-error")).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
+  // The copy is HONEST: it points at a reload, and does NOT promise "your search still works"
+  // (a submit is buffered until the engine loads, so search is genuinely unavailable while down).
+  await expect(page.getByTestId("map-load-error")).toContainText("Reload to try again");
+  await expect(page.getByTestId("map-load-error")).not.toContainText(/search still works/i);
+  await expect(page.getByRole("button", { name: "Reload" })).toBeVisible();
   // No unhandled pageerror (the rejection is caught).
+  expect(errors).toEqual([]);
+});
+
+test("the Reload button genuinely recovers a purged engine chunk (not a decorative re-import)", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await stubProviders(page);
+  // Simulate a stale client after a redeploy: the engine chunk is unreachable until the page is
+  // reloaded — exactly the case a same-session in-page re-import (which replays the bundler's cached
+  // rejected chunk promise, making no fresh network request) could NOT recover. The manual recovery
+  // is a full page reload, so a fresh navigation must bring the map up. `served` is flipped just
+  // before the reload click, so the abort covers the whole first page and the serve covers the next.
+  let served = false;
+  await page.route("**/_next/static/chunks/**", async (route) => {
+    const res = await route.fetch();
+    const body = await res.body();
+    if (/gl_Position/.test(body.toString("latin1")) && !served) return route.abort();
+    return route.fulfill({ response: res, body });
+  });
+
+  await page.goto("/");
+  const errorBox = page.getByTestId("map-load-error");
+  await expect(errorBox).toBeVisible({ timeout: 30_000 });
+  // Reload → full navigation → the chunk is now served → the map recovers.
+  served = true;
+  await page.getByRole("button", { name: "Reload" }).click();
+  const map = page.getByTestId("app-map");
+  await expect(map).toHaveAttribute("data-map-loaded", "true", { timeout: 30_000 });
+  await expect(errorBox).toBeHidden();
   expect(errors).toEqual([]);
 });
 
