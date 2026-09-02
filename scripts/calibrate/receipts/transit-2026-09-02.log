@@ -1,0 +1,27 @@
+# Transit reach validation — 2026-09-02T07:41:23.457Z
+# instrument: real transitIsochrone (walk-union) contours vs MOTIS /plan best journey @ contour departure
+
+## Unirii (44.4268,26.1025)
+  departure 2026-09-09T05:30:00.000Z; rings 15/30/45
+  15min: median journey 13.0  over(>T+5) 0%  maxOver +0.0min  (n=8)
+  30min: median journey 25.5  over(>T+5) 0%  maxOver +0.0min  (n=8)
+  45min: median journey 37.5  over(>T+5) 0%  maxOver +0.0min  (n=8)
+
+## Grozavesti (44.443,26.06)
+  departure 2026-09-09T05:30:00.000Z; rings 15/30/45
+  15min: median journey 14.0  over(>T+5) 0%  maxOver +2.4min  (n=8)
+  30min: median journey 27.5  over(>T+5) 0%  maxOver +0.0min  (n=8)
+  45min: median journey 41.5  over(>T+5) 0%  maxOver +4.0min  (n=8)
+
+## Berceni (44.383,26.123)
+  departure 2026-09-09T05:30:00.000Z; rings 15/30/45
+  15min: median journey 15.1  over(>T+5) 0%  maxOver +2.2min  (n=8)
+  30min: median journey 26.0  over(>T+5) 38%  maxOver +33.0min  (n=8)
+  45min: median journey 40.0  over(>T+5) 25%  maxOver +27.0min  (n=8)
+
+## pooled over-claim by threshold (conservative direction: journey <= T means safe)
+  15min: median 13.6  over 0%  (n=24)
+  30min: median 27.0  over 13%  (n=24)
+  45min: median 40.0  over 8%  (n=24)
+
+worst pooled over-claim rate 13% — receipt: /home/mihnea/Documents/Workspace/HowFarAI-v2/HowFar/scripts/calibrate/receipts/transit-2026-09-02.json

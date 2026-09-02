@@ -19,11 +19,12 @@ import { db } from "@/lib/db";
  *
  * Expired rows are intentionally NOT deleted here — keeping this a pure read
  * avoids a race where a concurrent `setCached` writes a fresh value between
- * another caller's read and delete, and that fresh value gets erased. NOTE:
- * no reaper sweep exists yet — the `@@index([expiresAt])` is in place to
- * support one, but nothing currently deletes expired rows, so they (and any
- * superseded `configCacheTag`/`PROVIDER_DATA_REVISION` namespace) persist until
- * a manual `DELETE FROM "ApiCache"`. Adding the sweep is a tracked follow-up.
+ * another caller's read and delete, and that fresh value gets erased. Reaping is
+ * the separate `deleteExpired` sweep (below), which uses `@@index([expiresAt])`
+ * and re-checks the expiry predicate INSIDE the DELETE so it cannot erase a
+ * refreshed row. It runs on a cadence (see `deleteExpired`), not on the read
+ * path; superseded `configCacheTag`/`PROVIDER_DATA_REVISION` namespaces are
+ * reclaimed by the same sweep once their rows expire.
  *
  * `<T>` is caller-trust — the stored JSON is returned unchecked; provider
  * clients re-validate shape at their seams (the `normalize` functions in
@@ -129,4 +130,81 @@ export async function setCachedSafe(key: string, value: unknown, expiresAt: Date
   } catch (err) {
     warnCacheFailure("write", err);
   }
+}
+
+/** Drop expired entries from the in-process L1 (best-effort; L1 also self-expires
+ *  on read, so this only reclaims memory for keys never read again). */
+function purgeExpiredL1(nowMs: number): number {
+  let n = 0;
+  for (const [k, v] of l1) {
+    if (v.expiresAtMs <= nowMs) {
+      l1.delete(k);
+      n++;
+    }
+  }
+  return n;
+}
+
+/**
+ * Reaper: delete expired `ApiCache` rows. Nothing deletes them on the read path
+ * (getCached ignores but keeps them), so without this sweep a long-lived
+ * deployment accumulates dead rows and superseded config/revision namespaces.
+ * There is no in-process auto-run; the production cadence is a cron running
+ * `scripts/reap-cache.ts` (npm `reap:cache`) — see docs/SELFHOST.md.
+ *
+ * RACE SAFETY (the whole point of the atomic form): the expiry predicate lives
+ * INSIDE the DELETE statement, never a select-ids-then-
+ * delete-by-id pattern. `setCached` upserts a fresh `expiresAt` in place
+ * (getCached/setCached above), so a select-then-delete could erase a row another
+ * caller just refreshed to a future expiry. Here the DELETE re-evaluates
+ * `expiresAt <= now` at execution under PostgreSQL's snapshot + EvalPlanQual, so a
+ * concurrently-refreshed row (now future-dated) is not removed. This safety is by
+ * SQL construction (the predicate is IN the DELETE); the tests
+ * (`api-cache-reaper.integration.test.ts`) prove predicate correctness and the
+ * upsert-either-ordering property, not the microsecond select↔delete interleaving
+ * (single-process Promise.all cannot force it) — so the guarantee rests on the
+ * statement shape, argued not exhaustively unit-proven. Bounded batches keep the
+ * lock footprint small on a large table; each batch is its own atomic conditional
+ * delete, so the loop is safe to interrupt/retry and idempotent for concurrent reapers.
+ *
+ * Best-effort: a DB error is swallowed (like the cache itself) and the count so far
+ * returned — the reaper is an optimisation, never a hard dependency.
+ */
+export async function deleteExpired(opts?: {
+  now?: Date;
+  batchSize?: number;
+  maxBatches?: number;
+}): Promise<{ deleted: number; l1Purged: number; errored: boolean; error?: string }> {
+  const now = opts?.now ?? new Date();
+  const batchSize = Math.max(1, opts?.batchSize ?? 1000);
+  const maxBatches = Math.max(1, opts?.maxBatches ?? 10_000);
+  let deleted = 0;
+  let errored = false;
+  let error: string | undefined;
+  try {
+    for (let i = 0; i < maxBatches; i++) {
+      // Atomic conditional bounded delete: the inner select bounds the batch; the
+      // OUTER `"expiresAt" <= now` re-checks the predicate at delete time so a
+      // row refreshed between the select and the delete is NOT removed.
+      const n = await db().$executeRaw`
+        DELETE FROM "ApiCache"
+        WHERE "cacheKey" IN (
+          SELECT "cacheKey" FROM "ApiCache"
+          WHERE "expiresAt" <= ${now}
+          ORDER BY "expiresAt" ASC
+          LIMIT ${batchSize}
+        ) AND "expiresAt" <= ${now}`;
+      deleted += n;
+      if (n < batchSize) break;
+    }
+  } catch (err) {
+    // Best-effort like the cache itself (a serving path calling this must not
+    // throw), but the failure is SURFACED so an operational caller (the reap
+    // cron) can exit non-zero instead of reporting a silent, misleading success.
+    warnCacheFailure("write", err);
+    errored = true;
+    error = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+  }
+  const l1Purged = purgeExpiredL1(now.getTime());
+  return { deleted, l1Purged, errored, ...(error ? { error } : {}) };
 }

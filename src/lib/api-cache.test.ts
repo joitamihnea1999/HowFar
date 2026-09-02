@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   __resetApiCacheL1ForTests,
+  deleteExpired,
   getCached,
   getCachedSafe,
   setCached,
@@ -43,6 +44,23 @@ vi.mock("@/lib/db", () => ({
         }
         return Promise.resolve(store.get(cacheKey));
       },
+    },
+    // Reaper path. Tagged-template values are [now, batchSize, now]; the mock
+    // ignores the SQL text and deletes up to batchSize expired store entries,
+    // re-checking expiry (matching the real statement's predicate).
+    $executeRaw: (_strings: TemplateStringsArray, ...values: unknown[]) => {
+      if (state.fail) return Promise.reject(new Error("DB unreachable"));
+      const now = values[0] as Date;
+      const batchSize = values[1] as number;
+      let n = 0;
+      for (const [key, row] of store) {
+        if (n >= batchSize) break;
+        if ((row.expiresAt as Date) <= now) {
+          store.delete(key);
+          n++;
+        }
+      }
+      return Promise.resolve(n);
     },
   }),
 }));
@@ -146,5 +164,32 @@ describe("best-effort cache (provider layer)", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("api-cache deleteExpired (reaper) — error surfacing", () => {
+  const now = new Date("2026-07-15T12:00:00Z");
+  const future = new Date("2026-07-15T13:00:00Z");
+  const past = new Date("2026-07-15T11:00:00Z");
+
+  it("deletes expired rows, leaves valid, and reports errored=false on success", async () => {
+    await setCached("expired-a", { x: 1 }, past);
+    await setCached("expired-b", { x: 2 }, past);
+    await setCached("valid", { x: 3 }, future);
+    const res = await deleteExpired({ now });
+    expect(res.errored).toBe(false);
+    expect(res.deleted).toBe(2);
+    expect(await getCached("valid", now)).toEqual({ x: 3 });
+    expect(await getCached("expired-a", now)).toBeNull();
+  });
+
+  it("SURFACES a DB failure (errored=true) instead of a silent success — so the cron exits non-zero", async () => {
+    const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
+    state.fail = true;
+    const res = await deleteExpired({ now });
+    expect(res.errored).toBe(true);
+    expect(res.deleted).toBe(0);
+    expect(res.error).toContain("DB unreachable");
+    warned.mockRestore();
   });
 });

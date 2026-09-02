@@ -1,0 +1,174 @@
+# Walk reach calibration — 2026-09-02T07:22:55.193Z
+# ruler: MOTIS /api/v1/one-to-many withDistance (maxMatchingDistance=250m snap) street distance / 80 m/min anchor (corrected: earlier header mislabelled the endpoint; data is from one-to-many)
+# targets(min): 10, 20, 40  sweep(s): 480, 620, 780, 980, 1240, 1600, 2000, 2500
+
+## Unirii (44.4268,26.1025) — sweep
+  range 480s -> fit 9.13 min / held 8.92 min (fit n=6, held n=6)
+  range 620s -> fit 11.92 min / held 11.15 min (fit n=6, held n=6)
+  range 780s -> fit 14.04 min / held 14.58 min (fit n=6, held n=6)
+  range 980s -> fit 18.33 min / held 19.14 min (fit n=6, held n=5)
+  range 1240s -> fit 22.93 min / held 23.17 min (fit n=6, held n=6)
+  range 1600s -> fit 29.14 min / held 29.60 min (fit n=6, held n=6)
+  range 2000s -> fit 36.80 min / held 36.55 min (fit n=6, held n=6)
+  range 2500s -> fit 45.74 min / held 45.59 min (fit n=5, held n=6)
+
+## Grozavesti (44.443,26.06) — sweep
+  range 480s -> fit 9.49 min / held 9.38 min (fit n=6, held n=6)
+  range 620s -> fit 11.48 min / held 11.85 min (fit n=6, held n=6)
+  range 780s -> fit 14.51 min / held 14.45 min (fit n=6, held n=6)
+  range 980s -> fit 17.78 min / held 17.42 min (fit n=6, held n=6)
+  range 1240s -> fit 22.86 min / held 22.35 min (fit n=6, held n=6)
+  range 1600s -> fit 30.08 min / held 29.00 min (fit n=6, held n=6)
+  range 2000s -> fit 35.45 min / held 36.33 min (fit n=6, held n=6)
+  range 2500s -> fit 44.82 min / held 44.61 min (fit n=6, held n=6)
+
+## Berceni (44.383,26.123) — sweep
+  range 480s -> fit 8.85 min / held 8.62 min (fit n=6, held n=6)
+  range 620s -> fit 11.91 min / held 11.23 min (fit n=6, held n=5)
+  range 780s -> fit 14.16 min / held 14.22 min (fit n=6, held n=6)
+  range 980s -> fit 17.56 min / held 17.35 min (fit n=6, held n=6)
+  range 1240s -> fit 22.81 min / held 22.43 min (fit n=5, held n=6)
+  range 1600s -> fit 29.26 min / held 28.87 min (fit n=6, held n=6)
+  range 2000s -> fit 36.35 min / held 35.98 min (fit n=6, held n=6)
+  range 2500s -> fit 44.29 min / held 44.94 min (fit n=5, held n=6)
+
+## fitted candidate ranges (interpolated on the fit curve)
+  10 min -> per-origin 524/516/533 s -> candidate 524 s
+  20 min -> per-origin 1074/1094/1101 s -> candidate 1090 s
+  40 min -> per-origin 2179/2243/2230 s -> candidate 2217 s
+
+## confirm (held-out set, +/-10%)
+  Unirii 10min (524s): median 9.61 min, worst |resid| 10.3%  FAIL
+  Unirii 20min (1090s): median 20.54 min, worst |resid| 6.3%  PASS
+  Unirii 40min (2217s): median 43.13 min, worst |resid| 15.5%  FAIL
+  Grozavesti 10min (524s): median 9.97 min, worst |resid| 79.2%  FAIL
+  Grozavesti 20min (1090s): median 19.71 min, worst |resid| 5.0%  PASS
+  Grozavesti 40min (2217s): median 42.36 min, worst |resid| 10.6%  FAIL
+  Berceni 10min (524s): median 9.68 min, worst |resid| 7.0%  PASS
+  Berceni 20min (1090s): median 19.65 min, worst |resid| 6.1%  PASS
+  Berceni 40min (2217s): median 42.72 min, worst |resid| 32.3%  FAIL
+
+SOME FAILED — receipt: /home/mihnea/Documents/Workspace/HowFarAI-v2/HowFar/scripts/calibrate/receipts/walk-2026-09-02.json
+# Walk reach calibration — 2026-09-02T07:28:23.781Z
+# ruler: MOTIS /api/v1/one-to-many withDistance (maxMatchingDistance=250m snap) street distance / 80 m/min anchor (corrected: earlier header mislabelled the endpoint; data is from one-to-many)
+# targets(min): 10, 20, 40  sweep(s): 480, 620, 780, 980, 1240, 1600, 2000, 2500
+
+## Unirii (44.4268,26.1025) — sweep
+  range 480s -> fit 9.13 min / held 8.92 min (fit n=6, held n=6)
+  range 620s -> fit 11.92 min / held 11.15 min (fit n=6, held n=6)
+  range 780s -> fit 14.04 min / held 14.58 min (fit n=6, held n=6)
+  range 980s -> fit 18.33 min / held 19.14 min (fit n=6, held n=5)
+  range 1240s -> fit 22.93 min / held 23.17 min (fit n=6, held n=6)
+  range 1600s -> fit 29.14 min / held 29.60 min (fit n=6, held n=6)
+  range 2000s -> fit 36.80 min / held 36.55 min (fit n=6, held n=6)
+  range 2500s -> fit 45.74 min / held 45.59 min (fit n=5, held n=6)
+
+## Grozavesti (44.443,26.06) — sweep
+  range 480s -> fit 9.49 min / held 9.38 min (fit n=6, held n=6)
+  range 620s -> fit 11.48 min / held 11.85 min (fit n=6, held n=6)
+  range 780s -> fit 14.51 min / held 14.45 min (fit n=6, held n=6)
+  range 980s -> fit 17.78 min / held 17.42 min (fit n=6, held n=6)
+  range 1240s -> fit 22.86 min / held 22.35 min (fit n=6, held n=6)
+  range 1600s -> fit 30.08 min / held 29.00 min (fit n=6, held n=6)
+  range 2000s -> fit 35.45 min / held 36.33 min (fit n=6, held n=6)
+  range 2500s -> fit 44.82 min / held 44.61 min (fit n=6, held n=6)
+
+## Berceni (44.383,26.123) — sweep
+  range 480s -> fit 8.85 min / held 8.62 min (fit n=6, held n=6)
+  range 620s -> fit 11.91 min / held 11.23 min (fit n=6, held n=5)
+  range 780s -> fit 14.16 min / held 14.22 min (fit n=6, held n=6)
+  range 980s -> fit 17.56 min / held 17.35 min (fit n=6, held n=6)
+  range 1240s -> fit 22.81 min / held 22.43 min (fit n=5, held n=6)
+  range 1600s -> fit 29.26 min / held 28.87 min (fit n=6, held n=6)
+  range 2000s -> fit 36.35 min / held 35.98 min (fit n=6, held n=6)
+  range 2500s -> fit 44.29 min / held 44.94 min (fit n=5, held n=6)
+
+## fitted candidate ranges (interpolated on the fit curve)
+  10 min -> per-origin 524/516/533 s -> candidate 524 s
+  20 min -> per-origin 1074/1094/1101 s -> candidate 1090 s
+  40 min -> per-origin 2179/2243/2230 s -> candidate 2217 s
+
+## control — shipped anchor 15/30/45 (827/1674/2528 s), held-out pooled
+  15min: median 15.37  over(>T+5) 6%  under 0%  maxOver +5.7min  (n=18)
+  30min: median 29.97  over(>T+5) 0%  under 0%  maxOver +1.8min  (n=18)
+  45min: median 45.73  over(>T+5) 6%  under 0%  maxOver +5.9min  (n=18)
+
+## confirm (established metric: median +/-10% AND over-claim <= 6%)
+  [confirm] 10min (524s): median 9.78  over 6%  under 0%  maxOver +7.9min  (n=17)
+  [confirm] 20min (1090s): median 19.67  over 0%  under 0%  maxOver +1.3min  (n=17)
+  [confirm] 40min (2217s): median 42.78  over 17%  under 6%  maxOver +12.9min  (n=18)
+  refine 40min -> 2073s (was over: median 42.78)
+  [refined] 10min (524s): median 9.78  over 6%  under 0%  maxOver +7.9min  (n=17)
+  [refined] 20min (1090s): median 19.67  over 0%  under 0%  maxOver +1.3min  (n=17)
+  [refined] 40min (2073s): median 39.12  over 6%  under 6%  maxOver +13.1min  (n=18)
+  RESULT 10min (524s): median 9.78 [ok]  over 6% vs bar 6% [ok]  PASS
+  RESULT 20min (1090s): median 19.67 [ok]  over 0% vs bar 6% [ok]  PASS
+  RESULT 40min (2073s): median 39.12 [ok]  over 6% vs bar 6% [ok]  PASS
+
+ALL PASS — receipt: /home/mihnea/Documents/Workspace/HowFarAI-v2/HowFar/scripts/calibrate/receipts/walk-2026-09-02.json
+# Walk reach calibration — 2026-09-02T08:32:34.165Z
+# ruler: MOTIS /api/v1/one-to-many withDistance (maxMatchingDistance=250m snap) street distance / 80 m/min anchor (corrected: earlier header mislabelled the endpoint; data is from one-to-many)
+# targets(min): 10, 20, 40  sweep(s): 480, 620, 780, 980, 1240, 1600, 2000, 2500
+
+## Unirii (44.4268,26.1025) — sweep
+  range 480s -> fit 9.13 min / held 8.92 min (fit n=6, held n=6)
+  range 620s -> fit 11.92 min / held 11.15 min (fit n=6, held n=6)
+  range 780s -> fit 14.04 min / held 14.58 min (fit n=6, held n=6)
+  range 980s -> fit 18.33 min / held 19.14 min (fit n=6, held n=5)
+  range 1240s -> fit 22.93 min / held 23.17 min (fit n=6, held n=6)
+  range 1600s -> fit 29.14 min / held 29.60 min (fit n=6, held n=6)
+  range 2000s -> fit 36.80 min / held 36.55 min (fit n=6, held n=6)
+  range 2500s -> fit 45.74 min / held 45.59 min (fit n=5, held n=6)
+
+## Grozavesti (44.443,26.06) — sweep
+  range 480s -> fit 9.49 min / held 9.38 min (fit n=6, held n=6)
+  range 620s -> fit 11.48 min / held 11.85 min (fit n=6, held n=6)
+  range 780s -> fit 14.51 min / held 14.45 min (fit n=6, held n=6)
+  range 980s -> fit 17.78 min / held 17.42 min (fit n=6, held n=6)
+  range 1240s -> fit 22.86 min / held 22.35 min (fit n=6, held n=6)
+  range 1600s -> fit 30.08 min / held 29.00 min (fit n=6, held n=6)
+  range 2000s -> fit 35.45 min / held 36.33 min (fit n=6, held n=6)
+  range 2500s -> fit 44.82 min / held 44.61 min (fit n=6, held n=6)
+
+## Berceni (44.383,26.123) — sweep
+  range 480s -> fit 8.85 min / held 8.62 min (fit n=6, held n=6)
+  range 620s -> fit 11.91 min / held 11.23 min (fit n=6, held n=5)
+  range 780s -> fit 14.16 min / held 14.22 min (fit n=6, held n=6)
+  range 980s -> fit 17.56 min / held 17.35 min (fit n=6, held n=6)
+  range 1240s -> fit 22.81 min / held 22.43 min (fit n=5, held n=6)
+  range 1600s -> fit 29.26 min / held 28.87 min (fit n=6, held n=6)
+  range 2000s -> fit 36.35 min / held 35.98 min (fit n=6, held n=6)
+  range 2500s -> fit 44.29 min / held 44.94 min (fit n=5, held n=6)
+
+## fitted candidate ranges (interpolated on the fit curve)
+  10 min -> per-origin 524/516/533 s -> candidate 524 s
+  20 min -> per-origin 1074/1094/1101 s -> candidate 1090 s
+  40 min -> per-origin 2179/2243/2230 s -> candidate 2217 s
+
+## control — shipped anchor 15/30/45 (827/1674/2528 s), held-out pooled
+  15min: median 15.37  over(>T+5) 6%  under 0%  maxOver +5.7min  (n=18)
+  30min: median 29.97  over(>T+5) 0%  under 0%  maxOver +1.8min  (n=18)
+  45min: median 45.73  over(>T+5) 6%  under 0%  maxOver +5.9min  (n=18)
+
+## confirm (established metric: median +/-10% AND over-claim <= 6%)
+  [confirm] 10min (524s): median 9.78  over 6%  under 0%  maxOver +7.9min  (n=17)
+  [confirm] 20min (1090s): median 19.67  over 0%  under 0%  maxOver +1.3min  (n=17)
+  [confirm] 40min (2217s): median 42.78  over 17%  under 6%  maxOver +12.9min  (n=18)
+  refine 40min -> 2073s (was over: median 42.78)
+  [refined] 10min (524s): median 9.78  over 6%  under 0%  maxOver +7.9min  (n=17)
+  [refined] 20min (1090s): median 19.67  over 0%  under 0%  maxOver +1.3min  (n=17)
+  [refined] 40min (2073s): median 39.12  over 6%  under 6%  maxOver +13.1min  (n=18)
+  RESULT 10min (524s): pooled median 9.78 [ok]  over 6% vs bar 6% [ok]  PASS
+      Unirii: median 9.6 over 0% maxOver +0.2min
+      Grozavesti: median 10.0 over 17% maxOver +7.9min  ⚠ per-origin over bar
+      Berceni: median 9.7 over 0% maxOver +0.0min
+  RESULT 20min (1090s): pooled median 19.67 [ok]  over 0% vs bar 6% [ok]  PASS
+      Unirii: median 20.5 over 0% maxOver +1.3min
+      Grozavesti: median 19.7 over 0% maxOver +1.0min
+      Berceni: median 19.7 over 0% maxOver +1.1min
+  RESULT 40min (2073s): pooled median 39.12 [ok]  over 6% vs bar 6% [ok]  PASS
+      Unirii: median 39.0 over 0% maxOver +1.1min
+      Grozavesti: median 40.0 over 0% maxOver +2.7min
+      Berceni: median 39.0 over 17% maxOver +13.1min  ⚠ per-origin over bar
+
+POOLED PASS (with per-origin barrier exceedances — see ⚠ above) — receipt: /home/mihnea/Documents/Workspace/HowFarAI-v2/HowFar/scripts/calibrate/receipts/walk-2026-09-02.json

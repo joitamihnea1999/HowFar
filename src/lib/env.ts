@@ -420,9 +420,9 @@ function sameList(a: readonly string[], b: readonly string[]): boolean {
  * would be served until each key's TTL; bump this token on a rebuild to cold the
  * namespace. NOTE the blast radius is UNIFORM: a bump colds EVERY provider cache
  * (geocode/suggest/stop-lines/route-path/catalogue too), not only routing rings.
- * NOTE also that the previous generation's rows are not deleted — there is no
- * expiry sweep (see api-cache.ts) — so a bump leaves them resident until a
- * manual `DELETE FROM "ApiCache"`.
+ * NOTE also that the previous generation's rows are not deleted on the read path
+ * — they persist until their TTL expires and the `deleteExpired` sweep reaps
+ * them (api-cache.ts), or a manual `DELETE FROM "ApiCache"` clears them at once.
  */
 export function configCacheTag(source: EnvSource = process.env): string {
   const cfg = parseProviderConfig(source);

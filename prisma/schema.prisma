@@ -97,10 +97,11 @@ model SavedSearch {
 /// Server-side cache for external provider responses (Nominatim/ORS/
 /// Open-Meteo) so the app stays inside free-tier quotas (brief §10). `value`
 /// holds the raw JSON response; a read is a hit only while `expiresAt > now`.
-/// Expired rows are ignored on read but NOT deleted — there is no reaper sweep
-/// yet (the `expiresAt` index exists to support one). They persist until a
-/// manual purge; a `PROVIDER_DATA_REVISION` bump likewise leaves the prior
-/// namespace resident (see env.ts configCacheTag).
+/// Expired rows are ignored on read but not deleted on the read path; the
+/// `deleteExpired` sweep (api-cache.ts, run on a cadence) reaps them using the
+/// `expiresAt` index. A `PROVIDER_DATA_REVISION` bump leaves the prior namespace
+/// resident until its rows expire and the sweep reclaims them (see env.ts
+/// configCacheTag).
 /// `cacheKey` remains capped at 191 chars so callers must build bounded keys —
 /// hash long canonical request strings, don't store raw URLs.
 model ApiCache {

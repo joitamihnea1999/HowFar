@@ -1,0 +1,2792 @@
+{
+  "generatedAt": "2026-09-02T08:32:34.165Z",
+  "method": "MOTIS /api/v1/one-to-many withDistance (maxMatchingDistance=250m snap) street distance ÷ 80 m/min anchor; ORS foot-walking boundary sampled at fixed bearings",
+  "anchorMPerMin": 80,
+  "origins": [
+    {
+      "name": "Unirii",
+      "lat": 44.4268,
+      "lng": 26.1025
+    },
+    {
+      "name": "Grozavesti",
+      "lat": 44.443,
+      "lng": 26.06
+    },
+    {
+      "name": "Berceni",
+      "lat": 44.383,
+      "lng": 26.123
+    }
+  ],
+  "bearings": [
+    0,
+    30,
+    60,
+    90,
+    120,
+    150,
+    180,
+    210,
+    240,
+    270,
+    300,
+    330
+  ],
+  "sweepRangesS": [
+    480,
+    620,
+    780,
+    980,
+    1240,
+    1600,
+    2000,
+    2500
+  ],
+  "targetMin": [
+    10,
+    20,
+    40
+  ],
+  "perOrigin": {
+    "Unirii": {
+      "sweep": {
+        "480": {
+          "fit": [
+            {
+              "bearing": 0,
+              "streetM": 736.0988645553589,
+              "streetMin": 9.201235806941986,
+              "held": false
+            },
+            {
+              "bearing": 60,
+              "streetM": 795.1065483093262,
+              "streetMin": 9.938831853866578,
+              "held": false
+            },
+            {
+              "bearing": 120,
+              "streetM": 724.065523147583,
+              "streetMin": 9.050819039344788,
+              "held": false
+            },
+            {
+              "bearing": 180,
+              "streetM": 672.5479469299316,
+              "streetMin": 8.406849336624145,
+              "held": false
+            },
+            {
+              "bearing": 240,
+              "streetM": 772.1357917785645,
+              "streetMin": 9.651697397232056,
+              "held": false
+            },
+            {
+              "bearing": 300,
+              "streetM": 670.5668039321899,
+              "streetMin": 8.382085049152375,
+              "held": false
+            }
+          ],
+          "held": [
+            {
+              "bearing": 30,
+              "streetM": 729.593843460083,
+              "streetMin": 9.119923043251038,
+              "held": true
+            },
+            {
+              "bearing": 90,
+              "streetM": 661.9792900085449,
+              "streetMin": 8.27474112510681,
+              "held": true
+            },
+            {
+              "bearing": 150,
+              "streetM": 713.758602142334,
+              "streetMin": 8.921982526779175,
+              "held": true
+            },
+            {
+              "bearing": 210,
+              "streetM": 810.1792411804199,
+              "streetMin": 10.127240514755249,
+              "held": true
+            },
+            {
+              "bearing": 270,
+              "streetM": 690.0464515686035,
+              "streetMin": 8.625580644607544,
+              "held": true
+            },
+            {
+              "bearing": 330,
+              "streetM": 713.2540493011475,
+              "streetMin": 8.915675616264343,
+              "held": true
+            }
+          ],
+          "fitMedMin": 9.126027423143388,
+          "heldMedMin": 8.91882907152176
+        },
+        "620": {
+          "fit": [
+            {
+              "bearing": 0,
+              "streetM": 988.0868949890137,
+              "streetMin": 12.351086187362672,
+              "held": false
+            },
+            {
+              "bearing": 60,
+              "streetM": 972.1143455505371,
+              "streetMin": 12.151429319381714,
+              "held": false
+            },
+            {
+              "bearing": 120,
+              "streetM": 923.7411346435547,
+              "streetMin": 11.546764183044434,
+              "held": false
+            },
+            {
+              "bearing": 180,
+              "streetM": 901.031063079834,
+              "streetMin": 11.262888288497924,
+              "held": false
+            },
+            {
+              "bearing": 240,
+              "streetM": 934.9920272827148,
+              "streetMin": 11.687400341033936,
+              "held": false
+            },
+            {
+              "bearing": 300,
+              "streetM": 972.4417381286621,
+              "streetMin": 12.155521726608276,
+              "held": false
+            }
+          ],
+          "held": [
+            {
+              "bearing": 30,
+              "streetM": 901.3643264770508,
+              "streetMin": 11.267054080963135,
+              "held": true
+            },
+            {
+              "bearing": 90,
+              "streetM": 863.2439432144165,
+              "streetMin": 10.790549290180206,
+              "held": true
+            },
+            {
+              "bearing": 150,
+              "streetM": 883.39501953125,
+              "streetMin": 11.042437744140624,
+              "held": true
+            },
+            {
+              "bearing": 210,
+              "streetM": 945.522762298584,
+              "streetMin": 11.819034528732299,
+              "held": true
+            },
+            {
+              "bearing": 270,
+              "streetM": 882.562427520752,
+              "streetMin": 11.0320303440094,
+              "held": true
+            },
+            {
+              "bearing": 330,
+              "streetM": 918.1759605407715,
+              "streetMin": 11.477199506759643,
+              "held": true
+            }
+          ],
+          "fitMedMin": 11.919414830207824,
+          "heldMedMin": 11.15474591255188
+        },
+        "780": {
+          "fit": [
+            {
+              "bearing": 0,
+              "streetM": 1111.4002323150635,
+              "streetMin": 13.892502903938293,
+              "held": false
+            },
+            {
+              "bearing": 60,
+              "streetM": 1105.7798767089844,
+              "streetMin": 13.822248458862305,
+              "held": false
+            },
+            {
+              "bearing": 120,
+              "streetM": 1129.7549438476562,
+              "streetMin": 14.121936798095703,
+              "held": false
+            },
+            {
+              "bearing": 180,
+              "streetM": 1286.0896396636963,
+              "streetMin": 16.076120495796204,
+              "held": false
+            },
+            {
+              "bearing": 240,
+              "streetM": 1116.2280960083008,
+              "streetMin": 13.95285120010376,
+              "held": false
+            },
+            {
+              "bearing": 300,
+              "streetM": 1151.088119506836,
+              "streetMin": 14.388601493835449,
+              "held": false
+            }
+          ],
+          "held": [
+            {
+              "bearing": 30,
+              "streetM": 1181.2206802368164,
+              "streetMin": 14.765258502960204,
+              "held": true
+            },
+            {
+              "bearing": 90,
+              "streetM": 1106.6380443572998,
+              "streetMin": 13.832975554466248,
+              "held": true
+            },
+            {
+              "bearing": 150,
+              "streetM": 1151.569149017334,
+              "streetMin": 14.394614362716675,
+              "held": true
+            },
+            {
+              "bearing": 210,
+              "streetM": 1299.4335327148438,
+              "streetMin": 16.242919158935546,
+              "held": true
+            },
+            {
+              "bearing": 270,
+              "streetM": 1103.984079360962,
+              "streetMin": 13.799800992012024,
+              "held": true
+            },
+            {
+              "bearing": 330,
+              "streetM": 1211.0588874816895,
+              "streetMin": 15.138236093521119,
+              "held": true
+            }
+          ],
+          "fitMedMin": 14.03739399909973,
+          "heldMedMin": 14.57993643283844
+        },
+        "980": {
+          "fit": [
+            {
+              "bearing": 0,
+              "streetM": 1421.6395244598389,
+              "streetMin": 17.770494055747985,
+              "held": false
+            },
+            {
+              "bearing": 60,
+              "streetM": 1462.5050239562988,
+              "streetMin": 18.281312799453737,
+              "held": false
+            },
+            {
+              "bearing": 120,
+              "streetM": 1469.6311378479004,
+              "streetMin": 18.370389223098755,
+              "held": false
+            },
+            {
+              "bearing": 180,
+              "streetM": 1596.1697044372559,
+              "streetMin": 19.9521213054657,
+              "held": false
+            },
+            {
+              "bearing": 240,
+              "streetM": 1390.028881072998,
+              "streetMin": 17.375361013412476,
+              "held": false
+            },
+            {
+              "bearing": 300,
+              "streetM": 1486.8198318481445,
+              "streetMin": 18.585247898101805,
+              "held": false
+            }
+          ],
+          "held": [
+            {
+              "bearing": 30,
+              "streetM": 1538.5470390319824,
+              "streetMin": 19.23183798789978,
+              "held": true
+            },
+            {
+              "bearing": 90,
+              "streetM": 1531.114688873291,
+              "streetMin": 19.138933610916137,
+              "held": true
+            },
+            {
+              "bearing": 150,
+              "streetM": 1642.6550254821777,
+              "streetMin": 20.53318781852722,
+              "held": true
+            },
+            {
+              "bearing": 210,
+              "streetM": 1374.7502574920654,
+              "streetMin": 17.184378218650817,
+              "held": true
+            },
+            {
+              "bearing": 330,
+              "streetM": 1486.6288719177246,
+              "streetMin": 18.582860898971557,
+              "held": true
+            }
+          ],
+          "fitMedMin": 18.325851011276246,
+          "heldMedMin": 19.138933610916137
+        },
+        "1240": {
+          "fit": [
+            {
+              "bearing": 0,
+              "streetM": 1826.8031883239746,
+              "streetMin": 22.835039854049683,
+              "held": false
+            },
+            {
+              "bearing": 60,
+              "streetM": 1732.8796501159668,
+              "streetMin": 21.660995626449584,
+              "held": false
+            },
+            {
+              "bearing": 120,
+              "streetM": 1766.5984916687012,
+              "streetMin": 22.082481145858765,
+              "held": false
+            },
+            {
+              "bearing": 180,
+              "streetM": 1851.1385917663574,
+              "streetMin": 23.139232397079468,
+              "held": false
+            },
+            {
+              "bearing": 240,
+              "streetM": 2050.983673095703,
+              "streetMin": 25.63729591369629,
+              "held": false
+            },
+            {
+              "bearing": 300,
+              "streetM": 1842.3936004638672,
+              "streetMin": 23.02992000579834,
+              "held": false
+            }
+          ],
+          "held": [
+            {
+              "bearing": 30,
+              "streetM": 1844.2793579101562,
+              "streetMin": 23.05349197387695,
+              "held": true
+            },
+            {
+              "bearing": 90,
+              "streetM": 1862.6681175231934,
+              "streetMin": 23.283351469039918,
+              "held": true
+            },
+            {
+              "bearing": 150,
+              "streetM": 1937.6858110427856,
+              "streetMin": 24.22107263803482,
+              "held": true
+            },
+            {
+              "bearing": 210,
+              "streetM": 1728.4982109069824,
+              "streetMin": 21.60622763633728,
+              "held": true
+            },
+            {
+              "bearing": 270,
+              "streetM": 2136.2137413024902,
+              "streetMin": 26.702671766281128,
+              "held": true
+            },
+            {
+              "bearing": 330,
+              "streetM": 1808.7789916992188,
+              "streetMin": 22.609737396240234,
+              "held": true
+            }
+          ],
+          "fitMedMin": 22.93247992992401,
+          "heldMedMin": 23.168421721458436
+        },
+        "1600": {
+          "fit": [
+            {
+              "bearing": 0,
+              "streetM": 2377.9376945495605,
+              "streetMin": 29.724221181869506,
+              "held": false
+            },
+            {
+              "bearing": 60,
+              "streetM": 2394.5424270629883,
+              "streetMin": 29.931780338287354,
+              "held": false
+            },
+            {
+              "bearing": 120,
+              "streetM": 2285.092643737793,
+              "streetMin": 28.563658046722413,
+              "held": false
+            },
+            {
+              "bearing": 180,
+              "streetM": 2274.89506149292,
+              "streetMin": 28.4361882686615,
+              "held": false
+            },
+            {
+              "bearing": 240,
+              "streetM": 2242.1293563842773,
+              "streetMin": 28.026616954803465,
+              "held": false
+            },
+            {
+              "bearing": 300,
+              "streetM": 2553.194553375244,
+              "streetMin": 31.91493191719055,
+              "held": false
+            }
+          ],
+          "held": [
+            {
+              "bearing": 30,
+              "streetM": 2369.439510345459,
+              "streetMin": 29.617993879318238,
+              "held": true
+            },
+            {
+              "bearing": 90,
+              "streetM": 2391.3529663085938,
+              "streetMin": 29.891912078857423,
+              "held": true
+            },
+            {
+              "bearing": 150,
+              "streetM": 2366.0595622062683,
+              "streetMin": 29.575744527578355,
+              "held": true
+            },
+            {
+              "bearing": 210,
+              "streetM": 2271.413074493408,
+              "streetMin": 28.392663431167602,
+              "held": true
+            },
+            {
+              "bearing": 270,
+              "streetM": 2355.5091371536255,
+              "streetMin": 29.44386421442032,
+              "held": true
+            },
+            {
+              "bearing": 330,
+              "streetM": 2478.3262100219727,
+              "streetMin": 30.97907762527466,
+              "held": true
+            }
+          ],
+          "fitMedMin": 29.14393961429596,
+          "heldMedMin": 29.596869203448296
+        },
+        "2000": {
+          "fit": [
+            {
+              "bearing": 0,
+              "streetM": 2949.8851280212402,
+              "streetMin": 36.873564100265504,
+              "held": false
+            },
+            {
+              "bearing": 60,
+              "streetM": 2884.722231864929,
+              "streetMin": 36.05902789831161,
+              "held": false
+            },
+            {
+              "bearing": 120,
+              "streetM": 2938.2465019226074,
+              "streetMin": 36.72808127403259,
+              "held": false
+            },
+            {
+              "bearing": 180,
+              "streetM": 2814.7966990470886,
+              "streetMin": 35.18495873808861,
+              "held": false
+            },
+            {
+              "bearing": 240,
+              "streetM": 3009.2767791748047,
+              "streetMin": 37.61595973968506,
+              "held": false
+            },
+            {
+              "bearing": 300,
+              "streetM": 2985.0059127807617,
+              "streetMin": 37.31257390975952,
+              "held": false
+            }
+          ],
+          "held": [
+            {
+              "bearing": 30,
+              "streetM": 2930.7284049987793,
+              "streetMin": 36.63410506248474,
+              "held": true
+            },
+            {
+              "bearing": 90,
+              "streetM": 2879.497570037842,
+              "streetMin": 35.99371962547302,
+              "held": true
+            },
+            {
+              "bearing": 150,
+              "streetM": 2946.875177383423,
+              "streetMin": 36.83593971729279,
+              "held": true
+            },
+            {
+              "bearing": 210,
+              "streetM": 2867.6517448425293,
+              "streetMin": 35.84564681053162,
+              "held": true
+            },
+            {
+              "bearing": 270,
+              "streetM": 2918.0182037353516,
+              "streetMin": 36.4752275466919,
+              "held": true
+            },
+            {
+              "bearing": 330,
+              "streetM": 3097.287910461426,
+              "streetMin": 38.716098880767824,
+              "held": true
+            }
+          ],
+          "fitMedMin": 36.80082268714905,
+          "heldMedMin": 36.554666304588324
+        },
+        "2500": {
+          "fit": [
+            {
+              "bearing": 60,
+              "streetM": 3589.827495574951,
+              "streetMin": 44.87284369468689,
+              "held": false
+            },
+            {
+              "bearing": 120,
+              "streetM": 3659.4268913269043,
+              "streetMin": 45.7428361415863,
+              "held": false
+            },
+            {
+              "bearing": 180,
+              "streetM": 3785.2995223999023,
+              "streetMin": 47.31624402999878,
+              "held": false
+            },
+            {
+              "bearing": 240,
+              "streetM": 3559.900478363037,
+              "streetMin": 44.49875597953796,
+              "held": false
+            },
+            {
+              "bearing": 300,
+              "streetM": 3729.2728271484375,
+              "streetMin": 46.615910339355466,
+              "held": false
+            }
+          ],
+          "held": [
+            {
+              "bearing": 30,
+              "streetM": 3566.119487762451,
+              "streetMin": 44.57649359703064,
+              "held": true
+            },
+            {
+              "bearing": 90,
+              "streetM": 3826.9482641220093,
+              "streetMin": 47.83685330152512,
+              "held": true
+            },
+            {
+              "bearing": 150,
+              "streetM": 3637.369960784912,
+              "streetMin": 45.4671245098114,
+              "held": true
+            },
+            {
+              "bearing": 210,
+              "streetM": 3519.6784477233887,
+              "streetMin": 43.99598059654236,
+              "held": true
+            },
+            {
+              "bearing": 270,
+              "streetM": 3657.7391357421875,
+              "streetMin": 45.72173919677734,
+              "held": true
+            },
+            {
+              "bearing": 330,
+              "streetM": 3764.9425806999207,
+              "streetMin": 47.061782258749005,
+              "held": true
+            }
+          ],
+          "fitMedMin": 45.7428361415863,
+          "heldMedMin": 45.59443185329437
+        }
+      }
+    },
+    "Grozavesti": {
+      "sweep": {
+        "480": {
+          "fit": [
+            {
+              "bearing": 0,
+              "streetM": 688.0169343948364,
+              "streetMin": 8.600211679935455,
+              "held": false
+            },
+            {
+              "bearing": 60,
+              "streetM": 1070.162106513977,
+              "streetMin": 13.377026331424712,
+              "held": false
+            },
+            {
+              "bearing": 120,
+              "streetM": 682.2064905166626,
+              "streetMin": 8.527581131458282,
+              "held": false
+            },
+            {
+              "bearing": 180,
+              "streetM": 812.4472932815552,
+              "streetMin": 10.15559116601944,
+              "held": false
+            },
+            {
+              "bearing": 240,
+              "streetM": 853.8437623977661,
+              "streetMin": 10.673047029972077,
+              "held": false
+            },
+            {
+              "bearing": 300,
+              "streetM": 705.8503999710083,
+              "streetMin": 8.823129999637604,
+              "held": false
+            }
+          ],
+          "held": [
+            {
+              "bearing": 30,
+              "streetM": 689.7382802963257,
+              "streetMin": 8.621728503704071,
+              "held": true
+            },
+            {
+              "bearing": 90,
+              "streetM": 867.1448125839233,
+              "streetMin": 10.839310157299042,
+              "held": true
+            },
+            {
+              "bearing": 150,
+              "streetM": 1433.222424507141,
+              "streetMin": 17.915280306339262,
+              "held": true
+            },
+            {
+              "bearing": 210,
+              "streetM": 712.4624795913696,
+              "streetMin": 8.90578099489212,
+              "held": true
+            },
+            {
+              "bearing": 270,
+              "streetM": 743.1156911849976,
+              "streetMin": 9.28894613981247,
+              "held": true
+            },
+            {
+              "bearing": 330,
+              "streetM": 758.0085344314575,
+              "streetMin": 9.47510668039322,
+              "held": true
+            }
+          ],
+          "fitMedMin": 9.489360582828521,
+          "heldMedMin": 9.382026410102846
+        },
+        "620": {
+          "fit": [
+            {
+              "bearing": 0,
+              "streetM": 1095.140679359436,
+              "streetMin": 13.68925849199295,
+              "held": false
+            },
+            {
+              "bearing": 60,
+              "streetM": 948.4867296218872,
+              "streetMin": 11.85608412027359,
+              "held": false
+            },
+            {
+              "bearing": 120,
+              "streetM": 888.7964735031128,
+              "streetMin": 11.10995591878891,
+              "held": false
+            },
+            {
+              "bearing": 180,
+              "streetM": 877.6420106887817,
+              "streetMin": 10.970525133609772,
+              "held": false
+            },
+            {
+              "bearing": 240,
+              "streetM": 1113.7156038284302,
+              "streetMin": 13.921445047855377,
+              "held": false
+            },
+            {
+              "bearing": 300,
+              "streetM": 888.3106508255005,
+              "streetMin": 11.103883135318757,
+              "held": false
+            }
+          ],
+          "held": [
+            {
+              "bearing": 30,
+              "streetM": 990.0158357620239,
+              "streetMin": 12.375197947025299,
+              "held": true
+            },
+            {
+              "bearing": 90,
+              "streetM": 1003.0796251296997,
+              "streetMin": 12.538495314121246,
+              "held": true
+            },
+            {
+              "bearing": 150,
+              "streetM": 1433.222424507141,
+              "streetMin": 17.915280306339262,
+              "held": true
+            },
+            {
+              "bearing": 210,
+              "streetM": 892.3041887283325,
+              "streetMin": 11.153802359104157,
+              "held": true
+            },
+            {
+              "bearing": 270,
+              "streetM": 906.1349153518677,
+              "streetMin": 11.326686441898346,
+              "held": true
+            },
+            {
+              "bearing": 330,
+              "streetM": 891.8048219680786,
+              "streetMin": 11.147560274600982,
+              "held": true
+            }
+          ],
+          "fitMedMin": 11.48302001953125,
+          "heldMedMin": 11.850942194461823
+        },
+        "780": {
+          "fit": [
+            {
+              "bearing": 0,
+              "streetM": 1177.1665601730347,
+              "streetMin": 14.714582002162933,
+              "held": false
+            },
+            {
+              "bearing": 60,
+              "streetM": 1255.7716827392578,
+              "streetMin": 15.697146034240722,
+              "held": false
+            },
+            {
+              "bearing": 120,
+              "streetM": 1103.9845933914185,
+              "streetMin": 13.799807417392731,
+              "held": false
+            },
+            {
+              "bearing": 180,
+              "streetM": 1181.446988105774,
+              "streetMin": 14.768087351322174,
+              "held": false
+            },
+            {
+              "bearing": 240,
+              "streetM": 1122.6547231674194,
+              "streetMin": 14.033184039592744,
+              "held": false
+            },
+            {
+              "bearing": 300,
+              "streetM": 1144.2771883010864,
+              "streetMin": 14.30346485376358,
+              "held": false
+            }
+          ],
+          "held": [
+            {
+              "bearing": 30,
+              "streetM": 1153.3672170639038,
+              "streetMin": 14.417090213298797,
+              "held": true
+            },
+            {
+              "bearing": 90,
+              "streetM": 1188.2940378189087,
+              "streetMin": 14.85367547273636,
+              "held": true
+            },
+            {
+              "bearing": 150,
+              "streetM": 1212.2405824661255,
+              "streetMin": 15.153007280826568,
+              "held": true
+            },
+            {
+              "bearing": 210,
+              "streetM": 1142.33287525177,
+              "streetMin": 14.279160940647126,
+              "held": true
+            },
+            {
+              "bearing": 270,
+              "streetM": 1119.3287019729614,
+              "streetMin": 13.991608774662017,
+              "held": true
+            },
+            {
+              "bearing": 330,
+              "streetM": 1158.1456842422485,
+              "streetMin": 14.476821053028107,
+              "held": true
+            }
+          ],
+          "fitMedMin": 14.509023427963257,
+          "heldMedMin": 14.446955633163451
+        },
+        "980": {
+          "fit": [
+            {
+              "bearing": 0,
+              "streetM": 1452.8871278762817,
+              "streetMin": 18.161089098453523,
+              "held": false
+            },
+            {
+              "bearing": 60,
+              "streetM": 1475.5731172561646,
+              "streetMin": 18.444663965702055,
+              "held": false
+            },
+            {
+              "bearing": 120,
+              "streetM": 1392.7722597122192,
+              "streetMin": 17.40965324640274,
+              "held": false
+            },
+            {
+              "bearing": 180,
+              "streetM": 1409.2061777114868,
+              "streetMin": 17.615077221393584,
+              "held": false
+            },
+            {
+              "bearing": 240,
+              "streetM": 1381.5965242385864,
+              "streetMin": 17.26995655298233,
+              "held": false
+            },
+            {
+              "bearing": 300,
+              "streetM": 1435.6410341262817,
+              "streetMin": 17.945512926578523,
+              "held": false
+            }
+          ],
+          "held": [
+            {
+              "bearing": 30,
+              "streetM": 1690.7737035751343,
+              "streetMin": 21.134671294689177,
+              "held": true
+            },
+            {
+              "bearing": 90,
+              "streetM": 1418.0801973342896,
+              "streetMin": 17.72600246667862,
+              "held": true
+            },
+            {
+              "bearing": 150,
+              "streetM": 1376.4613618850708,
+              "streetMin": 17.205767023563386,
+              "held": true
+            },
+            {
+              "bearing": 210,
+              "streetM": 1371.3543424606323,
+              "streetMin": 17.141929280757903,
+              "held": true
+            },
+            {
+              "bearing": 270,
+              "streetM": 1383.2351121902466,
+              "streetMin": 17.29043890237808,
+              "held": true
+            },
+            {
+              "bearing": 330,
+              "streetM": 1403.963391304016,
+              "streetMin": 17.5495423913002,
+              "held": true
+            }
+          ],
+          "fitMedMin": 17.780295073986053,
+          "heldMedMin": 17.41999064683914
+        },
+        "1240": {
+          "fit": [
+            {
+              "bearing": 0,
+              "streetM": 1837.6537599563599,
+              "streetMin": 22.9706719994545,
+              "held": false
+            },
+            {
+              "bearing": 60,
+              "streetM": 1820.8671579360962,
+              "streetMin": 22.7608394742012,
+              "held": false
+            },
+            {
+              "bearing": 120,
+              "streetM": 1719.029480934143,
+              "streetMin": 21.487868511676787,
+              "held": false
+            },
+            {
+              "bearing": 180,
+              "streetM": 1835.9703912734985,
+              "streetMin": 22.949629890918732,
+              "held": false
+            },
+            {
+              "bearing": 240,
+              "streetM": 2634.682286262512,
+              "streetMin": 32.933528578281404,
+              "held": false
+            },
+            {
+              "bearing": 300,
+              "streetM": 1754.7097826004028,
+              "streetMin": 21.933872282505035,
+              "held": false
+            }
+          ],
+          "held": [
+            {
+              "bearing": 30,
+              "streetM": 1782.7983846664429,
+              "streetMin": 22.284979808330537,
+              "held": true
+            },
+            {
+              "bearing": 90,
+              "streetM": 1895.8415384292603,
+              "streetMin": 23.69801923036575,
+              "held": true
+            },
+            {
+              "bearing": 150,
+              "streetM": 1886.948956489563,
+              "streetMin": 23.586861956119538,
+              "held": true
+            },
+            {
+              "bearing": 210,
+              "streetM": 1745.1967134475708,
+              "streetMin": 21.814958918094636,
+              "held": true
+            },
+            {
+              "bearing": 270,
+              "streetM": 1793.2396593093872,
+              "streetMin": 22.41549574136734,
+              "held": true
+            },
+            {
+              "bearing": 330,
+              "streetM": 1760.624737739563,
+              "streetMin": 22.007809221744537,
+              "held": true
+            }
+          ],
+          "fitMedMin": 22.855234682559967,
+          "heldMedMin": 22.35023777484894
+        },
+        "1600": {
+          "fit": [
+            {
+              "bearing": 0,
+              "streetM": 2394.5516633987427,
+              "streetMin": 29.931895792484283,
+              "held": false
+            },
+            {
+              "bearing": 60,
+              "streetM": 2417.780583381653,
+              "streetMin": 30.222257292270662,
+              "held": false
+            },
+            {
+              "bearing": 120,
+              "streetM": 2254.6298875808716,
+              "streetMin": 28.182873594760895,
+              "held": false
+            },
+            {
+              "bearing": 180,
+              "streetM": 2484.283040046692,
+              "streetMin": 31.05353800058365,
+              "held": false
+            },
+            {
+              "bearing": 240,
+              "streetM": 2261.81485080719,
+              "streetMin": 28.272685635089875,
+              "held": false
+            },
+            {
+              "bearing": 300,
+              "streetM": 2457.473568916321,
+              "streetMin": 30.71841961145401,
+              "held": false
+            }
+          ],
+          "held": [
+            {
+              "bearing": 30,
+              "streetM": 2424.47797870636,
+              "streetMin": 30.305974733829498,
+              "held": true
+            },
+            {
+              "bearing": 90,
+              "streetM": 2291.757046699524,
+              "streetMin": 28.646963083744048,
+              "held": true
+            },
+            {
+              "bearing": 150,
+              "streetM": 2241.93771648407,
+              "streetMin": 28.024221456050874,
+              "held": true
+            },
+            {
+              "bearing": 210,
+              "streetM": 2376.7732439041138,
+              "streetMin": 29.70966554880142,
+              "held": true
+            },
+            {
+              "bearing": 270,
+              "streetM": 2298.3409700393677,
+              "streetMin": 28.729262125492095,
+              "held": true
+            },
+            {
+              "bearing": 330,
+              "streetM": 2342.4288759231567,
+              "streetMin": 29.28036094903946,
+              "held": true
+            }
+          ],
+          "fitMedMin": 30.077076542377473,
+          "heldMedMin": 29.004811537265777
+        },
+        "2000": {
+          "fit": [
+            {
+              "bearing": 0,
+              "streetM": 2920.4358644485474,
+              "streetMin": 36.50544830560684,
+              "held": false
+            },
+            {
+              "bearing": 60,
+              "streetM": 2817.6905183792114,
+              "streetMin": 35.221131479740144,
+              "held": false
+            },
+            {
+              "bearing": 120,
+              "streetM": 2861.523335456848,
+              "streetMin": 35.7690416932106,
+              "held": false
+            },
+            {
+              "bearing": 180,
+              "streetM": 2854.4376878738403,
+              "streetMin": 35.680471098423006,
+              "held": false
+            },
+            {
+              "bearing": 240,
+              "streetM": 2813.255078315735,
+              "streetMin": 35.165688478946684,
+              "held": false
+            },
+            {
+              "bearing": 300,
+              "streetM": 2580.9622926712036,
+              "streetMin": 32.262028658390044,
+              "held": false
+            }
+          ],
+          "held": [
+            {
+              "bearing": 30,
+              "streetM": 3061.7888383865356,
+              "streetMin": 38.2723604798317,
+              "held": true
+            },
+            {
+              "bearing": 90,
+              "streetM": 2854.5640077590942,
+              "streetMin": 35.682050096988675,
+              "held": true
+            },
+            {
+              "bearing": 150,
+              "streetM": 3138.727602958679,
+              "streetMin": 39.23409503698349,
+              "held": true
+            },
+            {
+              "bearing": 210,
+              "streetM": 2879.5555963516235,
+              "streetMin": 35.99444495439529,
+              "held": true
+            },
+            {
+              "bearing": 270,
+              "streetM": 2812.4994401931763,
+              "streetMin": 35.156243002414705,
+              "held": true
+            },
+            {
+              "bearing": 330,
+              "streetM": 2932.5524702072144,
+              "streetMin": 36.65690587759018,
+              "held": true
+            }
+          ],
+          "fitMedMin": 35.450801289081575,
+          "heldMedMin": 36.325675415992734
+        },
+        "2500": {
+          "fit": [
+            {
+              "bearing": 0,
+              "streetM": 3659.220730781555,
+              "streetMin": 45.74025913476944,
+              "held": false
+            },
+            {
+              "bearing": 60,
+              "streetM": 3620.9452447891235,
+              "streetMin": 45.26181555986405,
+              "held": false
+            },
+            {
+              "bearing": 120,
+              "streetM": 3575.8593187332153,
+              "streetMin": 44.698241484165194,
+              "held": false
+            },
+            {
+              "bearing": 180,
+              "streetM": 3580.6099977493286,
+              "streetMin": 44.757624971866605,
+              "held": false
+            },
+            {
+              "bearing": 240,
+              "streetM": 3589.8135194778442,
+              "streetMin": 44.872668993473056,
+              "held": false
+            },
+            {
+              "bearing": 300,
+              "streetM": 2580.9622926712036,
+              "streetMin": 32.262028658390044,
+              "held": false
+            }
+          ],
+          "held": [
+            {
+              "bearing": 30,
+              "streetM": 3558.7141695022583,
+              "streetMin": 44.483927118778226,
+              "held": true
+            },
+            {
+              "bearing": 90,
+              "streetM": 3578.654200553894,
+              "streetMin": 44.733177506923674,
+              "held": true
+            },
+            {
+              "bearing": 150,
+              "streetM": 3504.052014350891,
+              "streetMin": 43.80065017938614,
+              "held": true
+            },
+            {
+              "bearing": 210,
+              "streetM": 3544.1819047927856,
+              "streetMin": 44.30227380990982,
+              "held": true
+            },
+            {
+              "bearing": 270,
+              "streetM": 3619.5040102005005,
+              "streetMin": 45.243800127506255,
+              "held": true
+            },
+            {
+              "bearing": 330,
+              "streetM": 3659.652554512024,
+              "streetMin": 45.7456569314003,
+              "held": true
+            }
+          ],
+          "fitMedMin": 44.81514698266983,
+          "heldMedMin": 44.60855231285095
+        }
+      }
+    },
+    "Berceni": {
+      "sweep": {
+        "480": {
+          "fit": [
+            {
+              "bearing": 0,
+              "streetM": 730.4824085235596,
+              "streetMin": 9.131030106544495,
+              "held": false
+            },
+            {
+              "bearing": 60,
+              "streetM": 710.9115791320801,
+              "streetMin": 8.886394739151001,
+              "held": false
+            },
+            {
+              "bearing": 120,
+              "streetM": 704.3180999755859,
+              "streetMin": 8.803976249694824,
+              "held": false
+            },
+            {
+              "bearing": 180,
+              "streetM": 695.6781349182129,
+              "streetMin": 8.69597668647766,
+              "held": false
+            },
+            {
+              "bearing": 240,
+              "streetM": 799.044885635376,
+              "streetMin": 9.9880610704422,
+              "held": false
+            },
+            {
+              "bearing": 300,
+              "streetM": 681.1893520355225,
+              "streetMin": 8.51486690044403,
+              "held": false
+            }
+          ],
+          "held": [
+            {
+              "bearing": 30,
+              "streetM": 682.3739547729492,
+              "streetMin": 8.529674434661866,
+              "held": true
+            },
+            {
+              "bearing": 90,
+              "streetM": 663.7965774536133,
+              "streetMin": 8.297457218170166,
+              "held": true
+            },
+            {
+              "bearing": 150,
+              "streetM": 762.9198970794678,
+              "streetMin": 9.536498713493348,
+              "held": true
+            },
+            {
+              "bearing": 210,
+              "streetM": 694.9706974029541,
+              "streetMin": 8.687133717536927,
+              "held": true
+            },
+            {
+              "bearing": 270,
+              "streetM": 794.2453651428223,
+              "streetMin": 9.928067064285278,
+              "held": true
+            },
+            {
+              "bearing": 330,
+              "streetM": 684.0215930938721,
+              "streetMin": 8.5502699136734,
+              "held": true
+            }
+          ],
+          "fitMedMin": 8.845185494422912,
+          "heldMedMin": 8.618701815605164
+        },
+        "620": {
+          "fit": [
+            {
+              "bearing": 0,
+              "streetM": 1736.3593006134033,
+              "streetMin": 21.70449125766754,
+              "held": false
+            },
+            {
+              "bearing": 60,
+              "streetM": 891.4267845153809,
+              "streetMin": 11.142834806442261,
+              "held": false
+            },
+            {
+              "bearing": 120,
+              "streetM": 892.0254077911377,
+              "streetMin": 11.150317597389222,
+              "held": false
+            },
+            {
+              "bearing": 180,
+              "streetM": 994.0113544464111,
+              "streetMin": 12.42514193058014,
+              "held": false
+            },
+            {
+              "bearing": 240,
+              "streetM": 973.6239757537842,
+              "streetMin": 12.170299696922303,
+              "held": false
+            },
+            {
+              "bearing": 300,
+              "streetM": 932.3001575469971,
+              "streetMin": 11.653751969337463,
+              "held": false
+            }
+          ],
+          "held": [
+            {
+              "bearing": 30,
+              "streetM": 877.7317352294922,
+              "streetMin": 10.971646690368653,
+              "held": true
+            },
+            {
+              "bearing": 90,
+              "streetM": 918.1725234985352,
+              "streetMin": 11.47715654373169,
+              "held": true
+            },
+            {
+              "bearing": 210,
+              "streetM": 899.4206161499023,
+              "streetMin": 11.24275770187378,
+              "held": true
+            },
+            {
+              "bearing": 270,
+              "streetM": 898.601541519165,
+              "streetMin": 11.232519268989563,
+              "held": true
+            },
+            {
+              "bearing": 330,
+              "streetM": 868.2923192977905,
+              "streetMin": 10.853653991222382,
+              "held": true
+            }
+          ],
+          "fitMedMin": 11.912025833129883,
+          "heldMedMin": 11.232519268989563
+        },
+        "780": {
+          "fit": [
+            {
+              "bearing": 0,
+              "streetM": 1420.1291828155518,
+              "streetMin": 17.7516147851944,
+              "held": false
+            },
+            {
+              "bearing": 60,
+              "streetM": 1078.819766998291,
+              "streetMin": 13.485247087478637,
+              "held": false
+            },
+            {
+              "bearing": 120,
+              "streetM": 1125.7051410675049,
+              "streetMin": 14.071314263343812,
+              "held": false
+            },
+            {
+              "bearing": 180,
+              "streetM": 1091.6961879730225,
+              "streetMin": 13.646202349662781,
+              "held": false
+            },
+            {
+              "bearing": 240,
+              "streetM": 1140.2579679489136,
+              "streetMin": 14.25322459936142,
+              "held": false
+            },
+            {
+              "bearing": 300,
+              "streetM": 1176.0066165924072,
+              "streetMin": 14.700082707405091,
+              "held": false
+            }
+          ],
+          "held": [
+            {
+              "bearing": 30,
+              "streetM": 1134.0098571777344,
+              "streetMin": 14.17512321472168,
+              "held": true
+            },
+            {
+              "bearing": 90,
+              "streetM": 1152.835594177246,
+              "streetMin": 14.410444927215575,
+              "held": true
+            },
+            {
+              "bearing": 150,
+              "streetM": 1155.208173751831,
+              "streetMin": 14.440102171897887,
+              "held": true
+            },
+            {
+              "bearing": 210,
+              "streetM": 1110.2558917999268,
+              "streetMin": 13.878198647499085,
+              "held": true
+            },
+            {
+              "bearing": 270,
+              "streetM": 1141.2572422027588,
+              "streetMin": 14.265715527534486,
+              "held": true
+            },
+            {
+              "bearing": 330,
+              "streetM": 1102.7339205741882,
+              "streetMin": 13.784174007177352,
+              "held": true
+            }
+          ],
+          "fitMedMin": 14.162269431352616,
+          "heldMedMin": 14.220419371128083
+        },
+        "980": {
+          "fit": [
+            {
+              "bearing": 0,
+              "streetM": 1516.7138538360596,
+              "streetMin": 18.958923172950744,
+              "held": false
+            },
+            {
+              "bearing": 60,
+              "streetM": 1355.5343627929688,
+              "streetMin": 16.94417953491211,
+              "held": false
+            },
+            {
+              "bearing": 120,
+              "streetM": 1340.3781147003174,
+              "streetMin": 16.754726433753966,
+              "held": false
+            },
+            {
+              "bearing": 180,
+              "streetM": 1429.6837100982666,
+              "streetMin": 17.871046376228332,
+              "held": false
+            },
+            {
+              "bearing": 240,
+              "streetM": 1403.328577041626,
+              "streetMin": 17.541607213020324,
+              "held": false
+            },
+            {
+              "bearing": 300,
+              "streetM": 1405.4964218139648,
+              "streetMin": 17.56870527267456,
+              "held": false
+            }
+          ],
+          "held": [
+            {
+              "bearing": 30,
+              "streetM": 1394.8420963287354,
+              "streetMin": 17.43552620410919,
+              "held": true
+            },
+            {
+              "bearing": 90,
+              "streetM": 1406.0094032287598,
+              "streetMin": 17.575117540359496,
+              "held": true
+            },
+            {
+              "bearing": 150,
+              "streetM": 1349.1671085357666,
+              "streetMin": 16.864588856697083,
+              "held": true
+            },
+            {
+              "bearing": 210,
+              "streetM": 1380.6892852783203,
+              "streetMin": 17.258616065979005,
+              "held": true
+            },
+            {
+              "bearing": 270,
+              "streetM": 1362.866319656372,
+              "streetMin": 17.03582899570465,
+              "held": true
+            },
+            {
+              "bearing": 330,
+              "streetM": 1411.38249874115,
+              "streetMin": 17.642281234264374,
+              "held": true
+            }
+          ],
+          "fitMedMin": 17.555156242847442,
+          "heldMedMin": 17.347071135044096
+        },
+        "1240": {
+          "fit": [
+            {
+              "bearing": 60,
+              "streetM": 1644.6262741088867,
+              "streetMin": 20.557828426361084,
+              "held": false
+            },
+            {
+              "bearing": 120,
+              "streetM": 1824.84019947052,
+              "streetMin": 22.8105024933815,
+              "held": false
+            },
+            {
+              "bearing": 180,
+              "streetM": 1743.951642036438,
+              "streetMin": 21.799395525455473,
+              "held": false
+            },
+            {
+              "bearing": 240,
+              "streetM": 1880.2937908172607,
+              "streetMin": 23.503672385215758,
+              "held": false
+            },
+            {
+              "bearing": 300,
+              "streetM": 1921.1981143951416,
+              "streetMin": 24.01497642993927,
+              "held": false
+            }
+          ],
+          "held": [
+            {
+              "bearing": 30,
+              "streetM": 2075.5966262817383,
+              "streetMin": 25.94495782852173,
+              "held": true
+            },
+            {
+              "bearing": 90,
+              "streetM": 1815.3233261108398,
+              "streetMin": 22.691541576385497,
+              "held": true
+            },
+            {
+              "bearing": 150,
+              "streetM": 1852.7841205596924,
+              "streetMin": 23.159801506996153,
+              "held": true
+            },
+            {
+              "bearing": 210,
+              "streetM": 1761.3539962768555,
+              "streetMin": 22.016924953460695,
+              "held": true
+            },
+            {
+              "bearing": 270,
+              "streetM": 1773.9038219451904,
+              "streetMin": 22.17379777431488,
+              "held": true
+            },
+            {
+              "bearing": 330,
+              "streetM": 1732.6485919952393,
+              "streetMin": 21.65810739994049,
+              "held": true
+            }
+          ],
+          "fitMedMin": 22.8105024933815,
+          "heldMedMin": 22.43266967535019
+        },
+        "1600": {
+          "fit": [
+            {
+              "bearing": 0,
+              "streetM": 2336.902196407318,
+              "streetMin": 29.211277455091476,
+              "held": false
+            },
+            {
+              "bearing": 60,
+              "streetM": 2344.340859413147,
+              "streetMin": 29.304260742664336,
+              "held": false
+            },
+            {
+              "bearing": 120,
+              "streetM": 2239.821388244629,
+              "streetMin": 27.99776735305786,
+              "held": false
+            },
+            {
+              "bearing": 180,
+              "streetM": 2377.660005569458,
+              "streetMin": 29.720750069618227,
+              "held": false
+            },
+            {
+              "bearing": 240,
+              "streetM": 2269.4959049224854,
+              "streetMin": 28.36869881153107,
+              "held": false
+            },
+            {
+              "bearing": 300,
+              "streetM": 2426.267702102661,
+              "streetMin": 30.328346276283263,
+              "held": false
+            }
+          ],
+          "held": [
+            {
+              "bearing": 30,
+              "streetM": 2525.410957336426,
+              "streetMin": 31.567636966705322,
+              "held": true
+            },
+            {
+              "bearing": 90,
+              "streetM": 2226.7930221557617,
+              "streetMin": 27.83491277694702,
+              "held": true
+            },
+            {
+              "bearing": 150,
+              "streetM": 2361.8686847686768,
+              "streetMin": 29.52335855960846,
+              "held": true
+            },
+            {
+              "bearing": 210,
+              "streetM": 2410.4188652038574,
+              "streetMin": 30.130235815048216,
+              "held": true
+            },
+            {
+              "bearing": 270,
+              "streetM": 2256.148426055908,
+              "streetMin": 28.20185532569885,
+              "held": true
+            },
+            {
+              "bearing": 330,
+              "streetM": 2257.3599376678467,
+              "streetMin": 28.216999220848084,
+              "held": true
+            }
+          ],
+          "fitMedMin": 29.257769098877908,
+          "heldMedMin": 28.870178890228274
+        },
+        "2000": {
+          "fit": [
+            {
+              "bearing": 0,
+              "streetM": 2839.2075748443604,
+              "streetMin": 35.4900946855545,
+              "held": false
+            },
+            {
+              "bearing": 60,
+              "streetM": 2935.5921936035156,
+              "streetMin": 36.694902420043945,
+              "held": false
+            },
+            {
+              "bearing": 120,
+              "streetM": 2985.8863220214844,
+              "streetMin": 37.32357902526856,
+              "held": false
+            },
+            {
+              "bearing": 180,
+              "streetM": 2811.1590938568115,
+              "streetMin": 35.139488673210145,
+              "held": false
+            },
+            {
+              "bearing": 240,
+              "streetM": 2989.199213027954,
+              "streetMin": 37.36499016284942,
+              "held": false
+            },
+            {
+              "bearing": 300,
+              "streetM": 2879.714403152466,
+              "streetMin": 35.99643003940582,
+              "held": false
+            }
+          ],
+          "held": [
+            {
+              "bearing": 30,
+              "streetM": 2948.2566299438477,
+              "streetMin": 36.85320787429809,
+              "held": true
+            },
+            {
+              "bearing": 90,
+              "streetM": 2803.2000732421875,
+              "streetMin": 35.040000915527344,
+              "held": true
+            },
+            {
+              "bearing": 150,
+              "streetM": 2910.5211963653564,
+              "streetMin": 36.38151495456695,
+              "held": true
+            },
+            {
+              "bearing": 210,
+              "streetM": 2528.2453632354736,
+              "streetMin": 31.60306704044342,
+              "held": true
+            },
+            {
+              "bearing": 270,
+              "streetM": 2885.350351333618,
+              "streetMin": 36.06687939167023,
+              "held": true
+            },
+            {
+              "bearing": 330,
+              "streetM": 2871.994041442871,
+              "streetMin": 35.899925518035886,
+              "held": true
+            }
+          ],
+          "fitMedMin": 36.345666229724884,
+          "heldMedMin": 35.983402454853056
+        },
+        "2500": {
+          "fit": [
+            {
+              "bearing": 0,
+              "streetM": 3637.930986404419,
+              "streetMin": 45.474137330055235,
+              "held": false
+            },
+            {
+              "bearing": 60,
+              "streetM": 2958.9610900878906,
+              "streetMin": 36.98701362609863,
+              "held": false
+            },
+            {
+              "bearing": 180,
+              "streetM": 2960.7690258026123,
+              "streetMin": 37.00961282253265,
+              "held": false
+            },
+            {
+              "bearing": 240,
+              "streetM": 3543.113946914673,
+              "streetMin": 44.28892433643341,
+              "held": false
+            },
+            {
+              "bearing": 300,
+              "streetM": 3698.849245071411,
+              "streetMin": 46.23561556339264,
+              "held": false
+            }
+          ],
+          "held": [
+            {
+              "bearing": 30,
+              "streetM": 3678.6528759002686,
+              "streetMin": 45.98316094875336,
+              "held": true
+            },
+            {
+              "bearing": 90,
+              "streetM": 3553.1853942871094,
+              "streetMin": 44.41481742858887,
+              "held": true
+            },
+            {
+              "bearing": 150,
+              "streetM": 3284.1750812530518,
+              "streetMin": 41.05218851566315,
+              "held": true
+            },
+            {
+              "bearing": 210,
+              "streetM": 3529.7685947418213,
+              "streetMin": 44.12210743427276,
+              "held": true
+            },
+            {
+              "bearing": 270,
+              "streetM": 3636.6093769073486,
+              "streetMin": 45.457617211341855,
+              "held": true
+            },
+            {
+              "bearing": 330,
+              "streetM": 3951.007890701294,
+              "streetMin": 49.387598633766174,
+              "held": true
+            }
+          ],
+          "fitMedMin": 44.28892433643341,
+          "heldMedMin": 44.936217319965365
+        }
+      }
+    }
+  },
+  "candidateRangeS": {
+    "10": 524,
+    "20": 1090,
+    "40": 2073
+  },
+  "control": {
+    "ranges": {
+      "15": 827,
+      "30": 1674,
+      "45": 2528
+    },
+    "rates": {
+      "15": {
+        "n": 18,
+        "medMin": 15.373402905464172,
+        "overRate": 0.05555555555555555,
+        "underRate": 0,
+        "maxOverMin": 5.705887186527253
+      },
+      "30": {
+        "n": 18,
+        "medMin": 29.9727642595768,
+        "overRate": 0,
+        "underRate": 0,
+        "maxOverMin": 1.7574499249458313
+      },
+      "45": {
+        "n": 18,
+        "medMin": 45.73137193918228,
+        "overRate": 0.05555555555555555,
+        "underRate": 0,
+        "maxOverMin": 5.931333255767825
+      }
+    },
+    "perOrigin": {
+      "Unirii": {
+        "15": [
+          {
+            "bearing": 30,
+            "streetM": 1200.4366722106934,
+            "streetMin": 15.005458402633668,
+            "held": true
+          },
+          {
+            "bearing": 90,
+            "streetM": 1282.0859909057617,
+            "streetMin": 16.02607488632202,
+            "held": true
+          },
+          {
+            "bearing": 150,
+            "streetM": 1329.280834197998,
+            "streetMin": 16.616010427474976,
+            "held": true
+          },
+          {
+            "bearing": 210,
+            "streetM": 1515.6676940917969,
+            "streetMin": 18.945846176147462,
+            "held": true
+          },
+          {
+            "bearing": 270,
+            "streetM": 1250.3930320739746,
+            "streetMin": 15.629912900924683,
+            "held": true
+          },
+          {
+            "bearing": 330,
+            "streetM": 1269.736068725586,
+            "streetMin": 15.871700859069824,
+            "held": true
+          }
+        ],
+        "30": [
+          {
+            "bearing": 30,
+            "streetM": 2540.5959939956665,
+            "streetMin": 31.75744992494583,
+            "held": true
+          },
+          {
+            "bearing": 90,
+            "streetM": 2443.2642517089844,
+            "streetMin": 30.540803146362304,
+            "held": true
+          },
+          {
+            "bearing": 150,
+            "streetM": 2445.5246295928955,
+            "streetMin": 30.569057869911195,
+            "held": true
+          },
+          {
+            "bearing": 210,
+            "streetM": 2321.4488639831543,
+            "streetMin": 29.01811079978943,
+            "held": true
+          },
+          {
+            "bearing": 270,
+            "streetM": 2382.1923065185547,
+            "streetMin": 29.777403831481934,
+            "held": true
+          },
+          {
+            "bearing": 330,
+            "streetM": 2396.8205184936523,
+            "streetMin": 29.960256481170653,
+            "held": true
+          }
+        ],
+        "45": [
+          {
+            "bearing": 30,
+            "streetM": 3610.998825073242,
+            "streetMin": 45.137485313415525,
+            "held": true
+          },
+          {
+            "bearing": 90,
+            "streetM": 3843.6754150390625,
+            "streetMin": 48.04594268798828,
+            "held": true
+          },
+          {
+            "bearing": 150,
+            "streetM": 3761.573829650879,
+            "streetMin": 47.019672870635986,
+            "held": true
+          },
+          {
+            "bearing": 210,
+            "streetM": 3540.4139366149902,
+            "streetMin": 44.255174207687375,
+            "held": true
+          },
+          {
+            "bearing": 270,
+            "streetM": 3718.2688064575195,
+            "streetMin": 46.47836008071899,
+            "held": true
+          },
+          {
+            "bearing": 330,
+            "streetM": 3807.3213539123535,
+            "streetMin": 47.59151692390442,
+            "held": true
+          }
+        ]
+      },
+      "Grozavesti": {
+        "15": [
+          {
+            "bearing": 30,
+            "streetM": 1200.152642250061,
+            "streetMin": 15.001908028125763,
+            "held": true
+          },
+          {
+            "bearing": 90,
+            "streetM": 1188.2721700668335,
+            "streetMin": 14.85340212583542,
+            "held": true
+          },
+          {
+            "bearing": 150,
+            "streetM": 1656.4709749221802,
+            "streetMin": 20.705887186527253,
+            "held": true
+          },
+          {
+            "bearing": 210,
+            "streetM": 1169.1021976470947,
+            "streetMin": 14.613777470588683,
+            "held": true
+          },
+          {
+            "bearing": 270,
+            "streetM": 1402.7782716751099,
+            "streetMin": 17.534728395938874,
+            "held": true
+          },
+          {
+            "bearing": 330,
+            "streetM": 1301.4580507278442,
+            "streetMin": 16.26822563409805,
+            "held": true
+          }
+        ],
+        "30": [
+          {
+            "bearing": 30,
+            "streetM": 2461.062237739563,
+            "streetMin": 30.763277971744536,
+            "held": true
+          },
+          {
+            "bearing": 90,
+            "streetM": 2363.9816427230835,
+            "streetMin": 29.549770534038544,
+            "held": true
+          },
+          {
+            "bearing": 150,
+            "streetM": 2360.8014879226685,
+            "streetMin": 29.510018599033355,
+            "held": true
+          },
+          {
+            "bearing": 210,
+            "streetM": 2393.4661722183228,
+            "streetMin": 29.918327152729034,
+            "held": true
+          },
+          {
+            "bearing": 270,
+            "streetM": 2417.9498147964478,
+            "streetMin": 30.224372684955597,
+            "held": true
+          },
+          {
+            "bearing": 330,
+            "streetM": 2398.8217630386353,
+            "streetMin": 29.98527203798294,
+            "held": true
+          }
+        ],
+        "45": [
+          {
+            "bearing": 30,
+            "streetM": 3633.152626991272,
+            "streetMin": 45.4144078373909,
+            "held": true
+          },
+          {
+            "bearing": 90,
+            "streetM": 3646.1440019607544,
+            "streetMin": 45.57680002450943,
+            "held": true
+          },
+          {
+            "bearing": 150,
+            "streetM": 3597.5633029937744,
+            "streetMin": 44.96954128742218,
+            "held": true
+          },
+          {
+            "bearing": 210,
+            "streetM": 3670.8755083084106,
+            "streetMin": 45.88594385385513,
+            "held": true
+          },
+          {
+            "bearing": 270,
+            "streetM": 3625.7017030715942,
+            "streetMin": 45.321271288394925,
+            "held": true
+          },
+          {
+            "bearing": 330,
+            "streetM": 3749.2099618911743,
+            "streetMin": 46.86512452363968,
+            "held": true
+          }
+        ]
+      },
+      "Berceni": {
+        "15": [
+          {
+            "bearing": 30,
+            "streetM": 1166.5803146362305,
+            "streetMin": 14.58225393295288,
+            "held": true
+          },
+          {
+            "bearing": 90,
+            "streetM": 1209.351432800293,
+            "streetMin": 15.116892910003662,
+            "held": true
+          },
+          {
+            "bearing": 150,
+            "streetM": 1177.9213581085205,
+            "streetMin": 14.724016976356506,
+            "held": true
+          },
+          {
+            "bearing": 210,
+            "streetM": 1188.1292819976807,
+            "streetMin": 14.851616024971008,
+            "held": true
+          },
+          {
+            "bearing": 270,
+            "streetM": 1347.5522708892822,
+            "streetMin": 16.844403386116028,
+            "held": true
+          },
+          {
+            "bearing": 330,
+            "streetM": 1199.8392000198364,
+            "streetMin": 14.997990000247956,
+            "held": true
+          }
+        ],
+        "30": [
+          {
+            "bearing": 30,
+            "streetM": 2404.6999282836914,
+            "streetMin": 30.05874910354614,
+            "held": true
+          },
+          {
+            "bearing": 90,
+            "streetM": 2408.769172668457,
+            "streetMin": 30.109614658355714,
+            "held": true
+          },
+          {
+            "bearing": 150,
+            "streetM": 2337.7035670280457,
+            "streetMin": 29.221294587850572,
+            "held": true
+          },
+          {
+            "bearing": 210,
+            "streetM": 2337.215093612671,
+            "streetMin": 29.215188670158387,
+            "held": true
+          },
+          {
+            "bearing": 270,
+            "streetM": 2356.772871017456,
+            "streetMin": 29.4596608877182,
+            "held": true
+          },
+          {
+            "bearing": 330,
+            "streetM": 2406.5345973968506,
+            "streetMin": 30.08168246746063,
+            "held": true
+          }
+        ],
+        "45": [
+          {
+            "bearing": 30,
+            "streetM": 3678.6528759002686,
+            "streetMin": 45.98316094875336,
+            "held": true
+          },
+          {
+            "bearing": 90,
+            "streetM": 3593.823616027832,
+            "streetMin": 44.9227952003479,
+            "held": true
+          },
+          {
+            "bearing": 150,
+            "streetM": 3284.1750812530518,
+            "streetMin": 41.05218851566315,
+            "held": true
+          },
+          {
+            "bearing": 210,
+            "streetM": 3529.7685947418213,
+            "streetMin": 44.12210743427276,
+            "held": true
+          },
+          {
+            "bearing": 270,
+            "streetM": 4074.506660461426,
+            "streetMin": 50.931333255767825,
+            "held": true
+          },
+          {
+            "bearing": 330,
+            "streetM": 3941.589635848999,
+            "streetMin": 49.269870448112485,
+            "held": true
+          }
+        ]
+      }
+    }
+  },
+  "overClaimBar": 0.06,
+  "acceptance": {
+    "perTarget": {
+      "10": {
+        "rangeS": 524,
+        "n": 17,
+        "medMin": 9.782553243637086,
+        "overRate": 0.058823529411764705,
+        "underRate": 0,
+        "maxOverMin": 7.9152803063392625,
+        "medOk": true,
+        "overOk": true,
+        "pass": true,
+        "perOrigin": {
+          "Unirii": {
+            "n": 6,
+            "medMin": 9.606840300559998,
+            "overRate": 0,
+            "underRate": 0,
+            "maxOverMin": 0.17000451087951696
+          },
+          "Grozavesti": {
+            "n": 6,
+            "medMin": 9.971772527694704,
+            "overRate": 0.16666666666666666,
+            "underRate": 0,
+            "maxOverMin": 7.9152803063392625
+          },
+          "Berceni": {
+            "n": 5,
+            "medMin": 9.67845618724823,
+            "overRate": 0,
+            "underRate": 0,
+            "maxOverMin": 0.04528753757476878
+          }
+        }
+      },
+      "20": {
+        "rangeS": 1090,
+        "n": 17,
+        "medMin": 19.671565449237825,
+        "overRate": 0,
+        "underRate": 0,
+        "maxOverMin": 1.2595406770706177,
+        "medOk": true,
+        "overOk": true,
+        "pass": true,
+        "perOrigin": {
+          "Unirii": {
+            "n": 5,
+            "medMin": 20.544824624061583,
+            "overRate": 0,
+            "underRate": 0,
+            "maxOverMin": 1.2595406770706177
+          },
+          "Grozavesti": {
+            "n": 6,
+            "medMin": 19.714145839214325,
+            "overRate": 0,
+            "underRate": 0,
+            "maxOverMin": 0.9957589745521531
+          },
+          "Berceni": {
+            "n": 6,
+            "medMin": 19.654444229602817,
+            "overRate": 0,
+            "underRate": 0,
+            "maxOverMin": 1.109995818138124
+          }
+        }
+      },
+      "40": {
+        "rangeS": 2073,
+        "n": 18,
+        "medMin": 39.123426127433774,
+        "overRate": 0.05555555555555555,
+        "underRate": 0.05555555555555555,
+        "maxOverMin": 13.094120621681213,
+        "medOk": true,
+        "overOk": true,
+        "pass": true,
+        "perOrigin": {
+          "Unirii": {
+            "n": 6,
+            "medMin": 38.98036799430847,
+            "overRate": 0,
+            "underRate": 0,
+            "maxOverMin": 1.0648352861404433
+          },
+          "Grozavesti": {
+            "n": 6,
+            "medMin": 39.96760767698288,
+            "overRate": 0,
+            "underRate": 0,
+            "maxOverMin": 2.741906130313872
+          },
+          "Berceni": {
+            "n": 6,
+            "medMin": 39.03207983970642,
+            "overRate": 0.16666666666666666,
+            "underRate": 0.16666666666666666,
+            "maxOverMin": 13.094120621681213
+          }
+        }
+      }
+    },
+    "perOrigin": {
+      "Unirii": {
+        "10": [
+          {
+            "bearing": 30,
+            "streetM": 782.6042594909668,
+            "streetMin": 9.782553243637086,
+            "held": true
+          },
+          {
+            "bearing": 90,
+            "streetM": 717.6620254516602,
+            "streetMin": 8.970775318145751,
+            "held": true
+          },
+          {
+            "bearing": 150,
+            "streetM": 747.3882255554199,
+            "streetMin": 9.342352819442748,
+            "held": true
+          },
+          {
+            "bearing": 210,
+            "streetM": 813.6003608703613,
+            "streetMin": 10.170004510879517,
+            "held": true
+          },
+          {
+            "bearing": 270,
+            "streetM": 754.4901885986328,
+            "streetMin": 9.43112735748291,
+            "held": true
+          },
+          {
+            "bearing": 330,
+            "streetM": 806.633544921875,
+            "streetMin": 10.082919311523437,
+            "held": true
+          }
+        ],
+        "20": [
+          {
+            "bearing": 30,
+            "streetM": 1688.1462516784668,
+            "streetMin": 21.101828145980836,
+            "held": true
+          },
+          {
+            "bearing": 90,
+            "streetM": 1643.5859699249268,
+            "streetMin": 20.544824624061583,
+            "held": true
+          },
+          {
+            "bearing": 150,
+            "streetM": 1700.7632541656494,
+            "streetMin": 21.259540677070618,
+            "held": true
+          },
+          {
+            "bearing": 210,
+            "streetM": 1528.0196647644043,
+            "streetMin": 19.100245809555055,
+            "held": true
+          },
+          {
+            "bearing": 330,
+            "streetM": 1569.119068145752,
+            "streetMin": 19.6139883518219,
+            "held": true
+          }
+        ],
+        "40": [
+          {
+            "bearing": 30,
+            "streetM": 3114.7454261779785,
+            "streetMin": 38.93431782722473,
+            "held": true
+          },
+          {
+            "bearing": 90,
+            "streetM": 3122.113452911377,
+            "streetMin": 39.026418161392215,
+            "held": true
+          },
+          {
+            "bearing": 150,
+            "streetM": 3285.1868228912354,
+            "streetMin": 41.06483528614044,
+            "held": true
+          },
+          {
+            "bearing": 210,
+            "streetM": 3099.310344696045,
+            "streetMin": 38.74137930870056,
+            "held": true
+          },
+          {
+            "bearing": 270,
+            "streetM": 3060.4667434692383,
+            "streetMin": 38.25583429336548,
+            "held": true
+          },
+          {
+            "bearing": 330,
+            "streetM": 3137.6347274780273,
+            "streetMin": 39.22043409347534,
+            "held": true
+          }
+        ]
+      },
+      "Grozavesti": {
+        "10": [
+          {
+            "bearing": 30,
+            "streetM": 1052.9414491653442,
+            "streetMin": 13.161768114566803,
+            "held": true
+          },
+          {
+            "bearing": 90,
+            "streetM": 799.9901857376099,
+            "streetMin": 9.999877321720124,
+            "held": true
+          },
+          {
+            "bearing": 150,
+            "streetM": 1433.222424507141,
+            "streetMin": 17.915280306339262,
+            "held": true
+          },
+          {
+            "bearing": 210,
+            "streetM": 795.4934186935425,
+            "streetMin": 9.943667733669281,
+            "held": true
+          },
+          {
+            "bearing": 270,
+            "streetM": 794.1137590408325,
+            "streetMin": 9.926421988010407,
+            "held": true
+          },
+          {
+            "bearing": 330,
+            "streetM": 758.0085344314575,
+            "streetMin": 9.47510668039322,
+            "held": true
+          }
+        ],
+        "20": [
+          {
+            "bearing": 30,
+            "streetM": 1679.6607179641724,
+            "streetMin": 20.995758974552153,
+            "held": true
+          },
+          {
+            "bearing": 90,
+            "streetM": 1580.538098335266,
+            "streetMin": 19.756726229190825,
+            "held": true
+          },
+          {
+            "bearing": 150,
+            "streetM": 1599.2402544021606,
+            "streetMin": 19.99050318002701,
+            "held": true
+          },
+          {
+            "bearing": 210,
+            "streetM": 1529.1358995437622,
+            "streetMin": 19.114198744297028,
+            "held": true
+          },
+          {
+            "bearing": 270,
+            "streetM": 1573.7252359390259,
+            "streetMin": 19.671565449237825,
+            "held": true
+          },
+          {
+            "bearing": 330,
+            "streetM": 1561.1548357009888,
+            "streetMin": 19.51443544626236,
+            "held": true
+          }
+        ],
+        "40": [
+          {
+            "bearing": 30,
+            "streetM": 3184.4847269058228,
+            "streetMin": 39.80605908632278,
+            "held": true
+          },
+          {
+            "bearing": 90,
+            "streetM": 3210.332501411438,
+            "streetMin": 40.129156267642976,
+            "held": true
+          },
+          {
+            "bearing": 150,
+            "streetM": 3419.35249042511,
+            "streetMin": 42.74190613031387,
+            "held": true
+          },
+          {
+            "bearing": 210,
+            "streetM": 3119.9458322525024,
+            "streetMin": 38.99932290315628,
+            "held": true
+          },
+          {
+            "bearing": 270,
+            "streetM": 3067.6387186050415,
+            "streetMin": 38.34548398256302,
+            "held": true
+          },
+          {
+            "bearing": 330,
+            "streetM": 3331.623906135559,
+            "streetMin": 41.645298826694486,
+            "held": true
+          }
+        ]
+      },
+      "Berceni": {
+        "10": [
+          {
+            "bearing": 30,
+            "streetM": 756.0929679870605,
+            "streetMin": 9.451162099838257,
+            "held": true
+          },
+          {
+            "bearing": 150,
+            "streetM": 803.6230030059814,
+            "streetMin": 10.045287537574769,
+            "held": true
+          },
+          {
+            "bearing": 210,
+            "streetM": 744.0609893798828,
+            "streetMin": 9.300762367248534,
+            "held": true
+          },
+          {
+            "bearing": 270,
+            "streetM": 778.2623519897461,
+            "streetMin": 9.728279399871827,
+            "held": true
+          },
+          {
+            "bearing": 330,
+            "streetM": 774.2764949798584,
+            "streetMin": 9.67845618724823,
+            "held": true
+          }
+        ],
+        "20": [
+          {
+            "bearing": 30,
+            "streetM": 1571.387809753418,
+            "streetMin": 19.642347621917725,
+            "held": true
+          },
+          {
+            "bearing": 90,
+            "streetM": 1688.7996654510498,
+            "streetMin": 21.109995818138124,
+            "held": true
+          },
+          {
+            "bearing": 150,
+            "streetM": 1618.821039199829,
+            "streetMin": 20.235262989997864,
+            "held": true
+          },
+          {
+            "bearing": 210,
+            "streetM": 1511.108346939087,
+            "streetMin": 18.888854336738586,
+            "held": true
+          },
+          {
+            "bearing": 270,
+            "streetM": 1502.8836154937744,
+            "streetMin": 18.78604519367218,
+            "held": true
+          },
+          {
+            "bearing": 330,
+            "streetM": 1573.3232669830322,
+            "streetMin": 19.666540837287904,
+            "held": true
+          }
+        ],
+        "40": [
+          {
+            "bearing": 30,
+            "streetM": 3297.211887359619,
+            "streetMin": 41.21514859199524,
+            "held": true
+          },
+          {
+            "bearing": 90,
+            "streetM": 3065.5300369262695,
+            "streetMin": 38.319125461578366,
+            "held": true
+          },
+          {
+            "bearing": 150,
+            "streetM": 2940.041872024536,
+            "streetMin": 36.750523400306705,
+            "held": true
+          },
+          {
+            "bearing": 210,
+            "streetM": 2526.1298084259033,
+            "streetMin": 31.57662260532379,
+            "held": true
+          },
+          {
+            "bearing": 270,
+            "streetM": 4247.529649734497,
+            "streetMin": 53.09412062168121,
+            "held": true
+          },
+          {
+            "bearing": 330,
+            "streetM": 3179.602737426758,
+            "streetMin": 39.74503421783447,
+            "held": true
+          }
+        ]
+      }
+    }
+  },
+  "finalCandidateRangeS": {
+    "10": 524,
+    "20": 1090,
+    "40": 2073
+  },
+  "allPass": true,
+  "anyOriginOverBar": true
+}

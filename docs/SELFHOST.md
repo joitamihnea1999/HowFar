@@ -332,7 +332,7 @@ node docker/selfhost/parity-check.mjs --public http://localhost:3000 --local htt
 Setting the public bases inline (not via `.env`) is what makes §7 correct regardless of
 whether §6's overlay is in `.env`; the per-run `$(date +%s)` revision suffix colds BOTH
 ApiCache namespaces so the comparison re-hits the live providers on each leg rather than
-serving cached rows (there is no expiry reaper — see Caveats).
+serving cached rows (expired rows are reaped only by the `deleteExpired` sweep, not on read).
 
 The harness gates each ring on FULL bearing coverage on both legs AND median AND
 worst-sector radial residual AND the area band. A wedge clipped from an *enclosing*
@@ -407,6 +407,17 @@ rm -rf data/osm data/selfhost                                        # reclaim d
   in `docker/selfhost/build-tiles.sh`. THEN: the Nominatim DB and ORS graph persist in named
   volumes and are reused as-is, so a new extract needs `docker compose -f
   docker/selfhost/docker-compose.yml down -v` (drop the volumes) + re-import + re-run the Photon
-  import + `build-tiles.sh`. THEN bump `PROVIDER_DATA_REVISION` and pair it with
-  `DELETE FROM "ApiCache"` (there is no expiry reaper yet). Bumping the revision alone would cold
-  the cache and refill it from the OLD graph/DB.
+  import + `build-tiles.sh`. THEN bump `PROVIDER_DATA_REVISION`; the superseded namespace's rows
+  expire on their own TTL and are then reaped by the `deleteExpired` sweep (`npm run reap:cache`,
+  run hourly by cron — see below), or force it immediately with `DELETE FROM "ApiCache"`. Bumping
+  the revision alone would cold the cache and refill it from the OLD graph/DB.
+
+**Cache reaper (cron).** The app never deletes expired `ApiCache` rows on the read path, so schedule
+the sweep on a cadence — e.g. hourly on the VPS:
+
+```cron
+17 * * * * cd /srv/howfar && node --env-file=.env ./node_modules/.bin/tsx scripts/reap-cache.ts >> /var/log/howfar/reap.log 2>&1
+```
+
+It is an atomic conditional delete (safe to overlap; never removes a row a concurrent request just
+refreshed) and prints a one-line JSON summary of rows removed.
