@@ -11,7 +11,11 @@ import { createReachJourneyController } from "@/features/map/reach-journey-contr
 // MapLibre. The pure journey model is separately tested in reach.test.ts.
 
 type FakeLayer = string;
-function fakeMap(opts: { rendered?: unknown[] } = {}) {
+function fakeMap(opts: { rendered?: unknown[]; throwOnQuery?: boolean } = {}) {
+  const query = () => {
+    if (opts.throwOnQuery) throw new Error("feature index out of bounds");
+    return opts.rendered ?? [];
+  };
   const source = { setData: vi.fn() };
   const layers = new Set<FakeLayer>([
     "reach-path-line-hl",
@@ -31,7 +35,7 @@ function fakeMap(opts: { rendered?: unknown[] } = {}) {
       // A drawn journey leg feature (carries kind so the journey-only stamp
       // predicate matches — the destination pin has kind:"destination" instead).
       querySourceFeatures: () => [{ properties: { kind: "leg", legIndex: 0 } }],
-      queryRenderedFeatures: () => opts.rendered ?? [],
+      queryRenderedFeatures: query,
       setFilter: vi.fn(),
     },
   };
@@ -95,6 +99,24 @@ describe("reach-journey-controller", () => {
     const { ctrl } = make([{}]);
     ctrl.draw([{ mode: "WALK", fromName: "a", toName: "b", minutes: 1 }]);
     expect(ctrl.hitsActiveJourney({ x: 1, y: 1 } as never)).toBe(false);
+  });
+
+  it("hitsActiveJourney fails CLOSED — returns true (does not throw, does not reset selection) when queryRenderedFeatures throws mid source-swap (task 018 F4)", () => {
+    const el = { dataset: {} as Record<string, string> } as unknown as HTMLElement;
+    const loadState = createLoadState();
+    loadState.styleLoaded = true;
+    const fm = fakeMap({ throwOnQuery: true });
+    const ctrl = createReachJourneyController({
+      map: fm.map as never,
+      el,
+      loadState,
+      reducedMotion: { matches: false } as MediaQueryList,
+    });
+    ctrl.draw(TRANSIT_LEGS); // arm the guard
+    expect(() => ctrl.hitsActiveJourney({ x: 100, y: 100 } as never)).not.toThrow();
+    // Fail-closed: an indeterminate query must swallow the click (treat as a hit),
+    // never fall through to reset the user's active selection.
+    expect(ctrl.hitsActiveJourney({ x: 100, y: 100 } as never)).toBe(true);
   });
 
   it("setDestination writes a kind:'destination' pin and stamps data-reach-pin (task 058)", () => {

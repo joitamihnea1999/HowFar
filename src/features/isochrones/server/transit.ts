@@ -18,7 +18,7 @@ import {
 import { getCachedSafe, setCachedSafe } from "@/lib/api-cache";
 import { LAUNCH_BBOX } from "@/lib/bounds";
 import { providerConfig, taggedCacheKey } from "@/lib/env";
-import { providerFetch, ProviderError, roundCoord, USER_AGENT } from "@/lib/provider-http";
+import { providerFetch, ProviderError, retryOnceOnTransient, roundCoord, USER_AGENT } from "@/lib/provider-http";
 import { withTimeout } from "@/lib/timeout";
 
 /**
@@ -37,7 +37,17 @@ const ONE_TO_ALL_PATH = "/api/v6/one-to-all";
 // Interval is config-driven (task 009, `intervals.transit`, default 1500 ms;
 // community-run — be a good citizen). Shared with transit-plan via the same
 // `provider:"transit"` bucket, so the two MOTIS paths keep one chain.
-const TIMEOUT_MS = 20_000; // one-to-all is heavy (~1.5–3 s live)
+// Absolute end-to-end budget for the one-to-all fetch: a fast network drop /
+// abort ("fetch failed") heals on ONE retry (task 018 — the owner saw
+// `/api/transit` + the amenities-in-transit cascade fail intermittently, healing
+// on an identical retry), but the retry must NOT double the worst-case latency
+// on a genuinely-slow/dead provider. The client `/api/transit` fetch has no
+// deadline of its own, so this budget is what bounds the whole call: a stalled
+// attempt aborts at the budget signal, and the retry only fires when a real
+// attempt's worth of budget remains — so worst case stays ~one attempt, not 2×.
+export const ONE_TO_ALL_BUDGET_MS = 24_000;
+export const ONE_TO_ALL_RETRY_MIN_REMAINING_MS = 5_000; // don't retry without room for a real attempt
+const ONE_TO_ALL_RETRY_BACKOFF_MS = 250;
 const TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_TRAVEL_MIN = THRESHOLDS[THRESHOLDS.length - 1]; // 45
 // MOTIS access-walk speed, egress stamping, and the unioned ORS ring all read
@@ -232,25 +242,49 @@ async function fetchAndBuild(
 
   const { transitBase, intervals } = providerConfig();
 
+  const url =
+    `${transitBase}${ONE_TO_ALL_PATH}?one=${lat},${lng}&maxTravelTime=${MAX_TRAVEL_MIN}` +
+    `&transitModes=TRANSIT&time=${encodeURIComponent(departure)}` +
+    `&pedestrianSpeed=${paceModel.pedestrianSpeedMs}&useRoutedTransfers=true`;
+
+  // Absolute end-to-end budget spanning the attempt + one retry (see the
+  // constants): a stalled attempt is aborted by this signal, and the retry only
+  // fires with real budget left, so a fast network drop heals while a dead
+  // provider still fails fast (~one attempt), never doubling to ~40 s.
+  const deadline = Date.now() + ONE_TO_ALL_BUDGET_MS;
+  const budget = new AbortController();
+  const budgetTimer = setTimeout(() => budget.abort(), ONE_TO_ALL_BUDGET_MS);
+
   // A stalled/unreachable/garbled upstream is a provider error (→ 502), not a 500.
+  // The status check AND the body read live INSIDE the retried attempt so an
+  // undici mid-body `TypeError: terminated` (a realistic flaky-LAN failure on
+  // the large one-to-all payload) is retried like any network drop; a non-ok
+  // STATUS throws a (non-retriable) ProviderError so it is NOT retried.
   let body: OneToAllBody;
   try {
-    const url =
-      `${transitBase}${ONE_TO_ALL_PATH}?one=${lat},${lng}&maxTravelTime=${MAX_TRAVEL_MIN}` +
-      `&transitModes=TRANSIT&time=${encodeURIComponent(departure)}` +
-      `&pedestrianSpeed=${paceModel.pedestrianSpeedMs}&useRoutedTransfers=true`;
-    const res = await providerFetch(url, {
-      provider: "transit",
-      rateHost: new URL(transitBase).host,
-      minIntervalMs: intervals.transit,
-      timeoutMs: TIMEOUT_MS,
-      init: { headers: { "User-Agent": USER_AGENT } },
-    });
-    if (!res.ok) throw new ProviderError(`transitous responded ${res.status}`);
-    body = (await res.json()) as OneToAllBody;
+    body = await retryOnceOnTransient(
+      async () => {
+        const res = await providerFetch(url, {
+          provider: "transit",
+          rateHost: new URL(transitBase).host,
+          minIntervalMs: intervals.transit,
+          timeoutMs: ONE_TO_ALL_BUDGET_MS,
+          signal: budget.signal,
+          init: { headers: { "User-Agent": USER_AGENT } },
+        });
+        if (!res.ok) throw new ProviderError(`transitous responded ${res.status}`);
+        return (await res.json()) as OneToAllBody;
+      },
+      {
+        backoffMs: ONE_TO_ALL_RETRY_BACKOFF_MS,
+        canRetry: () => Date.now() + ONE_TO_ALL_RETRY_MIN_REMAINING_MS < deadline,
+      },
+    );
   } catch (err) {
     if (err instanceof ProviderError) throw err;
     throw new ProviderError(`transitous request failed: ${(err as Error).message}`);
+  } finally {
+    clearTimeout(budgetTimer);
   }
 
   // Distinguish a garbled response (no stop array) from a valid zero-stop result
@@ -262,7 +296,12 @@ async function fetchAndBuild(
   const stops = parseStops(body.all);
   // Bounded wait: a stalled ORS body or a deep rate-limit queue must not hold
   // the transit response hostage (the walk ring is polish, not a dependency).
-  const timedWalk = await withTimeout(walkPromise, WALK_RINGS_TIMEOUT_MS);
+  // Capped at WHICHEVER IS SMALLER — the walk-ring timeout OR the remaining
+  // one-to-all budget — so the WHOLE /api/transit response really is bounded by
+  // ONE_TO_ALL_BUDGET_MS (the walk timer no longer stacks a fresh 8 s on top; the
+  // unfinished ORS call keeps running into the 7-day cache as before). Task 018 H3.
+  const walkWaitMs = Math.max(0, Math.min(WALK_RINGS_TIMEOUT_MS, deadline - Date.now()));
+  const timedWalk = await withTimeout(walkPromise, walkWaitMs);
   if (!timedWalk.ok) {
     console.error("[transit] walking rings timed out; radial origin fallback (ORS call continues into cache)");
   }

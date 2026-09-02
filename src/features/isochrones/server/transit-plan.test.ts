@@ -390,6 +390,46 @@ describe("planTrip", () => {
     // enforced by an ABSOLUTE abort signal spanning queue wait + attempt +
     // retry (a per-attempt timeout alone starts after the shared-host queue).
     expect(PLAN_BUDGET_MS).toBeLessThan(REACH_TIMEOUT_MS);
+    // Ceiling (task 018): cap the client deadline so raising the budget pair can
+    // never drift up and make every genuine phone failure slower.
+    expect(REACH_TIMEOUT_MS).toBeLessThanOrEqual(15_000);
+    // G2 heal-loop margin: a server success at ~budget must still beat the
+    // client deadline by a comfortable margin (else a slow response+JSON gets
+    // cached AFTER the client gave up and the next click "heals").
+    expect(REACH_TIMEOUT_MS - PLAN_BUDGET_MS).toBeGreaterThanOrEqual(2_000);
+  });
+
+  it("bounds each /plan attempt by the absolute budget (single modestly-long attempt, G1/G3) — timeoutMs === PLAN_BUDGET_MS, not a shorter split", async () => {
+    providerFetch.mockResolvedValue(planResponse([FAST]));
+    await planTrip(FROM, TO, DEP);
+    const opts = providerFetch.mock.calls[0][1] as { timeoutMs?: number };
+    expect(opts.timeoutMs).toBe(PLAN_BUDGET_MS);
+  });
+
+  it("RETRIES a fast abort-shaped failure then succeeds (owner: 'identical retries succeed') — 2 calls (task 018)", async () => {
+    providerFetch
+      .mockRejectedValueOnce(Object.assign(new Error("This operation was aborted"), { name: "AbortError" }))
+      .mockResolvedValueOnce(planResponse([FAST]));
+    const plan = await planTrip(FROM, TO, DEP);
+    expect(plan).toMatchObject({ reachable: true, totalMinutes: 57 });
+    expect(providerFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("KEEPS a determinate reachable (walk-only / non-transit) first answer when the retry throws — does NOT discard it as an error (G4)", async () => {
+    // A walk-only itinerary in `itineraries` parses reachable:true with no
+    // transit leg → the loop retries hoping for a transit trip; if that retry
+    // THROWS, the reachable answer must stand (not become a 502).
+    const walkItin = {
+      duration: 18 * 60,
+      transfers: 0,
+      legs: [{ mode: "WALK", duration: 18 * 60, from: { name: "START" }, to: { name: "END" } }],
+    };
+    providerFetch
+      .mockResolvedValueOnce(planResponse([walkItin]))
+      .mockRejectedValueOnce(new TypeError("network down"));
+    const plan = await planTrip(FROM, TO, DEP);
+    expect(plan).toMatchObject({ reachable: true });
+    expect(providerFetch).toHaveBeenCalledTimes(2);
   });
 
   it("passes the absolute budget signal to every provider attempt", async () => {
@@ -480,14 +520,23 @@ describe("planTrip", () => {
     expect(providerFetch).toHaveBeenCalledTimes(1);
   });
 
-  it("a FAILED retry falls back to the first, determinate body instead of throwing", async () => {
+  it("an empty first answer + a TRANSIENT failed retry surfaces an HONEST failure and caches NOTHING (F1: the empty was the suspect we retried, unconfirmed)", async () => {
     providerFetch
-      .mockResolvedValueOnce(planResponse([]))
-      .mockRejectedValueOnce(new TypeError("network blip"));
+      .mockResolvedValueOnce(planResponse([])) // suspect empty — the reason we retry
+      .mockRejectedValueOnce(new TypeError("network blip")); // transient confirmation failure
+    await expect(planTrip(FROM, TO, DEP)).rejects.toThrow(/request failed/);
+    expect(providerFetch).toHaveBeenCalledTimes(2);
+    // Nothing cached: a distrusted empty must not be pinned as "No public-transport route".
+    expect(store.size).toBe(0);
+  });
+
+  it("an empty first answer + a DETERMINISTIC (429) retry failure KEEPS the not-reachable answer (H4 — a rate-limited retry gives no new reachability info; don't 502 a genuine no-route)", async () => {
+    providerFetch
+      .mockResolvedValueOnce(planResponse([])) // MOTIS successfully returned empty
+      .mockResolvedValueOnce({ ok: false, status: 429, json: () => Promise.resolve({}) }); // retry rejected by host
     await expect(planTrip(FROM, TO, DEP)).resolves.toEqual({ reachable: false });
     expect(providerFetch).toHaveBeenCalledTimes(2);
-    // The determinate answer got cached (short TTL), not dropped.
-    expect([...store.values()][0]).toEqual({ reachable: false });
+    expect([...store.values()][0]).toEqual({ reachable: false }); // cached (short TTL)
   });
 
   it("skips the retry when the budget is nearly spent (the deadline covers queue + attempts)", async () => {
@@ -552,8 +601,42 @@ describe("planTrip", () => {
     await expect(planTrip(FROM, TO, DEP)).rejects.toThrow(/503/);
   });
 
-  it("a network failure (fetch rejects) is wrapped as a ProviderError", async () => {
-    providerFetch.mockRejectedValueOnce(new TypeError("network down"));
+  it("a PERSISTENT network failure is wrapped as a ProviderError after ONE retry (2 calls, nothing cached) — task 018", async () => {
+    providerFetch.mockRejectedValue(new TypeError("network down")); // both attempts fail
     await expect(planTrip(FROM, TO, DEP)).rejects.toThrow(/request failed: network down/);
+    expect(providerFetch).toHaveBeenCalledTimes(2); // transient → retried once
+    expect(store.size).toBe(0); // an honest failure caches nothing
+  });
+
+  it("HEALS a transient plan failure: network-fail-then-succeed returns the route via 2 calls (task 018)", async () => {
+    providerFetch
+      .mockRejectedValueOnce(new TypeError("network down"))
+      .mockResolvedValueOnce(planResponse([FAST]));
+    const plan = await planTrip(FROM, TO, DEP);
+    expect(plan).toMatchObject({ reachable: true, totalMinutes: 57 });
+    expect(providerFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("does NOT retry a deterministic upstream status (503) — exactly 1 call (task 018)", async () => {
+    providerFetch.mockResolvedValue({ ok: false, status: 503, json: () => Promise.resolve({}) });
+    await expect(planTrip(FROM, TO, DEP)).rejects.toThrow(/503/);
+    expect(providerFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("UNIFIED retry is capped at 2 calls for a mixed empty→fetch-fail sequence, and surfaces an honest failure (suspect empty not cached) — task 018", async () => {
+    providerFetch
+      .mockResolvedValueOnce(planResponse([])) // suspect empty
+      .mockRejectedValueOnce(new TypeError("network down")); // confirmation retry fails
+    await expect(planTrip(FROM, TO, DEP)).rejects.toThrow(/request failed/);
+    expect(providerFetch).toHaveBeenCalledTimes(2); // never a 3rd call
+    expect(store.size).toBe(0); // nothing cached
+  });
+
+  it("UNIFIED retry is capped at 2 calls for a mixed fetch-fail→empty sequence — task 018", async () => {
+    providerFetch
+      .mockRejectedValueOnce(new TypeError("network down")) // transient
+      .mockResolvedValueOnce(planResponse([])); // retry yields determinate not-reachable
+    await expect(planTrip(FROM, TO, DEP)).resolves.toEqual({ reachable: false });
+    expect(providerFetch).toHaveBeenCalledTimes(2); // never a 3rd call
   });
 });

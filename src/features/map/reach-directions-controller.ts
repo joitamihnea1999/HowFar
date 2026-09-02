@@ -20,7 +20,7 @@ import type { EdgeInsets } from "@/features/map/route-framing";
  * below was panel-caught and must not regress):
  *   - the reach view state machine (hint / outside / none / loading / error /
  *     transit-with-steps) — public-transport only since task 060;
- *   - the `/api/reach` fetch under ONE generation + abort + 12s deadline, with
+ *   - the `/api/reach` fetch under ONE generation + abort + REACH_TIMEOUT_MS deadline, with
  *     the "invalidate gen BEFORE abort" and "late-json guard" fixes;
  *   - orchestrating the drawn journey, amenity declutter, destination pin, and
  *     the camera frame;
@@ -37,8 +37,11 @@ import type { EdgeInsets } from "@/features/map/route-framing";
  * assert the server's end-to-end plan budget (PLAN_BUDGET_MS) stays strictly
  * below it — the server must answer or fail while the client is still
  * listening, or a slow success gets cached after the client gave up and the
- * next click "heals". */
-export const REACH_TIMEOUT_MS = 12000;
+ * next click "heals". Task 018 raised it to 15s to sit a ≥2s heal-loop margin
+ * above the raised PLAN_BUDGET_MS (12s, one modestly-long attempt); a ceiling
+ * test caps it at 15s so the pair can't drift up and make every genuine phone
+ * failure slower. */
+export const REACH_TIMEOUT_MS = 15000;
 
 export interface ReachStepView {
   primary: string;

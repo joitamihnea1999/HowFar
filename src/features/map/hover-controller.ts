@@ -2,6 +2,7 @@ import type maplibregl from "maplibre-gl";
 
 import type { LoadState } from "@/features/map/load-state";
 import { markerPickPad, pickAllWithin, pickNearestWithin } from "@/features/map/marker-pick";
+import { safeQueryRenderedFeatures } from "@/features/map/query-features";
 import { pinFootprintRadius } from "@/features/amenities/amenity-cluster";
 
 export interface AmenityPick {
@@ -37,7 +38,7 @@ export function createHoverController({
       [point.x - pad, point.y - pad],
       [point.x + pad, point.y + pad],
     ];
-    const hits = map.queryRenderedFeatures(bbox, { layers: ["amenity-markers"] });
+    const hits = safeQueryRenderedFeatures(map, bbox, { layers: ["amenity-markers"] });
     const candidates = [];
     for (const f of hits) {
       if (f.geometry.type !== "Point") continue;
@@ -65,12 +66,7 @@ export function createHoverController({
       [point.x - pad, point.y - pad],
       [point.x + pad, point.y + pad],
     ];
-    let hits: maplibregl.MapGeoJSONFeature[];
-    try {
-      hits = map.queryRenderedFeatures(bbox, { layers: ["amenity-markers"] });
-    } catch {
-      return [];
-    }
+    const hits = safeQueryRenderedFeatures(map, bbox, { layers: ["amenity-markers"] });
     const candidates = [];
     for (const f of hits) {
       if (f.geometry.type !== "Point") continue;

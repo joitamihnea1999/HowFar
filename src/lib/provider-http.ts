@@ -17,11 +17,59 @@ import { createHash } from "node:crypto";
 /** Identifies the app to providers that require a UA (Nominatim, Overpass). */
 export const USER_AGENT = "HowFar/1.0 (+https://github.com/joitamihnea1999/HowFar)";
 
-/** Thrown when an upstream provider fails (bad status, timeout, malformed body). */
+/** Thrown when an upstream provider fails (bad status, timeout, malformed body).
+ * `retriable` marks a failure a caller may retry once (a transient network drop
+ * or our own abort/timeout, as opposed to a deterministic upstream status);
+ * clients that wrap raw fetch errors set it from `isRetriableFetchError` so a
+ * retry loop can classify AFTER wrapping (task 018). */
 export class ProviderError extends Error {
-  constructor(message: string) {
+  readonly retriable: boolean;
+  constructor(message: string, opts?: { retriable?: boolean }) {
     super(message);
     this.name = "ProviderError";
+    this.retriable = opts?.retriable ?? false;
+  }
+}
+
+/**
+ * True for a TRANSIENT upstream failure an identical retry is known to heal: a
+ * network-level fetch rejection (undici throws `TypeError`, e.g. "fetch failed"
+ * / "network down") or an abort/timeout (`AbortError` / `TimeoutError`, incl.
+ * our own request-deadline abort). A `ProviderError` — which wraps a real
+ * upstream STATUS — is deterministic and NOT retriable (don't hammer a provider
+ * that is actively refusing). Task 018: the owner saw `/api/transit` + `/api/reach`
+ * fail intermittently on exactly these shapes, healing on an identical retry.
+ */
+export function isRetriableFetchError(err: unknown): boolean {
+  if (err instanceof ProviderError) return false;
+  if (!(err instanceof Error)) return false;
+  if (err.name === "AbortError" || err.name === "TimeoutError") return true;
+  // undici surfaces network failures as TypeError ("fetch failed"); the app's
+  // own tests use `new TypeError("network down")` for that shape.
+  if (err instanceof TypeError) return true;
+  return /fetch failed|network|aborted|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|socket hang up|terminated/i.test(
+    err.message,
+  );
+}
+
+/**
+ * Run `attempt`; on ONE transient failure (`isRetriableFetchError`) wait
+ * `backoffMs` then run it exactly once more. Deterministic failures rethrow
+ * immediately, and `canRetry` (when given) can veto the retry — e.g. a caller
+ * with an absolute time budget refuses a retry that wouldn't fit (task 018).
+ * Bounded at two attempts total.
+ */
+export async function retryOnceOnTransient<T>(
+  attempt: () => Promise<T>,
+  opts: { backoffMs: number; canRetry?: () => boolean },
+): Promise<T> {
+  try {
+    return await attempt();
+  } catch (err) {
+    if (!isRetriableFetchError(err)) throw err;
+    if (opts.canRetry && !opts.canRetry()) throw err;
+    if (opts.backoffMs > 0) await new Promise((resolve) => setTimeout(resolve, opts.backoffMs));
+    return attempt();
   }
 }
 

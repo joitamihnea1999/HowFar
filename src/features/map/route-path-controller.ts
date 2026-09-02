@@ -6,6 +6,7 @@ import {
   type RoutePath,
 } from "@/features/amenities/route-path";
 import type { EdgeInsets } from "@/features/map/route-framing";
+import { activeGuardHasFeature, safeQuerySourceFeatures } from "@/features/map/query-features";
 import {
   computeRouteFraming,
   routeFitBreathingRoom,
@@ -156,7 +157,7 @@ export function createRoutePathController({
     // returns without rescheduling — so no cancelAnimationFrame is needed.
     const drawGen = gen;
     runRoutePathStampPoll({
-      hasFeatures: () => map.querySourceFeatures("route-path").length > 0,
+      hasFeatures: () => safeQuerySourceFeatures(map, "route-path").length > 0,
       now: () => performance.now(),
       schedule: (tick) => requestAnimationFrame(tick),
       cancelled: () => drawGen !== gen,
@@ -222,7 +223,7 @@ export function createRoutePathController({
       [point.x - pad, point.y - pad],
       [point.x + pad, point.y + pad],
     ];
-    return map.queryRenderedFeatures(bbox, { layers: ["route-path-stops", "route-path-line"] }).length > 0;
+    return activeGuardHasFeature(map, bbox, ["route-path-stops", "route-path-line"]);
   }
 
   return {

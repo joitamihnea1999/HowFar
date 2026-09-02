@@ -245,6 +245,56 @@ For a fuller teardown (remove containers, or delete the volumes) see [Teardown](
 > self-hosted** — `/api/transit` and `/api/reach` keep their public provider (the MOTIS/GTFS
 > gate), so those routes hit the network even under `dev:selfhost`.
 
+## 6b — Testing on a phone over LAN
+
+To open the dev app on a real phone on the same Wi-Fi, two things matter: the dev server must
+be reachable on the network (it already is), and Next's dev cross-origin block must allow the
+phone's origin.
+
+1. **Reachability is already on.** `next dev` binds to `0.0.0.0` by default (verified: `next dev --help` →
+   `-H, --hostname <hostname>` default `0.0.0.0`), so it listens on every interface — no host flag needed.
+
+2. **Find the host's LAN address:**
+
+   ```bash
+   hostname -I | awk '{print $1}'      # e.g. 192.168.1.42   (Linux)
+   # or: ip route get 1 | awk '{print $7; exit}'
+   ```
+
+3. **Allow the phone's origin.** Next blocks cross-origin requests to dev-only assets/endpoints
+   (HMR socket, RSC payloads, `/_next/*`) unless the origin is in `allowedDevOrigins`. Point the
+   app at your LAN address via the `ALLOWED_DEV_ORIGINS` env var (comma-separated), then start dev:
+
+   ```bash
+   ALLOWED_DEV_ORIGINS=192.168.1.42 npm run dev
+   # multiple: ALLOWED_DEV_ORIGINS=192.168.1.42,192.168.1.43
+   ```
+
+   > **Hostname only — no scheme, no port.** Next matches the request **hostname** against
+   > `allowedDevOrigins` (`next/dist/server/lib/router-utils/block-cross-site-dev.js` compares
+   > `parsedOrigin.hostname.toLowerCase()`), so `http://192.168.1.42:3000` would **never** match.
+   > `next.config.ts` reads `ALLOWED_DEV_ORIGINS` through `parseAllowedDevOrigins`
+   > (`src/lib/dev-origins.ts`), which is forgiving — it strips a stray scheme/port down to the
+   > bare hostname — but the value to reach for is just the IP/hostname. Unset ⇒ default (localhost
+   > only), byte-identical to no config.
+
+4. **Browse from the phone:** `http://192.168.1.42:3000`. (For `dev:selfhost`, prefix the same
+   var: `ALLOWED_DEV_ORIGINS=192.168.1.42 npm run dev:selfhost` — note transit/tiles caveats in §6a still apply.)
+
+### Stale service worker (foreign-route 404s)
+
+A service worker is **origin-scoped** — it controls exactly the origin (scheme + host + port) it
+was registered on, nothing else. If a *different* app was ever served on an origin you now load
+(the classic case: a prior project on `http://localhost:3000`, but equally the LAN origin
+`http://192.168.1.42:3000`), its **still-registered SW can intercept requests and 404 this app's
+routes** on that same origin — the app's own routes look "not found" even though the server has
+them. Note a `localhost:3000` SW does **not** affect `192.168.1.42:3000` (different origins), so
+this bites per-origin: whichever origin you actually load is the one to clear.
+
+**Fix (on the affected origin):** open it in a private/incognito window (no SWs), **or** in
+DevTools → Application → Service workers → *Unregister* (and *Clear site data*), then hard-reload.
+HowFar registers no service worker of its own, so unregistering is always safe here.
+
 ## 7 — Parity check (public vs local)
 
 The app reads provider env at process start, so run **two** instances from the SAME

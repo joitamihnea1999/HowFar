@@ -32,7 +32,7 @@ vi.mock("@/features/isochrones/server/transit-grid", async (importOriginal) => (
 
 import { PACE_MODEL } from "@/features/isochrones/pace";
 import { departureFields, TIME_PRESETS } from "@/features/isochrones/time-context";
-import { representativeDeparture, transitIsochrone } from "./transit";
+import { ONE_TO_ALL_BUDGET_MS, representativeDeparture, transitIsochrone } from "./transit";
 
 type Stop = { place?: { lat?: number; lon?: number }; duration?: number };
 const stop = (lat: number, lon: number, duration: number): Stop => ({ place: { lat, lon }, duration });
@@ -120,16 +120,75 @@ describe("transitIsochrone", () => {
     await expect(transitIsochrone(44.4, 26.1)).rejects.toThrow(/malformed/i);
   });
 
-  it("throws ProviderError on a non-ok status", async () => {
+  it("throws ProviderError on a non-ok status, and does NOT retry a deterministic status (1 call)", async () => {
     providerFetch.mockResolvedValue({ ok: false, status: 429, json: () => Promise.resolve({}) });
     await expect(transitIsochrone(44.4, 26.1)).rejects.toThrow(/429/);
+    expect(providerFetch).toHaveBeenCalledTimes(1);
   });
 
-  it("wraps a network failure as ProviderError (→ 502)", async () => {
+  it("wraps a PERSISTENT network failure as ProviderError (→ 502) after ONE retry (2 calls)", async () => {
     providerFetch.mockImplementation(async () => {
       throw new TypeError("network down");
     });
     await expect(transitIsochrone(44.4, 26.1)).rejects.toThrow(/request failed/i);
+    expect(providerFetch).toHaveBeenCalledTimes(2); // transient → retried once
+  });
+
+  it("bounds each one-to-all attempt by the absolute budget (single modestly-long attempt, task 018 G1/G3)", async () => {
+    providerFetch.mockResolvedValue(oneToAll([stop(44.475, 26.16, 20)]));
+    await transitIsochrone(44.4, 26.1);
+    const opts = providerFetch.mock.calls[0][1] as { timeoutMs?: number; signal?: AbortSignal };
+    expect(opts.timeoutMs).toBe(ONE_TO_ALL_BUDGET_MS); // NOT a shorter split value
+    expect(opts.signal).toBeInstanceOf(AbortSignal); // absolute budget signal
+  });
+
+  it("RETRIES a fast abort-shaped failure then succeeds (owner: 'identical retries succeed') — 2 calls (task 018)", async () => {
+    providerFetch
+      .mockRejectedValueOnce(Object.assign(new Error("The operation was aborted"), { name: "AbortError" }))
+      .mockResolvedValueOnce(oneToAll([stop(44.475, 26.16, 20)]));
+    const res = await transitIsochrone(44.4, 26.1);
+    expect(res.rings.map((r) => r.minutes)).toEqual([15, 30, 45]);
+    expect(providerFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("RETRIES a mid-body read failure (undici 'terminated' from res.json()) then succeeds — 2 calls (task 018 F3)", async () => {
+    providerFetch
+      .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.reject(new TypeError("terminated")) })
+      .mockResolvedValueOnce(oneToAll([stop(44.475, 26.16, 20)]));
+    const res = await transitIsochrone(44.4, 26.1);
+    expect(res.rings.map((r) => r.minutes)).toEqual([15, 30, 45]);
+    expect(providerFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("HEALS a transient one-to-all failure: fail-then-succeed returns rings via 2 calls (task 018)", async () => {
+    providerFetch
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce(oneToAll([stop(44.44, 26.12, 5), stop(44.475, 26.16, 20)]));
+    const res = await transitIsochrone(44.4, 26.1);
+    expect(res.rings.map((r) => r.minutes)).toEqual([15, 30, 45]);
+    expect(providerFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("a fully-stalled one-to-all is bounded by the budget signal — rejects (honest 502) within ONE_TO_ALL_BUDGET_MS, never hangs (task 018)", async () => {
+    vi.useFakeTimers();
+    try {
+      // Resolves only if aborted — mimics a remote that never answers; the
+      // absolute budget signal we pass must abort it and bound the whole call.
+      providerFetch.mockImplementation(
+        (_url: string, opts: { signal: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            opts.signal.addEventListener("abort", () =>
+              reject(Object.assign(new Error("aborted by budget"), { name: "AbortError" })),
+            );
+          }),
+      );
+      const pending = transitIsochrone(44.4, 26.1);
+      const guarded = expect(pending).rejects.toThrow(/request failed/i);
+      await vi.advanceTimersByTimeAsync(ONE_TO_ALL_BUDGET_MS + 1000);
+      await guarded;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("wraps a malformed-JSON parse failure as ProviderError", async () => {

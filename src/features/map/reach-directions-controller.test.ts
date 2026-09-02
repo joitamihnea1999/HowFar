@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createReachDirectionsController, type ReachView } from "@/features/map/reach-directions-controller";
+import { createReachDirectionsController, REACH_TIMEOUT_MS, type ReachView } from "@/features/map/reach-directions-controller";
 
 // A minimal fake journey controller recording the calls the directions
 // controller drives (draw/declutter/frame/pin/highlight/clear).
@@ -152,7 +152,7 @@ describe("reach-directions-controller — transit fetch", () => {
     const { controller, journey, views } = makeController({ drawReturns: true });
 
     controller.open({ kind: "transit", coords: [26.1, 44.4], band: 30, url: "/api/reach?x=1" });
-    await vi.advanceTimersByTimeAsync(12001); // deadline fires → error view, gen bumped
+    await vi.advanceTimersByTimeAsync(REACH_TIMEOUT_MS + 1); // deadline fires → error view, gen bumped
     expect(views.at(-1)?.state).toBe("error");
     resolveJson(reachablePlan); // late body arrives
     await vi.advanceTimersByTimeAsync(0);

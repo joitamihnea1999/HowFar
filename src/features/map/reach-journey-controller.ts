@@ -6,6 +6,7 @@ import type { EdgeInsets } from "@/features/map/route-framing";
 import type { LoadState } from "@/features/map/load-state";
 import { EMPTY_FC } from "@/features/map/map-setup";
 import { MARKER_PICK_PAD_PX } from "@/features/map/marker-pick";
+import { activeGuardHasFeature, safeQuerySourceFeatures } from "@/features/map/query-features";
 import { routeFitBreathingRoom, runRoutePathStampPoll } from "@/features/map/route-framing";
 
 /**
@@ -216,12 +217,10 @@ export function createReachJourneyController({
       // land), so a bare `.length > 0` could stamp "rendered" off the pin alone.
       // Require an actual leg/stop feature so the stamp means the TRIP is drawn.
       hasFeatures: () =>
-        map
-          .querySourceFeatures("reach-path")
-          .some((f) => {
-            const kind = (f.properties as { kind?: string } | null)?.kind;
-            return kind === "leg" || kind === "stop";
-          }),
+        safeQuerySourceFeatures(map, "reach-path").some((f) => {
+          const kind = (f.properties as { kind?: string } | null)?.kind;
+          return kind === "leg" || kind === "stop";
+        }),
       now: () => performance.now(),
       schedule: (tick) => requestAnimationFrame(tick),
       cancelled: () => drawGen !== gen,
@@ -261,10 +260,12 @@ export function createReachJourneyController({
       [point.x - pad, point.y - pad],
       [point.x + pad, point.y + pad],
     ];
-    const layers = ["reach-path-transit", "reach-path-walk", "reach-path-stops", "reach-path-destination"].filter(
-      (id) => map.getLayer(id),
-    );
-    return map.queryRenderedFeatures(bbox, { layers }).length > 0;
+    return activeGuardHasFeature(map, bbox, [
+      "reach-path-transit",
+      "reach-path-walk",
+      "reach-path-stops",
+      "reach-path-destination",
+    ]);
   }
 
   /** Fit the camera to the drawn journey so the whole path is visible beside the

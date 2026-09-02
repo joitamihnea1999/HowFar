@@ -3,7 +3,7 @@ import { PACE_MODEL } from "@/features/isochrones/pace";
 import { decodePolyline } from "@/features/isochrones/polyline";
 import { hasTransitLeg } from "@/features/isochrones/transit-classify";
 import { providerConfig, taggedCacheKey } from "@/lib/env";
-import { providerFetch, ProviderError, roundCoord, USER_AGENT } from "@/lib/provider-http";
+import { isRetriableFetchError, providerFetch, ProviderError, roundCoord, USER_AGENT } from "@/lib/provider-http";
 
 /**
  * Transitous MOTIS journey planning (server-side, cached) for the right-click
@@ -26,18 +26,27 @@ const PLAN_PATH = "/api/v1/plan";
  * first attempt + the bounded retry, all under ONE absolute deadline (an
  * AbortController armed at entry — a fixed per-attempt timeout would start
  * only after the shared-host queue, so a `/plan` parked behind a slow
- * one-to-all could finish and get CACHED after the client's 12s deadline
+ * one-to-all could finish and get CACHED after the client's deadline
  * (`REACH_TIMEOUT_MS`) had already shown an error, and the very next click
  * would "heal" — the flaky-product read this task exists to kill. Budget <
  * client deadline is asserted in transit-plan.test.ts; the overrun path
- * throws a ProviderError and caches nothing. */
-export const PLAN_BUDGET_MS = 10_000;
+ * throws a ProviderError and caches nothing. Task 018 raised it 10s→12s: the
+ * owner saw "aborted at exactly 10.0s … the remote was just slow; identical
+ * retries succeed", i.e. the remote wanted ~10s and hit the OLD 10s ceiling — a
+ * MODESTLY longer single attempt (the owner's own suggestion) lets that remote
+ * SUCCEED on the first try, without a doomed short-timeout retry. A retry still
+ * fires for a FAST failure (network drop) with budget to spare; a genuine
+ * timeout has no budget left, an honest failure the client's next click reheals. */
+export const PLAN_BUDGET_MS = 12_000;
 /** Don't bother retrying unless at least this much of the budget remains — a
  * retry needs the configured transit spacing (default 1.5 s — the interval is
  * config-driven since task 009) plus a realistic response window. Tuned for the
  * default; a self-host that sets a very different TRANSIT_MIN_INTERVAL_MS may
  * want this derived from the interval (parked follow-up). */
 const RETRY_MIN_REMAINING_MS = 3_000;
+/** Short backoff before the single retry (transient network drop OR an
+ * effectively-empty response), bounded by the absolute budget. */
+const RETRY_BACKOFF_MS = 250;
 // Schedules are stable within a day and the departure is in the cache key, so a
 // few hours of reuse is safe and keeps repeat right-clicks instant.
 const TTL_MS = 6 * 60 * 60 * 1000;
@@ -343,8 +352,8 @@ async function fetchPlanBody(
       provider: "transit",
       rateHost: host,
       minIntervalMs,
-      // The per-attempt timeout is a ceiling only — the ABSOLUTE budget signal
-      // is what bounds queue+attempts end-to-end (see PLAN_BUDGET_MS).
+      // The attempt runs to the absolute budget; the budget signal is what
+      // bounds the whole call (single modestly-long attempt, task 018).
       timeoutMs: PLAN_BUDGET_MS,
       signal: budgetSignal,
       init: { headers: { "User-Agent": USER_AGENT } },
@@ -352,8 +361,12 @@ async function fetchPlanBody(
     if (!res.ok) throw new ProviderError(`transitous plan responded ${res.status}`);
     body = (await res.json()) as MotisPlanBody;
   } catch (err) {
-    if (err instanceof ProviderError) throw err;
-    throw new ProviderError(`transitous plan request failed: ${(err as Error).message}`);
+    if (err instanceof ProviderError) throw err; // upstream STATUS — deterministic (retriable stays false)
+    // A network drop / abort is transient — tag it so the unified retry loop in
+    // fetchAndParse can retry it (once, within budget) after wrapping.
+    throw new ProviderError(`transitous plan request failed: ${(err as Error).message}`, {
+      retriable: isRetriableFetchError(err),
+    });
   }
   if (!Array.isArray(body?.itineraries)) {
     throw new ProviderError("transitous plan returned a malformed response (no itineraries array)");
@@ -387,38 +400,67 @@ async function fetchAndParse(
   const budgetTimer = setTimeout(() => budget.abort(), PLAN_BUDGET_MS);
 
   // What the budget guarantees: no SUCCESS can resolve (and thus be cached)
-  // after the deadline — the signal kills an in-flight fetch at 10s, so a
-  // late answer can never be cached after the client's 12s deadline showed an
-  // error (the heal-loop). What it does NOT bound: the shared-host queue wait
-  // itself, so the resulting ProviderError may surface later than 10s — an
+  // after the deadline — the signal kills an in-flight fetch at PLAN_BUDGET_MS,
+  // so a late answer can never be cached after the client's REACH_TIMEOUT_MS
+  // deadline showed an error (the heal-loop). What it does NOT bound: the
+  // shared-host queue wait itself, so the resulting ProviderError may surface
+  // later than PLAN_BUDGET_MS — an
   // honest, uncached, retryable failure (review: accepted residual; making the
   // limiter signal-aware would touch every provider for no material gain).
   const isTransitAnswer = (p: ReachPlan): boolean => p.reachable && hasTransitLeg(p.legs);
   const usableDirect = (b: MotisPlanBody): boolean =>
     (Array.isArray(b.direct) ? b.direct : []).some((it) => it && durationSeconds(it.duration) > 0);
-  let plan: ReachPlan;
+  const canRetry = () => Date.now() + RETRY_MIN_REMAINING_MS < deadline;
+
+  // ONE unified retry loop, capped at TWO fetchPlanBody calls total (task 018 —
+  // nesting a fetch-failure retry INSIDE the empty-response retry could reach
+  // 3–4 upstream calls on the shared 1.5 s transit bucket, poor citizenship on a
+  // community host). A single retry
+  // covers BOTH transient signatures — a network drop/abort (`err.retriable`)
+  // and an effectively-empty response (no transit AND no direct, the replica-
+  // mid-update signature) — each retried at most once, never past the budget,
+  // and a failed retry NEVER discards a determinate first answer.
+  let plan: ReachPlan | null = null;
   try {
-    const body = await fetchPlanBody(url, host, intervals.transit, budget.signal);
-    plan = bestPlan(body, { maxSeconds });
-    // One bounded retry when the response yields NO public-transport answer AND
-    // no direct (walk/bike) answer either — an effectively-empty response is
-    // the signature of a transient provider miss (replica mid-update), which
-    // would otherwise be cached as "No public-transport route" for this cell.
-    // A direct-only response is a DETERMINATE close-destination answer and is
-    // not retried (review: citizenship). Retry only with real budget left, and
-    // NEVER let a failed retry discard the first, determinate answer (review).
-    if (!isTransitAnswer(plan) && !usableDirect(body) && Date.now() + RETRY_MIN_REMAINING_MS < deadline) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      let body: MotisPlanBody;
       try {
-        const second = bestPlan(await fetchPlanBody(url, host, intervals.transit, budget.signal), { maxSeconds });
-        if (isTransitAnswer(second)) plan = second;
-      } catch {
-        // The first response already answers "no transit here" — a failed
-        // retry must not turn that determinate answer into a 502.
+        body = await fetchPlanBody(url, host, intervals.transit, budget.signal);
+      } catch (err) {
+        // Keep a DETERMINATE reachable first answer (transit OR a walk-only/
+        // UNKNOWN-mode itinerary) rather than discard it on a retry throw (G4).
+        if (plan?.reachable) break;
+        const retriable = err instanceof ProviderError && err.retriable;
+        // A suspect-empty first answer we retried to confirm: retry only a
+        // transient failure with budget to spare.
+        if (attempt < 2 && retriable && canRetry()) {
+          await new Promise((resolve) => setTimeout(resolve, RETRY_BACKOFF_MS));
+          continue;
+        }
+        // Confirmation retry failed. If it was TRANSIENT (network/abort) we still
+        // haven't confirmed the empty — surface an honest failure, cache nothing
+        // (F1 Critical). But a DETERMINISTIC failure (429/503/malformed) gives no
+        // new reachability info, so keep the first empty observation rather than
+        // turn a correct "no route" into a 502 on a rate-limited host (H4).
+        if (plan !== null && !retriable) break;
+        throw err;
       }
+      const candidate = bestPlan(body, { maxSeconds });
+      if (isTransitAnswer(candidate)) {
+        plan = candidate; // best possible answer — done
+        break;
+      }
+      if (plan === null) plan = candidate; // remember the first determinate (not-reachable / direct)
+      if (usableDirect(body)) break; // a direct (walk/bike) answer is DETERMINATE — don't retry (citizenship)
+      if (attempt >= 2 || !canRetry()) break; // effectively-empty, but out of retries/budget
+      await new Promise((resolve) => setTimeout(resolve, RETRY_BACKOFF_MS)); // empty → retry once
     }
   } finally {
     clearTimeout(budgetTimer);
   }
+  // Unreachable — the loop sets plan on any successful fetch and throws otherwise
+  // — but keeps the type honest.
+  if (plan === null) throw new ProviderError("transitous plan request failed: no response");
   // TTL by answer kind: only a real public-transport answer is stable enough to
   // keep for hours; a plan with no transit leg (unreachable, or the walk/bike
   // direct fallback — both rendered as "No public-transport route") heals in

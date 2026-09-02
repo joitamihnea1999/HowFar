@@ -1,6 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { providerFetch, roundCoord, sha256Hex, timedFetch, withRateLimit } from "./provider-http";
+import {
+  isRetriableFetchError,
+  providerFetch,
+  ProviderError,
+  retryOnceOnTransient,
+  roundCoord,
+  sha256Hex,
+  timedFetch,
+  withRateLimit,
+} from "./provider-http";
 
 describe("helpers", () => {
   it("sha256Hex is stable and 64 hex chars", () => {
@@ -188,5 +197,61 @@ describe("providerFetch", () => {
     ]);
     expect(starts).toHaveLength(2);
     expect(starts[1] - starts[0]).toBeGreaterThanOrEqual(INTERVAL - 20);
+  });
+});
+
+describe("isRetriableFetchError", () => {
+  it("is TRUE for the project's network-failure shapes (undici TypeError) and abort/timeout", () => {
+    expect(isRetriableFetchError(new TypeError("network down"))).toBe(true);
+    expect(isRetriableFetchError(new TypeError("fetch failed"))).toBe(true);
+    expect(isRetriableFetchError(Object.assign(new Error("The operation was aborted"), { name: "AbortError" }))).toBe(true);
+    expect(isRetriableFetchError(Object.assign(new Error("timed out"), { name: "TimeoutError" }))).toBe(true);
+  });
+
+  it("is FALSE for a wrapped upstream STATUS (ProviderError) — deterministic, must not be retried", () => {
+    expect(isRetriableFetchError(new ProviderError("transitous responded 503"))).toBe(false);
+    expect(isRetriableFetchError(new ProviderError("responded 429"))).toBe(false);
+  });
+
+  it("is FALSE for a plain non-network Error and non-errors", () => {
+    expect(isRetriableFetchError(new Error("some deterministic bug"))).toBe(false);
+    expect(isRetriableFetchError({})).toBe(false);
+    expect(isRetriableFetchError(null)).toBe(false);
+  });
+});
+
+describe("retryOnceOnTransient", () => {
+  it("retries ONCE on a transient failure then returns the success", async () => {
+    const attempt = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce("ok");
+    await expect(retryOnceOnTransient(attempt, { backoffMs: 0 })).resolves.toBe("ok");
+    expect(attempt).toHaveBeenCalledTimes(2);
+  });
+
+  it("does NOT retry a deterministic error (rethrows after ONE call)", async () => {
+    const attempt = vi.fn<() => Promise<string>>().mockRejectedValue(new ProviderError("responded 503"));
+    await expect(retryOnceOnTransient(attempt, { backoffMs: 0 })).rejects.toThrow(/503/);
+    expect(attempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT retry when canRetry() is false (budget spent) — rethrows the transient", async () => {
+    const attempt = vi.fn<() => Promise<string>>().mockRejectedValue(new TypeError("fetch failed"));
+    await expect(retryOnceOnTransient(attempt, { backoffMs: 0, canRetry: () => false })).rejects.toThrow(/fetch failed/);
+    expect(attempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("caps at ONE retry — two transient failures reject after exactly 2 calls", async () => {
+    const attempt = vi.fn<() => Promise<string>>().mockRejectedValue(new TypeError("fetch failed"));
+    await expect(retryOnceOnTransient(attempt, { backoffMs: 0 })).rejects.toThrow(/fetch failed/);
+    expect(attempt).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("ProviderError.retriable", () => {
+  it("defaults to false and can be set true", () => {
+    expect(new ProviderError("x").retriable).toBe(false);
+    expect(new ProviderError("x", { retriable: true }).retriable).toBe(true);
   });
 });
