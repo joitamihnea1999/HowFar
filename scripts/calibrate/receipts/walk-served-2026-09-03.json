@@ -1,0 +1,164 @@
+{
+  "generatedAt": "2026-09-03T20:42:20.908Z",
+  "method": "ORS foot-walking at the SERVED normal-pace ranges; MOTIS one-to-many withDistance street distance ÷ normal pace speed (5 km/h); fresh bearings + 4th untouched origin",
+  "servedRangesS": {
+    "10": 546,
+    "20": 1135,
+    "40": 2159
+  },
+  "normalSpeedMPerMin": 83.33333333333333,
+  "origins": [
+    {
+      "name": "Unirii",
+      "lat": 44.4268,
+      "lng": 26.1025
+    },
+    {
+      "name": "Grozavesti",
+      "lat": 44.443,
+      "lng": 26.06
+    },
+    {
+      "name": "Berceni",
+      "lat": 44.383,
+      "lng": 26.123
+    },
+    {
+      "name": "Militari",
+      "lat": 44.4319,
+      "lng": 26.0206
+    }
+  ],
+  "bearings": [
+    15,
+    45,
+    75,
+    105,
+    135,
+    165,
+    195,
+    225,
+    255,
+    285,
+    315,
+    345
+  ],
+  "perOrigin": {
+    "Unirii": {
+      "10": {
+        "n": 11,
+        "medMin": 10.443744277954103,
+        "overRate": 0,
+        "maxOverMin": 1.4208103485107433
+      },
+      "20": {
+        "n": 12,
+        "medMin": 20.20123260498047,
+        "overRate": 0,
+        "maxOverMin": 1.5890579376220728
+      },
+      "40": {
+        "n": 12,
+        "medMin": 39.94749802207947,
+        "overRate": 0,
+        "maxOverMin": 1.5914999904632623
+      }
+    },
+    "Grozavesti": {
+      "10": {
+        "n": 11,
+        "medMin": 10.753076992034913,
+        "overRate": 0.18181818181818182,
+        "maxOverMin": 9.864151790618898
+      },
+      "20": {
+        "n": 12,
+        "medMin": 20.49867198371887,
+        "overRate": 0.16666666666666666,
+        "maxOverMin": 10.817108394622803
+      },
+      "40": {
+        "n": 12,
+        "medMin": 39.79454206466675,
+        "overRate": 0,
+        "maxOverMin": 4.658068264007568
+      }
+    },
+    "Berceni": {
+      "10": {
+        "n": 12,
+        "medMin": 9.599622053146362,
+        "overRate": 0,
+        "maxOverMin": 1.7438367538452155
+      },
+      "20": {
+        "n": 12,
+        "medMin": 19.82426560306549,
+        "overRate": 0,
+        "maxOverMin": 2.0369132461547856
+      },
+      "40": {
+        "n": 12,
+        "medMin": 38.66802473831177,
+        "overRate": 0,
+        "maxOverMin": 0.5476543884277376
+      }
+    },
+    "Militari": {
+      "10": {
+        "n": 12,
+        "medMin": 9.396491998672484,
+        "overRate": 0,
+        "maxOverMin": 3.9551938438415544
+      },
+      "20": {
+        "n": 12,
+        "medMin": 19.640272567749026,
+        "overRate": 0,
+        "maxOverMin": 1.5276677665710459
+      },
+      "40": {
+        "n": 12,
+        "medMin": 39.91936359214783,
+        "overRate": 0.08333333333333333,
+        "maxOverMin": 13.460767440795898
+      }
+    }
+  },
+  "perOriginBar": {
+    "medTolerance": 0.1,
+    "overRateBar": 0.1,
+    "maxOverMinCeil": 8
+  },
+  "coverageGaps": [
+    "Unirii@10min: 11/12 samples (dropped sector)",
+    "Grozavesti@10min: 11/12 samples (dropped sector)"
+  ],
+  "servedWalkFailures": 2,
+  "walk40Recorded": {
+    "Unirii": {
+      "n": 12,
+      "medMin": 39.94749802207947,
+      "overRate": 0,
+      "maxOverMin": 1.5914999904632623
+    },
+    "Grozavesti": {
+      "n": 12,
+      "medMin": 39.79454206466675,
+      "overRate": 0,
+      "maxOverMin": 4.658068264007568
+    },
+    "Berceni": {
+      "n": 12,
+      "medMin": 38.66802473831177,
+      "overRate": 0,
+      "maxOverMin": 0.5476543884277376
+    },
+    "Militari": {
+      "n": 12,
+      "medMin": 39.91936359214783,
+      "overRate": 0.08333333333333333,
+      "maxOverMin": 13.460767440795898
+    }
+  }
+}

@@ -1,28 +1,29 @@
 /**
- * Transit reach validation (dev-only, network + local DB) — thresholds 20/40.
+ * Transit reach validation (dev-only, network + local DB) — the SERVED preset
+ * thresholds [20,40], measured DIRECTLY.
  *
- * WHY: the phone-first preset model moves transit presets to 20/40 min. Transit rings are NOT a fitted ORS
- * range like walk — they are contours of ONE monotone field
- * (`transit-grid.ts`: min over stops of transit-minutes + egress-minutes) at the
- * `THRESHOLDS` levels. 20 and 40 are INTERIOR to the shipped-and-validated 15/45
- * envelope, so there is no new correction to fit; what must hold is that the field
- * is CONSERVATIVE (a point painted <=T is really reachable in <= T + 5 min) at
- * those levels too. Because the field is monotone and 20/40 bracket between the
- * validated 15/30/45 levels — and 15 is MORE egress-dominated than 20 (the
- * concern: the egress disc is a larger share of a short reach) — validating the
- * field->journey conservatism at 15/30/45 with the INDEPENDENT journey ground
- * truth covers 20/40 a fortiori.
+ * WHY: the phone-first preset model serves transit reach at 20/40 min. This
+ * validates those contours DIRECTLY on the shipped preset pipeline
+ * (`transitPresetIsochrone`, thresholds [20,40], field kept at 45 for exact
+ * invariance) — replacing the earlier by-inheritance argument (task 019 measured
+ * only 15/30/45 and reasoned 20/40 a fortiori; a direct measurement is required
+ * before the preset thresholds serve a user-facing claim).
  *
- * INSTRUMENT: the REAL app pipeline (`transitIsochrone`) builds the contours
- * (street-routed walk union, not the radial fallback — the walk cache is pre-warmed
- * so the union succeeds). Ground truth = MOTIS `/api/v1/plan` BEST intermodal
- * journey duration, measured AT THE CONTOUR'S OWN DEPARTURE so the two are
- * comparable (the one-to-many intermodal `duration` is unreliable — 3137 s vs
+ * INSTRUMENT: the REAL app pipeline `transitPresetIsochrone` builds the contours
+ * (street-routed walk UNION — the fail-closed preset path throws rather than serve
+ * the radial fallback, so a successful run is provably a unioned measurement; the
+ * preset walk cache is pre-warmed). Ground truth = MOTIS `/api/v1/plan` BEST
+ * intermodal journey duration, measured AT THE CONTOUR'S OWN DEPARTURE so the two
+ * are comparable (the one-to-many intermodal `duration` is unreliable — 3137 s vs
  * /plan's 1320 s for the same pair — so /plan best-journey is the ground truth).
  *
- * Over-claim metric (established, PROVIDERS.md): a boundary point OVER-claims when
- * its best journey is > T + 5 min. Accept when the over-claim rate is <= the
- * shipped 15/30/45 baseline measured the same way.
+ * ACCEPTANCE (pre-declared): a boundary point OVER-claims when its best
+ * journey is > T + 5 min (unsafe direction). CENTRAL origins (Unirii, Grozavesti)
+ * must hold over-claim ≤ 6% (the shipped central profile was ~0%). Berceni
+ * (periphery) has a KNOWN pre-existing field over-claim (task 019, parked) —
+ * recorded and fed to the 2b honest-copy precondition, not a fresh hard-stop.
+ * FULL coverage is required (a dropped ray/journey fails the run). Exits non-zero
+ * on a central breach OR a coverage gap so a re-run can't false-green.
  *
  * USAGE:  npx tsx --env-file=.env scripts/calibrate/transit-validation.ts
  *   (needs the local DB on :5433 up so the walk-ring cache warms and the union
@@ -33,8 +34,9 @@ import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { walkingIsochrone } from "@/features/isochrones/server/ors";
-import { transitIsochrone } from "@/features/isochrones/server/transit";
+import { campaignExitCode, coverageShortfalls, type CoverageCell } from "@/features/isochrones/calibration-acceptance";
+import { walkingPresetIsochrone } from "@/features/isochrones/server/ors";
+import { transitPresetIsochrone } from "@/features/isochrones/server/transit";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TRANSIT_BASE = "https://api.transitous.org";
@@ -46,6 +48,7 @@ const ORIGINS = [
   { name: "Unirii", lat: 44.4268, lng: 26.1025 },
   { name: "Grozavesti", lat: 44.443, lng: 26.06 },
   { name: "Berceni", lat: 44.383, lng: 26.123 },
+  { name: "Militari", lat: 44.4319, lng: 26.0206 }, // west/A1: the transit-40 walk-union covers this barrier corridor
 ];
 const BEARINGS = Array.from({ length: 8 }, (_, i) => (i * 360) / 8);
 
@@ -67,22 +70,38 @@ function pointInRing(pt: [number, number], ring: number[][]): boolean {
   }
   return inside;
 }
-/** Outer ring of the origin-containing polygon (Polygon or MultiPolygon). */
-function outerRing(geom: { type: string; coordinates: unknown }, origin: [number, number]): number[][] {
-  if (geom.type === "Polygon") return (geom.coordinates as number[][][])[0]!;
-  const polys = geom.coordinates as number[][][][];
-  for (const poly of polys) if (pointInRing(origin, poly[0]!)) return poly[0]!;
-  return polys.map((p) => p[0]!).sort((a, b) => b.length - a.length)[0]!;
+/** point ∈ one polygon = inside its exterior ring AND outside every hole. */
+function pointInPolygon(pt: [number, number], poly: number[][][]): boolean {
+  if (!pointInRing(pt, poly[0]!)) return false;
+  for (let h = 1; h < poly.length; h++) if (pointInRing(pt, poly[h]!)) return false;
+  return true;
 }
-function boundaryPointAtBearing(lat: number, lng: number, ring: number[][], b: number): [number, number] | null {
+/** point ∈ the WHOLE reach geometry — every MultiPolygon component + holes. */
+function pointInGeometry(pt: [number, number], geom: { type: string; coordinates: unknown }): boolean {
+  if (geom.type === "Polygon") return pointInPolygon(pt, geom.coordinates as number[][][]);
+  for (const poly of geom.coordinates as number[][][][]) if (pointInPolygon(pt, poly)) return true;
+  return false;
+}
+/** Farthest-inside point along a bearing (up to MAX), whole-geometry, no break at the
+ *  first exit — the OUTERMOST reachable point is where an over-claim lives. `truncated`
+ *  = still inside at MAX (reported as a coverage gap, never a shortened boundary). */
+function boundaryPointAtBearing(
+  lat: number,
+  lng: number,
+  geom: { type: string; coordinates: unknown },
+  b: number,
+): { pt: [number, number]; truncated: boolean } | null {
   const STEP = 30, MAX = 30000;
   let last: [number, number] | null = null;
+  let truncated = false;
   for (let d = STEP; d <= MAX; d += STEP) {
     const p = destPoint(lat, lng, b, d);
-    if (pointInRing(p, ring)) last = p;
-    else if (last) break;
+    if (pointInGeometry(p, geom)) {
+      last = p;
+      if (d + STEP > MAX) truncated = true;
+    }
   }
-  return last;
+  return last ? { pt: last, truncated } : null;
 }
 const median = (xs: number[]) => {
   if (!xs.length) return NaN;
@@ -138,50 +157,67 @@ async function main() {
     appendFileSync(logPath, s + "\n");
   };
   log(`# Transit reach validation — ${new Date().toISOString()}`);
-  log(`# instrument: real transitIsochrone (walk-union) contours vs MOTIS /plan best journey @ contour departure`);
+  log(`# instrument: transitPresetIsochrone [20,40] (street-routed walk union, fail-closed) vs MOTIS /plan best journey @ contour departure`);
 
   const receipt: Record<string, unknown> = {
     generatedAt: new Date().toISOString(),
-    method: "real transitIsochrone (walk union) contours; ground truth = /plan best journey at the contour departure",
+    method: "DIRECT measurement of the SERVED preset thresholds [20,40] via transitPresetIsochrone (street-routed walk union, fail-closed); ground truth = MOTIS /plan best journey at the contour departure",
     tolMin: TOL_MIN,
     origins: ORIGINS,
     bearings: BEARINGS,
     perOrigin: {},
   };
 
+  // DIRECT measurement of the SERVED preset thresholds [20,40] on the SHIPPED
+  // preset pipeline — not the legacy 15/30/45 by
+  // inheritance. Central origins carry the pre-declared bar; Berceni (periphery)
+  // has a KNOWN pre-existing field over-claim (task 019, parked) — recorded, and it
+  // feeds the 2b honest-copy precondition, but is not a fresh hard-stop here.
+  const CENTRAL = new Set(["Unirii", "Grozavesti"]);
+  const CENTRAL_OVER_BAR = 0.06; // shipped central profile was ~0%
   const byThreshold: Record<number, RingSample[]> = {};
+  const coverageCells: CoverageCell[] = [];
+  const perOriginOver: Record<string, Record<number, number>> = {};
   for (const origin of ORIGINS) {
     log(`\n## ${origin.name} (${origin.lat},${origin.lng})`);
-    // Pre-warm the walk cache so transitIsochrone's union succeeds (not radial fallback).
+    // Pre-warm the PRESET walk cache so the preset union succeeds (fail-closed
+    // path: no union ⇒ transitPresetIsochrone throws ⇒ this run errors, never a
+    // radial-fallback measurement).
     try {
-      await walkingIsochrone(origin.lat, origin.lng);
+      await walkingPresetIsochrone(origin.lat, origin.lng);
     } catch (e) {
-      log(`  WARN walk pre-warm failed: ${(e as Error).message}`);
+      log(`  WARN preset walk pre-warm failed: ${(e as Error).message}`);
     }
-    const iso = await transitIsochrone(origin.lat, origin.lng);
-    log(`  departure ${iso.departure}; rings ${iso.rings.map((r) => r.minutes).join("/")}`);
+    const iso = await transitPresetIsochrone(origin.lat, origin.lng);
+    log(`  departure ${iso.departure}; rings ${iso.rings.map((r) => r.minutes).join("/")} (street-routed union — fail-closed)`);
     const perRing: Record<string, unknown> = {};
+    perOriginOver[origin.name] = {};
     for (const ring of iso.rings) {
       const geom = ring.geometry as { type: string; coordinates: unknown };
-      const ringCoords = outerRing(geom, [origin.lng, origin.lat]);
       const samples: RingSample[] = [];
+      let dropped = 0;
       for (const bearing of BEARINGS) {
-        const bp = boundaryPointAtBearing(origin.lat, origin.lng, ringCoords, bearing);
-        if (!bp) continue;
-        const j = await bestJourneyMin(origin, bp, iso.departure);
-        if (j == null) continue;
+        const bp = boundaryPointAtBearing(origin.lat, origin.lng, geom, bearing);
+        if (!bp || bp.truncated) { dropped++; continue; } // truncated ray = coverage gap, not a sample
+        const j = await bestJourneyMin(origin, bp.pt, iso.departure);
+        if (j == null) { dropped++; continue; }
         samples.push({ minutes: ring.minutes, bearing, journeyMin: j });
       }
+      // COVERAGE (a recorded precondition): a ray-miss or failed journey is a DROPPED sector,
+      // recorded so an incomplete run fails rather than false-greens on survivors.
+      coverageCells.push({ origin: origin.name, target: ring.minutes, n: samples.length });
+      if (dropped) log(`  ⚠ ${ring.minutes}min: ${dropped} sector(s) dropped (ray-miss/failed journey)`);
       const over = samples.filter((s) => s.journeyMin > ring.minutes + TOL_MIN);
       const med = median(samples.map((s) => s.journeyMin));
       const maxOver = samples.reduce((m, s) => Math.max(m, s.journeyMin - ring.minutes), 0);
       const overRate = samples.length ? over.length / samples.length : 0;
       perRing[ring.minutes] = { samples, median: med, overRate, maxOver };
+      perOriginOver[origin.name]![ring.minutes] = overRate;
       (byThreshold[ring.minutes] ??= []).push(...samples);
       log(
         `  ${ring.minutes}min: median journey ${med.toFixed(1)}  over(>T+${TOL_MIN}) ${(overRate * 100).toFixed(0)}%  ` +
           `maxOver +${maxOver.toFixed(1)}min  (n=${samples.length})`,
-      );
+);
     }
     (receipt.perOrigin as Record<string, unknown>)[origin.name] = perRing;
   }
@@ -199,15 +235,44 @@ async function main() {
   }
   receipt.pooled = pooled;
   receipt.worstOverRate = worstOver;
-  // 20/40 interpolate within the validated 15/45 envelope; the field is monotone,
-  // so conservatism at 15/30/45 covers them. Note this reasoning in the receipt.
+
+  // --- HARDENED GATES (a recorded precondition): coverage + a PRE-DECLARED central-origin bar.
+  const EXPECTED = BEARINGS.length; // every bearing must yield a sample
+  const coverageGaps = coverageShortfalls(coverageCells, EXPECTED);
+  for (const g of coverageGaps) log(`  ✗ COVERAGE ${g}`);
+  let centralFailures = 0;
+  const centralBreaches: string[] = [];
+  for (const [name, byT] of Object.entries(perOriginOver)) {
+    if (!CENTRAL.has(name)) continue;
+    for (const [t, rate] of Object.entries(byT)) {
+      if (rate > CENTRAL_OVER_BAR) {
+        centralFailures++;
+        centralBreaches.push(`${name}@${t}min over-claims ${(rate * 100).toFixed(0)}% > bar ${(CENTRAL_OVER_BAR * 100).toFixed(0)}%`);
+      }
+    }
+  }
+  for (const b of centralBreaches) log(`  ✗ CENTRAL ${b}`);
+  const coverageOk = coverageGaps.length === 0;
+  const berceniOver = perOriginOver["Berceni"] ?? {};
+  const militariOver = perOriginOver["Militari"] ?? {};
+  // Conclusion computed from what was MEASURED, not asserted.
   receipt.conclusion =
-    "20 and 40 are interior to the validated 15/45 envelope; the transit field is monotone and 15 is more egress-dominated than 20, so field->journey conservatism at 15/30/45 covers 20/40.";
+    `Direct measurement of the SERVED preset thresholds [20,40] on transitPresetIsochrone. ` +
+    `Central origins (Unirii, Grozavesti) held the pre-declared ≤${CENTRAL_OVER_BAR * 100}% over-claim bar: ${centralFailures === 0 ? "PASS" : "FAIL — " + centralBreaches.join("; ")}. ` +
+    `Periphery/barrier origins measured, reported not hard-gated (accepted street-network anisotropy — the reach can overstate at the edges; feeds the 2b honest-copy precondition): ` +
+    `Berceni over-claim by threshold ${JSON.stringify(berceniOver)}; Militari (west/A1, the transit-40 walk-union barrier corridor) over-claim by threshold ${JSON.stringify(militariOver)}. ` +
+    `Coverage: ${coverageOk ? "complete" : "INCOMPLETE — " + coverageGaps.join("; ")}.`;
+  receipt.centralOverBar = CENTRAL_OVER_BAR;
+  receipt.centralFailures = centralFailures;
+  receipt.coverageGaps = coverageGaps;
 
   const receiptPath = join(receiptDir, `transit-${stamp}.json`);
   writeFileSync(receiptPath, JSON.stringify(receipt, null, 2));
-  log(`\nworst pooled over-claim rate ${(worstOver * 100).toFixed(0)}% — receipt: ${receiptPath}`);
-  process.exit(0);
+  const exit = campaignExitCode(coverageOk, centralFailures);
+  log(
+    `\nworst pooled over-claim ${(worstOver * 100).toFixed(0)}% — central bar ${centralFailures === 0 ? "held" : "BREACHED"}, coverage ${coverageOk ? "complete" : "INCOMPLETE"} — ${exit === 0 ? "PASS" : "FAILED"} — receipt: ${receiptPath}`,
+);
+  process.exit(exit);
 }
 
 main().catch((e) => {

@@ -5,11 +5,15 @@ import { describe, expect, it } from "vitest";
 
 import { CALIBRATION_SPEED_M_PER_MIN, PACE_MODEL } from "@/features/isochrones/pace";
 import {
+  allPresetWalkRangesS,
+  ALL_PRESET_WALK_MIN,
   assertSeparated,
   carPresetRangeS,
   carPresetRangeSetS,
   MIN_RANGE_SEPARATION_S,
   presetContourMinutes,
+  TRANSIT_PRESET_MIN,
+  WALK_PRESET_MIN,
   walkPresetRangeS,
   walkPresetRangeSetS,
   WALK_PRESET_RANGES_S_AT_80,
@@ -22,7 +26,7 @@ describe("preset-reach — calibration provenance", () => {
     type Rate = { overRate: number; maxOverMin: number };
     const receipt = JSON.parse(
       readFileSync(join(process.cwd(), "scripts/calibrate/receipts/walk-2026-09-02.json"), "utf8"),
-    ) as {
+) as {
       finalCandidateRangeS: Record<string, number>;
       allPass: boolean;
       anyOriginOverBar: boolean;
@@ -35,7 +39,7 @@ describe("preset-reach — calibration provenance", () => {
     // And no undocumented extra minutes crept into the constant.
     expect(Object.keys(WALK_PRESET_RANGES_S_AT_80).sort()).toEqual(
       Object.keys(receipt.finalCandidateRangeS).sort(),
-    );
+);
     // Pin the DISCLOSED per-origin state so a future re-run that worsens a tail or
     // adds an over-claiming origin fails loudly (review found the pooled pass hid
     // per-origin barrier tails). Known: walk-20 clean everywhere; walk-10 over only
@@ -119,5 +123,45 @@ describe("preset-reach — separation invariant", () => {
   it("car nominal ranges are minutes×60", () => {
     expect(carPresetRangeS(10)).toBe(600);
     expect(carPresetRangeS(25)).toBe(1500);
+  });
+});
+
+describe("preset-reach — allPresetWalkRangesS (the one [10,20,40] walk fetch, sliced per consumer)", () => {
+  it("returns ranges at [10,20,40] ascending + separated, so walk serving slices [10,20] and the transit union slices [20,40]", () => {
+    expect([...ALL_PRESET_WALK_MIN]).toEqual([10, 20, 40]);
+    for (const pace of ["slow", "normal"] as const) {
+      const ranges = allPresetWalkRangesS(pace);
+      expect(ranges).toEqual([
+        walkPresetRangeS(10, pace),
+        walkPresetRangeS(20, pace),
+        walkPresetRangeS(40, pace),
+      ]);
+      // strictly ascending + separated (assertSeparated would throw otherwise)
+      expect(ranges[0]! < ranges[1]! && ranges[1]! < ranges[2]!).toBe(true);
+      assertSeparated(ranges);
+    }
+    // Normal-pace concrete shape (anchor triple rescaled by 5000/60 ÷ 80).
+    expect(allPresetWalkRangesS("normal")).toEqual([546, 1135, 2159]);
+  });
+
+  it("every TRANSIT_PRESET_MIN is present in ALL_PRESET_WALK_MIN — the preset transit union slices the walk fetch by these labels, so a one-token drift in EITHER constant (likely in task 021) would silently make the union null and fail-close ALL preset transit", () => {
+    for (const t of TRANSIT_PRESET_MIN) {
+      expect(ALL_PRESET_WALK_MIN as readonly number[]).toContain(t);
+    }
+    // the sliced walk-ring set the union consumes must have exactly one ring per threshold
+    const sliced = (ALL_PRESET_WALK_MIN as readonly number[]).filter((m) =>
+      (TRANSIT_PRESET_MIN as readonly number[]).includes(m),
+);
+    expect(sliced).toEqual([...TRANSIT_PRESET_MIN]);
+  });
+
+  it("every WALK_PRESET_MIN chip is present in ALL_PRESET_WALK_MIN — the walk route slices the [10,20,40] fetch down to these chips, so a one-token drift would make the route return an EMPTY ring set (the route guards this, but the constants must agree)", () => {
+    for (const chip of WALK_PRESET_MIN) {
+      expect(ALL_PRESET_WALK_MIN as readonly number[]).toContain(chip);
+    }
+    const sliced = (ALL_PRESET_WALK_MIN as readonly number[]).filter((m) =>
+      (WALK_PRESET_MIN as readonly number[]).includes(m),
+    );
+    expect(sliced).toEqual([...WALK_PRESET_MIN]);
   });
 });

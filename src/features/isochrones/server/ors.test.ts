@@ -8,7 +8,7 @@ const { store, providerFetch, serverEnv, providerConfig } = vi.hoisted(() => ({
   serverEnv: vi.fn(() => ({ orsApiKey: "test-key" }) as { orsApiKey?: string }),
   providerConfig: vi.fn(
     () => ({ orsBase: "https://api.openrouteservice.org", intervals: { ors: 1500 } }) as OrsCfg,
-  ),
+),
 }));
 
 vi.mock("@/lib/api-cache", () => ({
@@ -33,8 +33,9 @@ vi.mock("@/lib/env", async (importOriginal) => ({
 }));
 
 import { carTrafficSlot, scaledCarRangesS } from "@/features/isochrones/car-traffic";
+import { allPresetWalkRangesS, carPresetRangeSetS } from "@/features/isochrones/preset-reach";
 
-import { drivingIsochrone, walkingIsochrone } from "./ors";
+import { drivingIsochrone, drivingPresetIsochrone, walkingIsochrone, walkingPresetIsochrone } from "./ors";
 
 const poly = (value: number) => ({
   properties: { value },
@@ -104,7 +105,7 @@ describe("walkingIsochrone", () => {
     // one malformed → 0 valid rings
     providerFetch.mockResolvedValue(
       orsResponse([{ properties: { value: 861 }, geometry: { type: "LineString", coordinates: [] } }]),
-    );
+);
     await expect(walkingIsochrone(44.4, 26.1)).rejects.toThrow(/1 rings/i);
   });
 
@@ -359,5 +360,131 @@ describe("ORS API key policy — public vs keyless self-host (task 009)", () => 
     const opts = providerFetch.mock.calls[0][1] as { provider: string; minIntervalMs: number };
     expect(opts.provider).toBe("ors");
     expect(opts.minIntervalMs).toBe(42);
+  });
+});
+
+// --- phone-first preset: additive PRESET serving path (walk 10/20/40 fetch, car 10/25) ----
+// Concentric squares centred at the origin: ascending half-width ⇒ ascending area
+// ⇒ genuinely nested, so the geometric-nesting guard sees real containment (the
+// shared `poly()` helper makes equal-area squares, which a strict-ascending guard
+// must reject — hence a dedicated fixture here).
+const nestedPoly = (value: number, halfDeg: number) => ({
+  properties: { value },
+  geometry: {
+    type: "Polygon",
+    coordinates: [[
+      [26.1 - halfDeg, 44.43 - halfDeg],
+      [26.1 + halfDeg, 44.43 - halfDeg],
+      [26.1 + halfDeg, 44.43 + halfDeg],
+      [26.1 - halfDeg, 44.43 + halfDeg],
+      [26.1 - halfDeg, 44.43 - halfDeg],
+    ]],
+  },
+});
+
+describe("walkingPresetIsochrone (additive preset walk path)", () => {
+  const WALK_PRESET = allPresetWalkRangesS("normal"); // [546,1135,2159]
+
+  it("requests the [10,20,40] preset ranges in ONE call and relabels rings to 10/20/40", async () => {
+    providerFetch.mockResolvedValue(
+      orsResponse([nestedPoly(546, 0.01), nestedPoly(1135, 0.02), nestedPoly(2159, 0.04)]),
+);
+    const result = await walkingPresetIsochrone(44.4268, 26.1025);
+    const parsed = JSON.parse((providerFetch.mock.calls[0] as [string, { init: { body: string } }])[1].init.body);
+    expect(parsed.range).toEqual(WALK_PRESET);
+    expect(result.rings.map((r) => r.minutes)).toEqual([10, 20, 40]);
+  });
+
+  it("uses a preset cache prefix DISTINCT from the legacy walk key (no collision poisons the transit union)", async () => {
+    providerFetch.mockResolvedValue(
+      orsResponse([nestedPoly(546, 0.01), nestedPoly(1135, 0.02), nestedPoly(2159, 0.04)]),
+);
+    await walkingPresetIsochrone(44.4, 26.1);
+    expect([...store.keys()].some((k) => k.includes("iso:foot:preset:v1:normal:"))).toBe(true);
+    expect([...store.keys()].some((k) => k.includes("iso:foot:v4:"))).toBe(false);
+  });
+
+  it("legacy and preset walk paths stay isolated: concurrent calls fetch twice under different keys", async () => {
+    providerFetch
+      .mockResolvedValueOnce(orsResponse([poly(861), poly(1744), poly(2633)])) // legacy 15/30/45
+      .mockResolvedValueOnce(orsResponse([nestedPoly(546, 0.01), nestedPoly(1135, 0.02), nestedPoly(2159, 0.04)]));
+    const [legacy, preset] = await Promise.all([
+      walkingIsochrone(44.4, 26.1),
+      walkingPresetIsochrone(44.4, 26.1),
+    ]);
+    expect(legacy.rings.map((r) => r.minutes)).toEqual([15, 30, 45]);
+    expect(preset.rings.map((r) => r.minutes)).toEqual([10, 20, 40]);
+    expect(providerFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("coalesces two concurrent identical preset calls into ONE fetch (single-flight)", async () => {
+    providerFetch.mockResolvedValue(
+      orsResponse([nestedPoly(546, 0.01), nestedPoly(1135, 0.02), nestedPoly(2159, 0.04)]),
+);
+    const [a, b] = await Promise.all([walkingPresetIsochrone(44.4, 26.1), walkingPresetIsochrone(44.4, 26.1)]);
+    expect(providerFetch).toHaveBeenCalledTimes(1);
+    expect(a).toEqual(b);
+  });
+
+  it("502s when the preset rings are NOT geometrically nested (outer area < inner — a provider anomaly must not render crossed contours)", async () => {
+    // value 546 (labelled 10) gets the BIGGEST square, 2159 (labelled 40) the smallest → area descending.
+    providerFetch.mockResolvedValue(
+      orsResponse([nestedPoly(546, 0.04), nestedPoly(1135, 0.02), nestedPoly(2159, 0.01)]),
+);
+    await expect(walkingPresetIsochrone(44.4, 26.1)).rejects.toThrow(/nest/i);
+  });
+
+  it("still 502s on a wrong range set (normalize bijection holds on the preset path)", async () => {
+    providerFetch.mockResolvedValue(orsResponse([poly(861), poly(1744), poly(2633)])); // legacy ranges, not preset
+    await expect(walkingPresetIsochrone(44.4, 26.1)).rejects.toThrow(/requested ranges/i);
+  });
+
+  it("502s when the OUTER preset ring is larger in AREA but DISJOINT from the inner (a bare area check would pass; true containment must not)", async () => {
+    // A square at another location, larger than the inner but NOT containing it.
+    const offsetSquare = (value: number, half: number, cLng: number, cLat: number) => ({
+      properties: { value },
+      geometry: {
+        type: "Polygon",
+        coordinates: [[
+          [cLng - half, cLat - half], [cLng + half, cLat - half], [cLng + half, cLat + half],
+          [cLng - half, cLat + half], [cLng - half, cLat - half],
+        ]],
+      },
+    });
+    // 10/20 nest concentrically; the 40 ring has the LARGEST area yet sits elsewhere,
+    // so area is ascending (the old proxy passes) but the 20-ring leaks ~100% outside it.
+    providerFetch.mockResolvedValue(
+      orsResponse([nestedPoly(546, 0.01), nestedPoly(1135, 0.02), offsetSquare(2159, 0.05, 26.3, 44.55)]),
+    );
+    await expect(walkingPresetIsochrone(44.4, 26.1)).rejects.toThrow(/nest/i);
+  });
+});
+
+describe("drivingPresetIsochrone (additive preset car path — TIME-AWARE, never free-flow)", () => {
+  const midday = carTrafficSlot(3, 12); // factor 1.5
+  const night = carTrafficSlot(3, 3); // factor 1.05
+  const MIDDAY = scaledCarRangesS(carPresetRangeSetS(25), 1.5); // scaled [600,1500] ÷1.5 = [400,1000]
+
+  it("applies the congestion factor to the [10,25] preset ranges (NOT nominal free-flow) and labels 10/25", async () => {
+    providerFetch.mockResolvedValue(orsResponse([nestedPoly(MIDDAY[0]!, 0.01), nestedPoly(MIDDAY[1]!, 0.03)]));
+    const result = await drivingPresetIsochrone(44.4268, 26.1025, midday);
+    const parsed = JSON.parse((providerFetch.mock.calls[0] as [string, { init: { body: string } }])[1].init.body);
+    expect(parsed.range).toEqual(MIDDAY);
+    expect(parsed.range).not.toEqual(carPresetRangeSetS(25)); // NOT free-flow [600,1500]
+    expect(result.rings.map((r) => r.minutes)).toEqual([10, 25]);
+  });
+
+  it("a different traffic factor changes BOTH the requested ranges and the cache key (guards the free-flow regression)", async () => {
+    providerFetch.mockResolvedValue(orsResponse([nestedPoly(MIDDAY[0]!, 0.01), nestedPoly(MIDDAY[1]!, 0.03)]));
+    await drivingPresetIsochrone(44.4, 26.1, midday);
+    const NIGHT = scaledCarRangesS(carPresetRangeSetS(25), 1.05);
+    providerFetch.mockResolvedValue(orsResponse([nestedPoly(NIGHT[0]!, 0.01), nestedPoly(NIGHT[1]!, 0.03)]));
+    await drivingPresetIsochrone(44.4, 26.1, night);
+    const middayRange = JSON.parse((providerFetch.mock.calls[0] as [string, { init: { body: string } }])[1].init.body).range;
+    const nightRange = JSON.parse((providerFetch.mock.calls[1] as [string, { init: { body: string } }])[1].init.body).range;
+    expect(middayRange).not.toEqual(nightRange);
+    const keys = [...store.keys()];
+    expect(keys.some((k) => k.includes("iso:car:preset:v1:c1:est:midday:"))).toBe(true);
+    expect(keys.some((k) => k.includes("iso:car:preset:v1:c1:est:night:"))).toBe(true);
   });
 });

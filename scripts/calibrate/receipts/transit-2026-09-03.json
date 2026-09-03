@@ -1,0 +1,440 @@
+{
+  "generatedAt": "2026-09-03T20:44:45.688Z",
+  "method": "DIRECT measurement of the SERVED preset thresholds [20,40] via transitPresetIsochrone (street-routed walk union, fail-closed); ground truth = MOTIS /plan best journey at the contour departure",
+  "tolMin": 5,
+  "origins": [
+    {
+      "name": "Unirii",
+      "lat": 44.4268,
+      "lng": 26.1025
+    },
+    {
+      "name": "Grozavesti",
+      "lat": 44.443,
+      "lng": 26.06
+    },
+    {
+      "name": "Berceni",
+      "lat": 44.383,
+      "lng": 26.123
+    },
+    {
+      "name": "Militari",
+      "lat": 44.4319,
+      "lng": 26.0206
+    }
+  ],
+  "bearings": [
+    0,
+    45,
+    90,
+    135,
+    180,
+    225,
+    270,
+    315
+  ],
+  "perOrigin": {
+    "Unirii": {
+      "20": {
+        "samples": [
+          {
+            "minutes": 20,
+            "bearing": 0,
+            "journeyMin": 20
+          },
+          {
+            "minutes": 20,
+            "bearing": 45,
+            "journeyMin": 20
+          },
+          {
+            "minutes": 20,
+            "bearing": 90,
+            "journeyMin": 17
+          },
+          {
+            "minutes": 20,
+            "bearing": 135,
+            "journeyMin": 20
+          },
+          {
+            "minutes": 20,
+            "bearing": 180,
+            "journeyMin": 18
+          },
+          {
+            "minutes": 20,
+            "bearing": 225,
+            "journeyMin": 16
+          },
+          {
+            "minutes": 20,
+            "bearing": 270,
+            "journeyMin": 18
+          },
+          {
+            "minutes": 20,
+            "bearing": 315,
+            "journeyMin": 17
+          }
+        ],
+        "median": 18,
+        "overRate": 0,
+        "maxOver": 0
+      },
+      "40": {
+        "samples": [
+          {
+            "minutes": 40,
+            "bearing": 0,
+            "journeyMin": 38
+          },
+          {
+            "minutes": 40,
+            "bearing": 45,
+            "journeyMin": 37
+          },
+          {
+            "minutes": 40,
+            "bearing": 90,
+            "journeyMin": 39
+          },
+          {
+            "minutes": 40,
+            "bearing": 135,
+            "journeyMin": 31
+          },
+          {
+            "minutes": 40,
+            "bearing": 180,
+            "journeyMin": 31
+          },
+          {
+            "minutes": 40,
+            "bearing": 225,
+            "journeyMin": 34
+          },
+          {
+            "minutes": 40,
+            "bearing": 270,
+            "journeyMin": 35
+          },
+          {
+            "minutes": 40,
+            "bearing": 315,
+            "journeyMin": 36
+          }
+        ],
+        "median": 35.5,
+        "overRate": 0,
+        "maxOver": 0
+      }
+    },
+    "Grozavesti": {
+      "20": {
+        "samples": [
+          {
+            "minutes": 20,
+            "bearing": 0,
+            "journeyMin": 19
+          },
+          {
+            "minutes": 20,
+            "bearing": 45,
+            "journeyMin": 17
+          },
+          {
+            "minutes": 20,
+            "bearing": 90,
+            "journeyMin": 19
+          },
+          {
+            "minutes": 20,
+            "bearing": 135,
+            "journeyMin": 24
+          },
+          {
+            "minutes": 20,
+            "bearing": 180,
+            "journeyMin": 20
+          },
+          {
+            "minutes": 20,
+            "bearing": 225,
+            "journeyMin": 13
+          },
+          {
+            "minutes": 20,
+            "bearing": 270,
+            "journeyMin": 16
+          },
+          {
+            "minutes": 20,
+            "bearing": 315,
+            "journeyMin": 15
+          }
+        ],
+        "median": 18,
+        "overRate": 0,
+        "maxOver": 4
+      },
+      "40": {
+        "samples": [
+          {
+            "minutes": 40,
+            "bearing": 0,
+            "journeyMin": 36
+          },
+          {
+            "minutes": 40,
+            "bearing": 45,
+            "journeyMin": 41
+          },
+          {
+            "minutes": 40,
+            "bearing": 90,
+            "journeyMin": 38
+          },
+          {
+            "minutes": 40,
+            "bearing": 135,
+            "journeyMin": 44
+          },
+          {
+            "minutes": 40,
+            "bearing": 180,
+            "journeyMin": 37
+          },
+          {
+            "minutes": 40,
+            "bearing": 225,
+            "journeyMin": 35
+          },
+          {
+            "minutes": 40,
+            "bearing": 270,
+            "journeyMin": 35
+          },
+          {
+            "minutes": 40,
+            "bearing": 315,
+            "journeyMin": 35
+          }
+        ],
+        "median": 36.5,
+        "overRate": 0,
+        "maxOver": 4
+      }
+    },
+    "Berceni": {
+      "20": {
+        "samples": [
+          {
+            "minutes": 20,
+            "bearing": 0,
+            "journeyMin": 15
+          },
+          {
+            "minutes": 20,
+            "bearing": 45,
+            "journeyMin": 20.916666666666668
+          },
+          {
+            "minutes": 20,
+            "bearing": 90,
+            "journeyMin": 18
+          },
+          {
+            "minutes": 20,
+            "bearing": 135,
+            "journeyMin": 19
+          },
+          {
+            "minutes": 20,
+            "bearing": 180,
+            "journeyMin": 16
+          },
+          {
+            "minutes": 20,
+            "bearing": 225,
+            "journeyMin": 16
+          },
+          {
+            "minutes": 20,
+            "bearing": 270,
+            "journeyMin": 19.65
+          },
+          {
+            "minutes": 20,
+            "bearing": 315,
+            "journeyMin": 18
+          }
+        ],
+        "median": 18,
+        "overRate": 0,
+        "maxOver": 0.9166666666666679
+      },
+      "40": {
+        "samples": [
+          {
+            "minutes": 40,
+            "bearing": 0,
+            "journeyMin": 33
+          },
+          {
+            "minutes": 40,
+            "bearing": 45,
+            "journeyMin": 32
+          },
+          {
+            "minutes": 40,
+            "bearing": 90,
+            "journeyMin": 34
+          },
+          {
+            "minutes": 40,
+            "bearing": 135,
+            "journeyMin": 73
+          },
+          {
+            "minutes": 40,
+            "bearing": 180,
+            "journeyMin": 43
+          },
+          {
+            "minutes": 40,
+            "bearing": 225,
+            "journeyMin": 36
+          },
+          {
+            "minutes": 40,
+            "bearing": 270,
+            "journeyMin": 33
+          },
+          {
+            "minutes": 40,
+            "bearing": 315,
+            "journeyMin": 44
+          }
+        ],
+        "median": 35,
+        "overRate": 0.125,
+        "maxOver": 33
+      }
+    },
+    "Militari": {
+      "20": {
+        "samples": [
+          {
+            "minutes": 20,
+            "bearing": 0,
+            "journeyMin": 18
+          },
+          {
+            "minutes": 20,
+            "bearing": 45,
+            "journeyMin": 21
+          },
+          {
+            "minutes": 20,
+            "bearing": 90,
+            "journeyMin": 20
+          },
+          {
+            "minutes": 20,
+            "bearing": 135,
+            "journeyMin": 15
+          },
+          {
+            "minutes": 20,
+            "bearing": 180,
+            "journeyMin": 19
+          },
+          {
+            "minutes": 20,
+            "bearing": 225,
+            "journeyMin": 19
+          },
+          {
+            "minutes": 20,
+            "bearing": 270,
+            "journeyMin": 18
+          },
+          {
+            "minutes": 20,
+            "bearing": 315,
+            "journeyMin": 18
+          }
+        ],
+        "median": 18.5,
+        "overRate": 0,
+        "maxOver": 1
+      },
+      "40": {
+        "samples": [
+          {
+            "minutes": 40,
+            "bearing": 0,
+            "journeyMin": 34
+          },
+          {
+            "minutes": 40,
+            "bearing": 45,
+            "journeyMin": 39
+          },
+          {
+            "minutes": 40,
+            "bearing": 90,
+            "journeyMin": 40
+          },
+          {
+            "minutes": 40,
+            "bearing": 135,
+            "journeyMin": 41
+          },
+          {
+            "minutes": 40,
+            "bearing": 180,
+            "journeyMin": 36
+          },
+          {
+            "minutes": 40,
+            "bearing": 225,
+            "journeyMin": 35
+          },
+          {
+            "minutes": 40,
+            "bearing": 270,
+            "journeyMin": 46
+          },
+          {
+            "minutes": 40,
+            "bearing": 315,
+            "journeyMin": 35
+          }
+        ],
+        "median": 37.5,
+        "overRate": 0.125,
+        "maxOver": 6
+      }
+    }
+  },
+  "pooled": {
+    "20": {
+      "n": 32,
+      "median": 18,
+      "overRate": 0
+    },
+    "40": {
+      "n": 32,
+      "median": 36,
+      "overRate": 0.0625
+    }
+  },
+  "worstOverRate": 0.0625,
+  "conclusion": "Direct measurement of the SERVED preset thresholds [20,40] on transitPresetIsochrone. Central origins (Unirii, Grozavesti) held the pre-declared ≤6% over-claim bar: PASS. Periphery/barrier origins measured, reported not hard-gated (accepted street-network anisotropy — the reach can overstate at the edges; feeds the 2b honest-copy precondition): Berceni over-claim by threshold {\"20\":0,\"40\":0.125}; Militari (west/A1, the transit-40 walk-union barrier corridor) over-claim by threshold {\"20\":0,\"40\":0.125}. Coverage: complete.",
+  "centralOverBar": 0.06,
+  "centralFailures": 0,
+  "coverageGaps": []
+}

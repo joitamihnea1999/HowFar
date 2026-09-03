@@ -1,9 +1,19 @@
+import { area } from "@turf/area";
+import { difference } from "@turf/difference";
+import type { Feature, MultiPolygon, Polygon } from "geojson";
+
 import {
   CAR_FACTOR_REVISION,
   scaledCarRangesS,
   type CarTrafficSlot,
 } from "@/features/isochrones/car-traffic";
 import { DEFAULT_PACE, PACE_MODEL, type Pace } from "@/features/isochrones/pace";
+import {
+  ALL_PRESET_WALK_MIN,
+  allPresetWalkRangesS,
+  CAR_PRESET_MIN,
+  carPresetRangeSetS,
+} from "@/features/isochrones/preset-reach";
 import { getCachedSafe, setCachedSafe } from "@/lib/api-cache";
 import { PROVIDER_DEFAULTS, canonicalHost, providerConfig, serverEnv, taggedCacheKey } from "@/lib/env";
 import { providerFetch, ProviderError, roundCoord } from "@/lib/provider-http";
@@ -96,18 +106,18 @@ function normalize(
   if (features.length !== expectedRangesS.length) {
     throw new ProviderError(
       `openrouteservice returned ${features.length} rings (expected ${expectedRangesS.length})`,
-    );
+);
   }
   const sorted = [...features].sort(
     (a, b) => (a?.properties?.value ?? Number.NaN) - (b?.properties?.value ?? Number.NaN),
-  );
+);
   return sorted.map((f, i) => {
     const value = f?.properties?.value;
     if (typeof value !== "number" || Math.abs(value - expectedRangesS[i]!) > RANGE_TOLERANCE_S) {
       throw new ProviderError(
         `openrouteservice ring values [${sorted.map((s) => s?.properties?.value).join(", ")}] ` +
           `do not match the requested ranges [${expectedRangesS.join(", ")}]`,
-      );
+);
     }
     const geometry = f?.geometry;
     if (
@@ -120,7 +130,7 @@ function normalize(
       !Array.isArray(geometry.coordinates) ||
       geometry.coordinates.length === 0 ||
       !(geometry.coordinates as unknown[]).every((c) => Array.isArray(c) && c.length > 0)
-    ) {
+) {
       throw new ProviderError("openrouteservice returned a ring with invalid geometry");
     }
     return { minutes: labels[i]!, geometry: geometry as Ring["geometry"] };
@@ -193,8 +203,101 @@ export async function drivingIsochrone(
   const ranges = scaledCarRangesS(CAR_RANGES_S, slot.factor);
   const key = taggedCacheKey(
     `iso:car:v2:${CAR_FACTOR_REVISION}:est:${slot.slotId}:${roundCoord(latRaw)},${roundCoord(lngRaw)}`,
-  );
+);
   return orsIsochrone("driving-car", latRaw, lngRaw, ranges, CAR_MINUTES, key);
+}
+
+/** An inner contour may poke at most this fraction of its OWN area outside its
+ *  outer contour before the pair is rejected as not-nested. ORS returns each range
+ *  as an independently-simplified polygon, so a genuinely-nested inner can still
+ *  leak a few vertices' worth across the shared boundary — that noise is far below
+ *  1 %. A CROSSED or DISJOINT outer (the real anomaly) leaks ~100 % of the inner,
+ *  so this generous relative bar catches it without false-502-ing on vertex noise. */
+const NESTING_LEAK_FRACTION = 0.05;
+
+/**
+ * Geometric NESTING guard for a multi-contour PRESET result. The rings come back
+ * ascending by minute (normalize sorts by the echoed value); each inner contour
+ * must be CONTAINED in its outer one — a provider anomaly that returns a smaller,
+ * crossed, or DISJOINT outer must 502 here rather than render crossed contours or
+ * corrupt a downstream slice. Two checks: areas strictly ascending (cheap), AND
+ * true containment — the inner minus the outer (turf `difference`) must be ~empty
+ * (≤ `NESTING_LEAK_FRACTION` of the inner's area), which — unlike a bare area
+ * comparison — rejects a larger-but-disjoint outer. `normalize` already pins the
+ * range↔label bijection.
+ */
+function assertNested(rings: Ring[]): void {
+  const feat = (g: Ring["geometry"]): Feature<Polygon | MultiPolygon> =>
+    ({ type: "Feature", properties: {}, geometry: g as unknown as Polygon | MultiPolygon });
+  for (let i = 1; i < rings.length; i++) {
+    const innerF = feat(rings[i - 1]!.geometry);
+    const outerF = feat(rings[i]!.geometry);
+    const innerArea = area(innerF);
+    const outerArea = area(outerF);
+    if (!(outerArea > innerArea)) {
+      throw new ProviderError(
+        `openrouteservice preset rings are not nested (area ${rings[i - 1]!.minutes}min=${innerArea.toFixed(0)} ≥ ${rings[i]!.minutes}min=${outerArea.toFixed(0)})`,
+      );
+    }
+    // Containment: the part of the inner ring lying OUTSIDE the outer ring.
+    const leftover = difference({ type: "FeatureCollection", features: [innerF, outerF] });
+    const leak = leftover ? area(leftover) : 0;
+    if (leak > NESTING_LEAK_FRACTION * innerArea) {
+      throw new ProviderError(
+        `openrouteservice preset rings are not nested (${rings[i - 1]!.minutes}min ring leaks ${(leak / innerArea * 100).toFixed(0)}% of its area outside the ${rings[i]!.minutes}min ring — crossed or disjoint contour)`,
+      );
+    }
+  }
+}
+
+/**
+ * PRESET walk isochrone (additive — NOT in the live path until 2b sends
+ * `?model=preset`). ONE ORS request for the full preset walk set [10,20,40]
+ * (`ALL_PRESET_WALK_MIN`), cached under a preset-specific key so it can never
+ * collide with the legacy `iso:foot:v4:` rings. Callers SLICE the result: the
+ * walk route returns the [10,20] contours (the chips); the transit union takes
+ * [20,40]. Fetching the union once (not per consumer) keeps single-flight
+ * coalescing and avoids issuing two different-range walk requests.
+ */
+export async function walkingPresetIsochrone(
+  latRaw: number,
+  lngRaw: number,
+  pace: Pace = DEFAULT_PACE,
+): Promise<IsochroneResult> {
+  const key = taggedCacheKey(`iso:foot:preset:v1:${pace}:${roundCoord(latRaw)},${roundCoord(lngRaw)}`);
+  const result = await orsIsochrone(
+    "foot-walking",
+    latRaw,
+    lngRaw,
+    allPresetWalkRangesS(pace),
+    [...ALL_PRESET_WALK_MIN],
+    key,
+);
+  assertNested(result.rings);
+  return result;
+}
+
+/**
+ * PRESET driving isochrone (additive). TIME-AWARE like the legacy car
+ * path (task 058): the nominal [10,25] free-flow ranges are DIVIDED by the
+ * traffic slot's congestion factor, so the served band reflects real drive time —
+ * NEVER free-flow. The factor-table revision + slot are IN THE KEY so a
+ * recalibration can't serve stale rings; the preset prefix keeps it distinct from
+ * the legacy `iso:car:v2:` rings.
+ */
+export async function drivingPresetIsochrone(
+  latRaw: number,
+  lngRaw: number,
+  slot: CarTrafficSlot,
+): Promise<IsochroneResult> {
+  const maxPreset = CAR_PRESET_MIN[CAR_PRESET_MIN.length - 1]!; // 25 — the union of both car presets is [10,25]
+  const ranges = scaledCarRangesS(carPresetRangeSetS(maxPreset), slot.factor);
+  const key = taggedCacheKey(
+    `iso:car:preset:v1:${CAR_FACTOR_REVISION}:est:${slot.slotId}:${roundCoord(latRaw)},${roundCoord(lngRaw)}`,
+);
+  const result = await orsIsochrone("driving-car", latRaw, lngRaw, ranges, [...CAR_PRESET_MIN], key);
+  assertNested(result.rings);
+  return result;
 }
 
 async function fetchAndCache(

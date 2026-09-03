@@ -1,0 +1,28 @@
+# Transit reach validation — 2026-09-03T20:44:45.688Z
+# instrument: transitPresetIsochrone [20,40] (street-routed walk union, fail-closed) vs MOTIS /plan best journey @ contour departure
+
+## Unirii (44.4268,26.1025)
+  departure 2026-09-09T05:30:00.000Z; rings 20/40 (street-routed union — fail-closed)
+  20min: median journey 18.0  over(>T+5) 0%  maxOver +0.0min  (n=8)
+  40min: median journey 35.5  over(>T+5) 0%  maxOver +0.0min  (n=8)
+
+## Grozavesti (44.443,26.06)
+  departure 2026-09-09T05:30:00.000Z; rings 20/40 (street-routed union — fail-closed)
+  20min: median journey 18.0  over(>T+5) 0%  maxOver +4.0min  (n=8)
+  40min: median journey 36.5  over(>T+5) 0%  maxOver +4.0min  (n=8)
+
+## Berceni (44.383,26.123)
+  departure 2026-09-09T05:30:00.000Z; rings 20/40 (street-routed union — fail-closed)
+  20min: median journey 18.0  over(>T+5) 0%  maxOver +0.9min  (n=8)
+  40min: median journey 35.0  over(>T+5) 13%  maxOver +33.0min  (n=8)
+
+## Militari (44.4319,26.0206)
+  departure 2026-09-09T05:30:00.000Z; rings 20/40 (street-routed union — fail-closed)
+  20min: median journey 18.5  over(>T+5) 0%  maxOver +1.0min  (n=8)
+  40min: median journey 37.5  over(>T+5) 13%  maxOver +6.0min  (n=8)
+
+## pooled over-claim by threshold (conservative direction: journey <= T means safe)
+  20min: median 18.0  over 0%  (n=32)
+  40min: median 36.0  over 6%  (n=32)
+
+worst pooled over-claim 6% — central bar held, coverage complete — PASS — receipt: /home/mihnea/Documents/Workspace/HowFarAI-v2/HowFar/scripts/calibrate/receipts/transit-2026-09-03.json

@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -43,6 +46,7 @@ vi.mock("@/features/amenities/server/overpass-client", () => ({ raceOverpass }))
 import {
   amenityResultCacheKey,
   CatalogueUnavailableError,
+  clipRingsFrom,
   isCatalogueStale,
   nearbyAmenities,
   rehydrateCachedNearby,
@@ -134,8 +138,8 @@ beforeEach(() => {
         },
       },
       "dataset-1",
-    ),
-  );
+),
+);
 });
 
 describe("nearbyAmenities local catalogue flow", () => {
@@ -155,7 +159,7 @@ describe("nearbyAmenities local catalogue flow", () => {
       "dataset-1",
       [ring15, ring30, ring45],
       { lat: 44.4268, lng: 26.1025 },
-    );
+);
     // LITERAL key, not `amenityResultCacheKey(...)` — deriving the expectation
     // from the implementation would stay green if the version were reverted,
     // and a stale prefix serves amenities clipped to the pre-065 15-minute WALK
@@ -170,7 +174,7 @@ describe("nearbyAmenities local catalogue flow", () => {
         countsByBand: emptyByBand,
       }),
       expect.any(Date),
-    );
+);
     expect(raceOverpass).not.toHaveBeenCalled();
     // The flat whole-clip `counts` is GONE from the real service output, so chips cannot
     // reattach to an un-scoped total. Asserted here rather than in the route test, whose
@@ -237,7 +241,7 @@ describe("nearbyAmenities local catalogue flow", () => {
         datasetId: "d",
       },
       now,
-    );
+);
     expect(fresh.catalogue.stale).toBe(false);
     const old = rehydrateCachedNearby(
       {
@@ -249,7 +253,7 @@ describe("nearbyAmenities local catalogue flow", () => {
         datasetId: "d",
       },
       now,
-    );
+);
     expect(old.catalogue.stale).toBe(true);
   });
 
@@ -264,7 +268,7 @@ describe("nearbyAmenities local catalogue flow", () => {
     findActiveDataset.mockResolvedValue(null);
     await expect(nearbyAmenities(44.4268, 26.1025)).rejects.toBeInstanceOf(
       CatalogueUnavailableError,
-    );
+);
     expect(walkingIsochrone).not.toHaveBeenCalled();
     expect(amenityCacheWrite).not.toHaveBeenCalled();
   });
@@ -277,7 +281,7 @@ describe("nearbyAmenities local catalogue flow", () => {
     for (const mode of ["walk", "transit", "car"] as const) {
       await expect(nearbyAmenities(44.4268, 26.1025, "normal", mode)).rejects.toBeInstanceOf(
         CatalogueUnavailableError,
-      );
+);
     }
     expect(walkingIsochrone).not.toHaveBeenCalled();
     expect(transitIsochrone).not.toHaveBeenCalled();
@@ -292,7 +296,7 @@ describe("nearbyAmenities local catalogue flow", () => {
     });
     await expect(nearbyAmenities(44.4268, 26.1025)).rejects.toThrow(
       /does not match the configured extent/,
-    );
+);
     // The whole point of the OUTER check: no upstream ring call, no dataset read.
     expect(walkingIsochrone).not.toHaveBeenCalled();
     expect(withActiveDataset).not.toHaveBeenCalled();
@@ -301,7 +305,7 @@ describe("nearbyAmenities local catalogue flow", () => {
     // (which would make readValidationBbox see undefined ⇒ grandfather ⇒ fail open).
     expect(findActiveDataset).toHaveBeenCalledWith(
       expect.objectContaining({ select: expect.objectContaining({ validation: true }) }),
-    );
+);
   });
 
   it("region cross-check (task 013): TOCTOU — a region-mismatched pinned dataset yields no result (withActiveDataset gates and returns null)", async () => {
@@ -320,7 +324,7 @@ describe("nearbyAmenities local catalogue flow", () => {
     withActiveDataset.mockRejectedValue(new Error("connection reset"));
     await expect(nearbyAmenities(44.4268, 26.1025)).rejects.toThrow(
       /Amenity catalogue query failed/,
-    );
+);
     expect(amenityCacheWrite).not.toHaveBeenCalled();
   });
 
@@ -367,7 +371,7 @@ describe("nearbyAmenities clips to the CURRENT mode's reach (task 065)", () => {
     // against last week's rings (task 065 P13/P14).
     expect(amenityCacheRead).toHaveBeenCalledWith(
       "amenity:local:v5:dataset-1:transit:normal:2026-08-05T05:30:00.000Z:44.42680,26.10250",
-    );
+);
   });
 
   it("reuses the transit rings it already fetched — one provider call, not two", async () => {
@@ -388,12 +392,12 @@ describe("nearbyAmenities clips to the CURRENT mode's reach (task 065)", () => {
       "dataset-1",
       [ring15, ring30, ring45],
       expect.anything(),
-    );
+);
     // The car key carries the factor revision: a recalibration changes the ring
     // geometry, so slot-only keying would serve amenities clipped to old rings.
     expect(amenityCacheRead).toHaveBeenCalledWith(
       "amenity:local:v5:dataset-1:car:c1:am-peak:44.42680,26.10250",
-    );
+);
   });
 
   it("forces Normal pace outside walk (a Slow pace must never leak into a transit or car clip)", async () => {
@@ -402,7 +406,7 @@ describe("nearbyAmenities clips to the CURRENT mode's reach (task 065)", () => {
     await nearbyAmenities(44.4268, 26.1025, "slow", "car");
     expect(amenityCacheRead).toHaveBeenCalledWith(
       "amenity:local:v5:dataset-1:car:c1:am-peak:44.42680,26.10250",
-    );
+);
   });
 
   it("does NOT coalesce different MODES for the same origin (P1 — a transit request must not get the walk clip)", async () => {
@@ -415,7 +419,7 @@ describe("nearbyAmenities clips to the CURRENT mode's reach (task 065)", () => {
       return read(
         { amenityDataset: { findUniqueOrThrow: () => Promise.resolve({ sourceTimestamp: freshSource }) } },
         "dataset-1",
-      );
+);
     });
     const walk = nearbyAmenities(44.4268, 26.1025, "normal", "walk");
     const transit = nearbyAmenities(44.4268, 26.1025, "normal", "transit");
@@ -461,7 +465,7 @@ describe("nearbyAmenities clips to the CURRENT mode's reach (task 065)", () => {
       return read(
         { amenityDataset: { findUniqueOrThrow: () => Promise.resolve({ sourceTimestamp: freshSource }) } },
         "dataset-1",
-      );
+);
     });
     const crowded = nearbyAmenities(44.4268, 26.1025, "normal", "car", { kind: "preset", preset: "crowded" });
     const quiet = nearbyAmenities(44.4268, 26.1025, "normal", "car", { kind: "preset", preset: "quiet" });
@@ -487,7 +491,7 @@ describe("nearbyAmenities clips to the CURRENT mode's reach (task 065)", () => {
           },
         },
         "dataset-1",
-      );
+);
     });
     const a = nearbyAmenities(44.4268, 26.1025);
     const b = nearbyAmenities(44.4268, 26.1025);
@@ -514,7 +518,7 @@ describe("nearbyAmenities clips to the CURRENT mode's reach (task 065)", () => {
       return read(
         { amenityDataset: { findUniqueOrThrow: () => Promise.resolve({ sourceTimestamp: freshSource }) } },
         "dataset-1",
-      );
+);
     });
     const slow = nearbyAmenities(44.4268, 26.1025, "slow");
     const normal = nearbyAmenities(44.4268, 26.1025, "normal");
@@ -570,7 +574,7 @@ describe("nearbyAmenities merges coincident transit stops (task 047 + per-band c
         countsByBand: expect.objectContaining({ 15: expect.objectContaining({ transit: 1 }) }),
       }),
       expect.any(Date),
-    );
+);
   });
 
   it("charges an absorbed stop to ITS OWN band when a merged group straddles a boundary", async () => {
@@ -707,7 +711,7 @@ describe("amenityResultCacheKey config namespacing (task 007)", () => {
   it("is byte-identical on default config", () => {
     expect(amenityResultCacheKey("dataset-1", 44.4268, 26.1025, "walk:normal")).toBe(
       "amenity:local:v5:dataset-1:walk:normal:44.42680,26.10250",
-    );
+);
   });
 
   it("gets a fresh namespace once a ring provider is overridden (amenities are derived from the rings)", () => {
@@ -716,5 +720,45 @@ describe("amenityResultCacheKey config namespacing (task 007)", () => {
     const overridden = amenityResultCacheKey("dataset-1", 44.4268, 26.1025, "walk:normal");
     expect(overridden).not.toBe(def);
     expect(overridden.endsWith(def)).toBe(true); // tag is a prefix; base key unchanged
+  });
+});
+
+// --- phone-first preset: amenity-clip isolation from the preset serving path (a recorded precondition) --
+describe("amenity clip stays on the 3-ring legacy model (isolation)", () => {
+  const sq = (scale: number): GeoJSON.Polygon => squareRing(scale);
+
+  it("clipRingsFrom throws on a 2-ring PRESET-shaped result (the clip needs exactly 3 rings)", () => {
+    // A preset walk result is [10,20] (or transit [20,40]) — 2 rings. Feeding it to
+    // the amenity clip must fail loud, never silently clip to a different band model.
+    expect(() =>
+      clipRingsFrom([
+        { minutes: 10, geometry: sq(0.01) },
+        { minutes: 20, geometry: sq(0.02) },
+      ]),
+).toThrow(/need 3 ring geometries/);
+  });
+
+  it("clipRingsFrom still accepts a legacy 3-ring result unchanged", () => {
+    const clip = clipRingsFrom([
+      { minutes: 15, geometry: sq(0.01) },
+      { minutes: 30, geometry: sq(0.02) },
+      { minutes: 45, geometry: sq(0.03) },
+    ]);
+    expect(clip.ascending).toHaveLength(3);
+    expect(clip.outer).toEqual(sq(0.03));
+  });
+});
+
+// Static guard: the amenity clip must consume ONLY the legacy 3-ring isochrone
+// entry points. Pointing it at a preset (2-ring) function would break clipRingsFrom
+// and the Band model; the band-model migration is H4b-3, so until then this fails
+// loud if a future edit wires the clip to the preset path.
+describe("amenity clip source isolation (a recorded precondition)", () => {
+  const src = readFileSync(join(process.cwd(), "src/features/amenities/server/catalogue.ts"), "utf8");
+  it("catalogue.ts imports the LEGACY isochrone entry points, never the preset ones", () => {
+    expect(src).toMatch(/\bwalkingIsochrone\b/);
+    expect(src).toMatch(/\bdrivingIsochrone\b/);
+    expect(src).toMatch(/\btransitIsochrone\b/);
+    expect(src).not.toMatch(/PresetIsochrone/); // walking/driving/transitPresetIsochrone
   });
 });

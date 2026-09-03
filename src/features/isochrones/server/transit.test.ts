@@ -1,14 +1,18 @@
 import { booleanPointInPolygon } from "@turf/boolean-point-in-polygon";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { store, providerFetch, buildRingsMock, walkingIsochroneMock } = vi.hoisted(() => ({
+const { store, providerFetch, buildRingsMock, walkingIsochroneMock, walkingPresetIsochroneMock } = vi.hoisted(() => ({
   store: new Map<string, unknown>(),
   providerFetch: vi.fn(),
   buildRingsMock: vi.fn(),
   walkingIsochroneMock: vi.fn(),
+  walkingPresetIsochroneMock: vi.fn(),
 }));
 
-vi.mock("@/features/isochrones/server/ors", () => ({ walkingIsochrone: walkingIsochroneMock }));
+vi.mock("@/features/isochrones/server/ors", () => ({
+  walkingIsochrone: walkingIsochroneMock,
+  walkingPresetIsochrone: walkingPresetIsochroneMock,
+}));
 
 vi.mock("@/lib/api-cache", () => ({
   getCachedSafe: (key: string) => Promise.resolve(store.has(key) ? store.get(key) : null),
@@ -32,7 +36,7 @@ vi.mock("@/features/isochrones/server/transit-grid", async (importOriginal) => (
 
 import { PACE_MODEL } from "@/features/isochrones/pace";
 import { departureFields, TIME_PRESETS } from "@/features/isochrones/time-context";
-import { ONE_TO_ALL_BUDGET_MS, representativeDeparture, transitIsochrone } from "./transit";
+import { ONE_TO_ALL_BUDGET_MS, representativeDeparture, transitIsochrone, transitPresetIsochrone } from "./transit";
 
 type Stop = { place?: { lat?: number; lon?: number }; duration?: number };
 const stop = (lat: number, lon: number, duration: number): Stop => ({ place: { lat, lon }, duration });
@@ -49,11 +53,12 @@ beforeEach(async () => {
   const actual = await vi.importActual<typeof import("./transit-grid")>("./transit-grid");
   buildRingsMock.mockImplementation((...args: Parameters<typeof actual.buildRings>) =>
     actual.buildRings(...args),
-  );
+);
   // Default: ORS unavailable → the provider takes the radial-origin fallback,
   // preserving the historical semantics every pre-union test asserts. The
   // rejection is consumed by transit.ts's immediate .catch (no unhandled).
   walkingIsochroneMock.mockRejectedValue(new Error("ORS down (test default)"));
+  walkingPresetIsochroneMock.mockRejectedValue(new Error("ORS down (test default)"));
   errSpy?.mockRestore();
   errSpy = vi.spyOn(console, "error").mockImplementation(() => {}); // silence the fallback log
 });
@@ -88,7 +93,7 @@ describe("transitIsochrone", () => {
         stop(45.9, 24.9, 10), // Sibiu — outside Bucharest bbox
         stop(44.44, 26.12, 8), // the only valid one
       ]),
-    );
+);
     await transitIsochrone(44.4268, 26.1025);
     const passedStops = buildRingsMock.mock.calls[0][1] as unknown[];
     expect(passedStops).toHaveLength(1);
@@ -97,7 +102,7 @@ describe("transitIsochrone", () => {
   it("does not throw (→ 500) on null/garbled stop entries; still parses the valid ones", async () => {
     providerFetch.mockResolvedValue(
       oneToAll([null, { place: null }, { duration: 5 }, stop(44.44, 26.12, 8)]),
-    );
+);
     const result = await transitIsochrone(44.4268, 26.1025);
     expect(result.rings).toHaveLength(3);
     expect(buildRingsMock.mock.calls[0][1] as unknown[]).toHaveLength(1);
@@ -179,9 +184,9 @@ describe("transitIsochrone", () => {
           new Promise((_resolve, reject) => {
             opts.signal.addEventListener("abort", () =>
               reject(Object.assign(new Error("aborted by budget"), { name: "AbortError" })),
-            );
+);
           }),
-      );
+);
       const pending = transitIsochrone(44.4, 26.1);
       const guarded = expect(pending).rejects.toThrow(/request failed/i);
       await vi.advanceTimersByTimeAsync(ONE_TO_ALL_BUDGET_MS + 1000);
@@ -302,7 +307,7 @@ describe("transitIsochrone", () => {
         minutes: w.minutes,
         geometry: { type: "MultiPolygon", coordinates: [w.geometry.coordinates] },
       })),
-    );
+);
   });
 
   it("falls back to the radial origin stamp when ORS fails (response still ships)", async () => {
@@ -385,7 +390,7 @@ describe("transitIsochrone", () => {
       expect((call[2] as { egressMPerMin: number }).egressMPerMin).toBeCloseTo(
         PACE_MODEL.slow.egressMPerMin,
         10,
-      );
+);
     }
     expect([...store.keys()].every((k) => k.startsWith("transit:v5:slow:"))).toBe(true);
     // …and the origin walk ring was requested at the same pace (one source).
@@ -468,5 +473,51 @@ describe("representativeDeparture", () => {
         expect(d.getUTCDay()).toBe(p.weekday);
       }
     }
+  });
+});
+
+// --- phone-first preset: PRESET transit path (thresholds [20,40], fail-closed) ------------
+describe("transitPresetIsochrone (phone-first preset: [20,40], field-at-45, FAIL-CLOSED)", () => {
+  const sq = (half: number) => [[
+    [26.1025 - half, 44.4268 - half], [26.1025 + half, 44.4268 - half],
+    [26.1025 + half, 44.4268 + half], [26.1025 - half, 44.4268 + half],
+    [26.1025 - half, 44.4268 - half],
+  ]];
+  const presetWalk = (coords: (half: number) => number[][][]) => ({
+    origin: { lat: 44.4268, lng: 26.1025 },
+    // walkingPresetIsochrone returns [10,20,40]; the preset variant slices to [20,40].
+    rings: [10, 20, 40].map((m, i) => ({ minutes: m, geometry: { type: "Polygon" as const, coordinates: coords(0.006 * (i + 1)) } })),
+  });
+
+  it("returns rings labelled [20,40] via the walk UNION and caches under transit:preset:v1", async () => {
+    walkingPresetIsochroneMock.mockResolvedValue(presetWalk(sq));
+    providerFetch.mockResolvedValue(oneToAll([stop(44.475, 26.16, 25)]));
+    const result = await transitPresetIsochrone(44.4268, 26.1025);
+    expect(result.rings.map((r) => r.minutes)).toEqual([20, 40]);
+    // buildRings was told the preset thresholds + the field-at-45 (exact invariance).
+    expect(buildRingsMock.mock.calls[0][2]).toMatchObject({ stampOrigin: false, thresholds: [20, 40], fieldMaxMin: 45 });
+    expect([...store.keys()].some((k) => k.includes("transit:preset:v1:normal:"))).toBe(true);
+    expect([...store.keys()].some((k) => k.includes("transit:v5:"))).toBe(false);
+  });
+
+  it("FAILS CLOSED (502, no cache write) when the walk rings are unavailable — never the radial fallback", async () => {
+    walkingPresetIsochroneMock.mockRejectedValue(new Error("ORS down"));
+    providerFetch.mockResolvedValue(oneToAll([stop(44.475, 26.16, 25)]));
+    await expect(transitPresetIsochrone(44.4268, 26.1025)).rejects.toThrow(/fail-closed|unavailable/i);
+    expect([...store.keys()].some((k) => k.includes("transit:preset:v1"))).toBe(false);
+  });
+
+  it("FAILS CLOSED when the walk-ring UNION cannot be formed (degenerate walk geometry) — no radial rebuild", async () => {
+    walkingPresetIsochroneMock.mockResolvedValue(presetWalk(() => [[["x"] as unknown as number[]]]));
+    providerFetch.mockResolvedValue(oneToAll([stop(44.44, 26.12, 10)]));
+    await expect(transitPresetIsochrone(44.4268, 26.1025)).rejects.toThrow(/fail-closed|unavailable/i);
+    expect([...store.keys()].some((k) => k.includes("transit:preset:v1"))).toBe(false);
+  });
+
+  it("legacy transitIsochrone still radial-falls-back (unchanged) while preset fails closed — the two are isolated", async () => {
+    // Legacy: walk unavailable → radial rings [15,30,45] (historical behavior).
+    providerFetch.mockResolvedValue(oneToAll([stop(44.44, 26.12, 10)]));
+    const legacy = await transitIsochrone(44.4268, 26.1025);
+    expect(legacy.rings.map((r) => r.minutes)).toEqual([15, 30, 45]);
   });
 });

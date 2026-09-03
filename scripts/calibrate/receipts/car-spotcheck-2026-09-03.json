@@ -1,0 +1,93 @@
+{
+  "generatedAt": "2026-09-03T20:43:36.770Z",
+  "method": "ORS driving-car isochrone at the SHIPPED free-flow ranges [600,1500]s; public OSRM /route/v1/driving ruler origin→boundary; congestion factor applied downstream in serving (shrinks reach), NOT here",
+  "freeFlowRangesS": {
+    "10": 600,
+    "25": 1500
+  },
+  "origins": [
+    {
+      "name": "Unirii",
+      "lat": 44.4268,
+      "lng": 26.1025
+    },
+    {
+      "name": "Berceni",
+      "lat": 44.383,
+      "lng": 26.123
+    },
+    {
+      "name": "Militari",
+      "lat": 44.4319,
+      "lng": 26.0206
+    }
+  ],
+  "bearings": [
+    0,
+    45,
+    90,
+    135,
+    180,
+    225,
+    270,
+    315
+  ],
+  "perOrigin": {
+    "Unirii": {
+      "10": {
+        "n": 8,
+        "osrmMedianMin": 9.231666666666666,
+        "overRate": 0,
+        "conservativeRate": 0.75,
+        "minOsrmMin": 8.095,
+        "maxOsrmMin": 10.398333333333333
+      },
+      "25": {
+        "n": 8,
+        "osrmMedianMin": 22.195,
+        "overRate": 0,
+        "conservativeRate": 1,
+        "minOsrmMin": 19.108333333333334,
+        "maxOsrmMin": 24.418333333333333
+      }
+    },
+    "Berceni": {
+      "10": {
+        "n": 8,
+        "osrmMedianMin": 8.390833333333333,
+        "overRate": 0,
+        "conservativeRate": 0.875,
+        "minOsrmMin": 7.706666666666666,
+        "maxOsrmMin": 10.56
+      },
+      "25": {
+        "n": 8,
+        "osrmMedianMin": 22.08833333333333,
+        "overRate": 0,
+        "conservativeRate": 1,
+        "minOsrmMin": 20.334999999999997,
+        "maxOsrmMin": 23.105
+      }
+    },
+    "Militari": {
+      "10": {
+        "n": 8,
+        "osrmMedianMin": 9.418333333333333,
+        "overRate": 0,
+        "conservativeRate": 0.75,
+        "minOsrmMin": 7.305000000000001,
+        "maxOsrmMin": 10.858333333333333
+      },
+      "25": {
+        "n": 8,
+        "osrmMedianMin": 22.730000000000004,
+        "overRate": 0,
+        "conservativeRate": 1,
+        "minOsrmMin": 18.815,
+        "maxOsrmMin": 23.738333333333333
+      }
+    }
+  },
+  "grossOverclaimContours": 0,
+  "coverageComplete": true
+}

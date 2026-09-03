@@ -1,0 +1,37 @@
+# SERVED walk-range validation (normal pace) — 2026-09-03T20:42:20.908Z
+# served normal ranges: 10min=546s 20min=1135s 40min=2159s  (÷ 83.33 m/min normal speed)
+# fresh bearings (offset 15°): 15,45,75,105,135,165,195,225,255,285,315,345  origins incl. untouched 4th (Militari)
+# instrument: outermost inside point across every MultiPolygon component + holes, no break at the first
+# exit crossing (a notch-then-outer-lobe barrier geometry cannot hide an over-claim); truncated rays are
+# coverage gaps. Re-run under this hardened instrument left every number identical to the first run.
+
+## Unirii (44.4268,26.1025)
+  10min (546s): median 10.4 normal-min  over(>T+5) 0%  maxOver +1.4  (n=11)
+  20min (1135s): median 20.2 normal-min  over(>T+5) 0%  maxOver +1.6  (n=12)
+  40min (2159s): median 39.9 normal-min  over(>T+5) 0%  maxOver +1.6  (n=12)
+
+## Grozavesti (44.443,26.06)
+  10min (546s): median 10.8 normal-min  over(>T+5) 18%  maxOver +9.9  (n=11)
+  20min (1135s): median 20.5 normal-min  over(>T+5) 17%  maxOver +10.8  (n=12)
+  40min (2159s): median 39.8 normal-min  over(>T+5) 0%  maxOver +4.7  (n=12)
+
+## Berceni (44.383,26.123)
+  10min (546s): median 9.6 normal-min  over(>T+5) 0%  maxOver +1.7  (n=12)
+  20min (1135s): median 19.8 normal-min  over(>T+5) 0%  maxOver +2.0  (n=12)
+  40min (2159s): median 38.7 normal-min  over(>T+5) 0%  maxOver +0.5  (n=12)
+
+## Militari (44.4319,26.0206)
+  10min (546s): median 9.4 normal-min  over(>T+5) 0%  maxOver +4.0  (n=12)
+  20min (1135s): median 19.6 normal-min  over(>T+5) 0%  maxOver +1.5  (n=12)
+  40min (2159s): median 39.9 normal-min  over(>T+5) 8%  maxOver +13.5  (n=12)
+  ✗ COVERAGE Unirii@10min: 11/12 samples (dropped sector)
+  ✗ COVERAGE Grozavesti@10min: 11/12 samples (dropped sector)
+  ✗ SERVED 10min @ Grozavesti: over-claim 18% > bar 10%
+  ✗ SERVED 20min @ Grozavesti: over-claim 17% > bar 10%
+
+FAILED — coverage INCOMPLETE (2), served-walk per-origin failures 2 — receipt: scripts/calibrate/receipts/walk-served-2026-09-03.json
+# The 2 served-walk "failures" are the Grozăvești river-barrier over-claims — OWNER-ACCEPTED (decision
+# recorded in the task record): inherent river/rail anisotropy, identical to the shipped 15/30/45 rings,
+# with a binding honest-reach-copy rider for the UI. The bar flagged it; the owner accepted it. The 2
+# coverage gaps are 10-min boundary points in a network-unroutable void (MOTIS one-to-many returns null
+# within 250 m) — structural, reproduced identically across runs; Grozăvești's 18% is therefore over n=11.

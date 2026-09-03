@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { transitIsochrone } = vi.hoisted(() => ({ transitIsochrone: vi.fn() }));
-vi.mock("@/features/isochrones/server/transit", () => ({ transitIsochrone }));
+const { transitIsochrone, transitPresetIsochrone } = vi.hoisted(() => ({
+  transitIsochrone: vi.fn(),
+  transitPresetIsochrone: vi.fn(),
+}));
+vi.mock("@/features/isochrones/server/transit", () => ({ transitIsochrone, transitPresetIsochrone }));
 
 import { ProviderError } from "@/lib/provider-http";
 
@@ -13,6 +16,7 @@ const call = (qs: string) => GET(new Request(`http://localhost/api/transit${qs}`
 // beforeEach runs as a TEARDOWN that would call the mock after every test.
 beforeEach(() => {
   transitIsochrone.mockReset();
+  transitPresetIsochrone.mockReset();
 });
 
 describe("GET /api/transit", () => {
@@ -43,6 +47,22 @@ describe("GET /api/transit", () => {
     const res = await call("?lat=44.4268&lng=26.1025");
     expect(res.status).toBe(200);
     expect((await res.json()).rings).toHaveLength(3);
+    expect(transitPresetIsochrone).not.toHaveBeenCalled();
+  });
+
+  it("model=preset → PRESET transit path ([20,40]) with legacy never called; typo → 400 no provider call", async () => {
+    transitPresetIsochrone.mockResolvedValue({
+      origin: { lat: 44.4268, lng: 26.1025 },
+      departure: "2026-09-09T05:30:00Z",
+      rings: [20, 40].map((m) => ({ minutes: m, geometry: { type: "MultiPolygon", coordinates: [] } })),
+    });
+    const res = await call("?lat=44.4268&lng=26.1025&model=preset");
+    expect(res.status).toBe(200);
+    expect((await res.json()).rings.map((r: { minutes: number }) => r.minutes)).toEqual([20, 40]);
+    expect(transitPresetIsochrone).toHaveBeenCalledTimes(1);
+    expect(transitIsochrone).not.toHaveBeenCalled();
+    expect((await call("?lat=44.4268&lng=26.1025&model=presett")).status).toBe(400);
+    expect(transitIsochrone).not.toHaveBeenCalled();
   });
 
   it("502 + a logged cause when the provider fails", async () => {

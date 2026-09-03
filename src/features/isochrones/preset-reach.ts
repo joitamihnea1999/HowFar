@@ -4,11 +4,14 @@
  * request. PURE module (no server imports), like `pace.ts` and `bands.ts`, so both
  * the server provider clients and the client view can read it.
  *
- * SCOPE: this module lands the calibrated NUMBERS and the generator only. It is
- * deliberately NOT yet wired into the provider clients, routes, cache keys or
- * `bands.ts` — that is serving-path work for a later change. Nothing in the shipped
- * request path imports this yet; the calibration harness + the unit tests exercise
- * it, and the serving path will consume it.
+ * SCOPE: this module holds the calibrated NUMBERS and the pure generator. The
+ * provider clients + routes now consume it as an ADDITIVE serving path — the
+ * isochrone / car / transit routes serve the presets only when called with
+ * `?model=preset` (absent ⇒ the legacy 15/30/45 path, byte-identical), via
+ * `walkingPresetIsochrone` / `drivingPresetIsochrone` / `transitPresetIsochrone`
+ * under distinct `*:preset:v1:` cache keys. It is NOT yet wired into `bands.ts` /
+ * the amenity clip (still the legacy 3-ring model) or any client UI — those are the
+ * remaining phone-first changes.
  *
  * CALIBRATION PROVENANCE (do not edit a number without re-running the campaign):
  *   - WALK ranges are ORS foot-walking `range` seconds AT THE 80 m/min CALIBRATION
@@ -19,19 +22,26 @@
  *     `scripts/calibrate/receipts/walk-2026-09-02.json`. Each pace rescales the
  *     anchor range by `speed / 80` exactly as `pace.ts` does for 15/30/45 (distance
  *     calibration is pace-independent).
+ *     A per-origin note: walk 10/20 is clean at central + most origins but
+ *     OVER-claims at a river/rail barrier (Grozăvești ~+10 min) — the same
+ *     street-network anisotropy the shipped 15/30/45 rings show. This is an
+ *     accepted, documented limitation (see docs/PROVIDERS.md); the reach UI must
+ *     state that times are typical street-walk estimates and can overstate near
+ *     barriers. It is NOT within a symmetric ±10% bar at those origins.
  *   - CAR minutes are NOMINAL free-flow (`minutes × 60`); ORS driving-car is
  *     accurate-to-conservative vs OSRM at 10/25 (task 056 straddle-1.0; re-checked
- *     2026-09-02). The per-time-of-day congestion factor (`car-traffic.ts`) applies
- *     on top, unchanged.
+ *     directly on the served free-flow ranges 2026-09-03, 0% over-claim — receipt
+ *     `scripts/calibrate/receipts/car-spotcheck-2026-09-03.json`). The per-time-of-day
+ *     congestion factor (`car-traffic.ts`) applies on top, shrinking the reach further.
  *   - TRANSIT minutes are contour thresholds of the transit field; 20/40 are
- *     interior to the shipped 15/45 envelope (`transit-grid.ts`). The field's
- *     conservatism was measured directly at the served 15/30/45 contours
- *     (`scripts/calibrate/receipts/transit-2026-09-02.json`); 20/40 are argued to
- *     inherit it as interior levels, but NOT yet measured directly — that is a
- *     blocking precondition for the change that parameterises the thresholds and
- *     serves 20/40 (see docs/PROVIDERS.md). A PRE-EXISTING peripheral over-claim in
- *     the field is tracked separately, not introduced here. So do not treat
- *     `TRANSIT_PRESET_MIN` as directly-validated data until that measurement lands.
+ *     interior to the shipped 15/45 envelope (`transit-grid.ts`) and were measured
+ *     DIRECTLY on the served preset code (`transitPresetIsochrone`, thresholds
+ *     [20,40], field kept at 45) against MOTIS `/plan` best-journey at 3 origins —
+ *     central 0% over-claim, only KNOWN peripheral tails (Berceni SE +33, Militari
+ *     west +6) — receipt `scripts/calibrate/receipts/transit-2026-09-03.json`. The transit
+ *     union at 40 folds in the walk-40 contour; its walk-union component west of the
+ *     CFR/A1 barrier corridor is covered by the accepted-anisotropy limitation, not a
+ *     separate direct measurement. The UI must not overstate transit reach at the edges.
  */
 
 import { CALIBRATION_SPEED_M_PER_MIN, PACE_MODEL, type Pace } from "@/features/isochrones/pace";
@@ -46,12 +56,37 @@ export const WALK_PRESET_RANGES_S_AT_80: Readonly<Record<number, number>> = {
 
 /** Selectable walk preset minutes (the top-bar chips). 40 is a union helper, not a chip. */
 export const WALK_PRESET_MIN = [10, 20] as const;
+/** The full walk contour set the serving path FETCHES in one ORS request: the two
+ *  walk-preset chips [10,20] plus 40 (the transit street-walk union helper). The
+ *  serving path fetches this whole set under one cache key and SLICES per consumer
+ *  — the walk route returns [10,20]; the transit union takes [20,40] — so walk and
+ *  transit never issue different-range requests under a colliding key (which would
+ *  cache-poison the transit union). */
+export const ALL_PRESET_WALK_MIN = [10, 20, 40] as const;
 /** Selectable car preset minutes. */
 export const CAR_PRESET_MIN = [10, 25] as const;
 /** Selectable transit preset minutes (also the transit field contour thresholds). */
 export const TRANSIT_PRESET_MIN = [20, 40] as const;
 
 export type Mode = "walk" | "transit" | "car";
+
+/** Which reach model a route serves. `legacy` = the shipped 15/30/45 (walk/transit)
+ *  / 10/20/30 (car) bands; `preset` = the phone-first preset contours. */
+export type ReachModel = "legacy" | "preset";
+
+/**
+ * Strict `?model=` query parser: absent/empty → `legacy` (the
+ * byte-identical default the current client relies on), `"preset"` → `preset`,
+ * anything else → `null` so the route 400s WITHOUT a provider call. Mirrors
+ * `parsePaceStrict` — a junk value is a loud 400, never a silent fall-through to
+ * legacy (which would hide a broken client contract). 2a's model space is these
+ * two only; there is no per-minute selector until Custom ships (that stays a
+ * separate calibration task).
+ */
+export function parseReachModelStrict(raw: string | null | undefined): ReachModel | null {
+  if (raw === null || raw === undefined || raw === "") return "legacy";
+  return raw === "preset" ? "preset" : null;
+}
 
 /** ORS `RANGE_TOLERANCE_S` in `ors.ts`; the min separation a range set must keep so
  *  the normalize bijection can never mislabel two contours (2 × tolerance). */
@@ -113,6 +148,20 @@ export function walkPresetRangeSetS(selectedMin: number, pace: Pace): number[] {
 /** The ascending nominal driving `range` set for a selected CAR preset. */
 export function carPresetRangeSetS(selectedMin: number): number[] {
   const ranges = presetContourMinutes("car", selectedMin).map(carPresetRangeS);
+  assertSeparated(ranges);
+  return ranges;
+}
+
+/**
+ * The full ORS foot-walking `range` set the serving path requests in ONE call:
+ * ranges at [10, 20, 40] (`ALL_PRESET_WALK_MIN`) for a pace, ascending + separated.
+ * The serving path caches this whole set under one key and slices it — the walk
+ * route returns the [10,20] contours, the transit union takes the [20,40] ones.
+ * `walkPresetRangeS(40, …)` is the reason `WALK_PRESET_RANGES_S_AT_80` carries the
+ * 40 range even though 40 is not a selectable walk chip.
+ */
+export function allPresetWalkRangesS(pace: Pace): number[] {
+  const ranges = ALL_PRESET_WALK_MIN.map((m) => walkPresetRangeS(m, pace));
   assertSeparated(ranges);
   return ranges;
 }

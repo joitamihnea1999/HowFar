@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { drivingIsochrone } = vi.hoisted(() => ({ drivingIsochrone: vi.fn() }));
-vi.mock("@/features/isochrones/server/ors", () => ({ drivingIsochrone }));
+const { drivingIsochrone, drivingPresetIsochrone } = vi.hoisted(() => ({
+  drivingIsochrone: vi.fn(),
+  drivingPresetIsochrone: vi.fn(),
+}));
+vi.mock("@/features/isochrones/server/ors", () => ({ drivingIsochrone, drivingPresetIsochrone }));
 
 import { ProviderError } from "@/lib/provider-http";
 
@@ -13,6 +16,8 @@ const call = (qs: string) => GET(new Request(`http://localhost/api/car${qs}`));
 beforeEach(() => {
   drivingIsochrone.mockReset();
   drivingIsochrone.mockResolvedValue({ origin: { lat: 44.4268, lng: 26.1025 }, rings: [] });
+  drivingPresetIsochrone.mockReset();
+  drivingPresetIsochrone.mockResolvedValue({ origin: { lat: 44.4268, lng: 26.1025 }, rings: [] });
 });
 
 describe("GET /api/car", () => {
@@ -23,6 +28,22 @@ describe("GET /api/car", () => {
   it("422 outside the Bucharest area (no provider call)", async () => {
     expect((await call("?lat=46.77&lng=23.6")).status).toBe(422);
     expect(drivingIsochrone).not.toHaveBeenCalled();
+  });
+
+  it("model=preset → PRESET car path (time-aware) with legacy never called; model typo → 400 no provider call", async () => {
+    drivingPresetIsochrone.mockResolvedValue({
+      origin: { lat: 44.4268, lng: 26.1025 }, rings: [10, 25].map((m) => ({ minutes: m, geometry: {} })),
+    });
+    const res = await call("?lat=44.4268&lng=26.1025&model=preset");
+    expect(res.status).toBe(200);
+    expect((await res.json()).rings.map((r: { minutes: number }) => r.minutes)).toEqual([10, 25]);
+    expect(drivingPresetIsochrone).toHaveBeenCalledTimes(1);
+    expect(drivingIsochrone).not.toHaveBeenCalled();
+    // typo → fail-loud 400, neither provider called
+    drivingPresetIsochrone.mockClear();
+    expect((await call("?lat=44.4268&lng=26.1025&model=presett")).status).toBe(400);
+    expect(drivingIsochrone).not.toHaveBeenCalled();
+    expect(drivingPresetIsochrone).not.toHaveBeenCalled();
   });
 
   it("400 on a malformed departure time (never a silent fallback)", async () => {

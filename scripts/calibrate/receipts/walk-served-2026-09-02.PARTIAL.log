@@ -1,0 +1,15 @@
+# SERVED walk-range validation (normal pace) — 2026-09-02T17:04:16.114Z
+# served normal ranges: 10min=546s 20min=1135s 40min=2159s  (÷ 83.33 m/min normal speed)
+# fresh bearings (offset 15°): 15,45,75,105,135,165,195,225,255,285,315,345  origins incl. untouched 4th (Militari)
+
+## Unirii (44.4268,26.1025)
+  10min (546s): median 10.4 normal-min  over(>T+5) 0%  maxOver +1.4  (n=11)
+  20min (1135s): median 20.2 normal-min  over(>T+5) 0%  maxOver +1.6  (n=12)
+  40min (2159s): median 39.9 normal-min  over(>T+5) 0%  maxOver +1.6  (n=12)
+
+## Grozavesti (44.443,26.06)
+  10min (546s): median 10.8 normal-min  over(>T+5) 18%  maxOver +9.9  (n=11)
+  20min (1135s): median 20.5 normal-min  over(>T+5) 17%  maxOver +10.8  (n=12)
+  40min (2159s): median 39.8 normal-min  over(>T+5) 0%  maxOver +4.7  (n=12)
+
+## Berceni (44.383,26.123)

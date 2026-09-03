@@ -1,5 +1,6 @@
 import { DEFAULT_PACE, PACE_MODEL, type Pace } from "@/features/isochrones/pace";
-import { walkingIsochrone } from "@/features/isochrones/server/ors";
+import { TRANSIT_PRESET_MIN } from "@/features/isochrones/preset-reach";
+import { walkingIsochrone, walkingPresetIsochrone } from "@/features/isochrones/server/ors";
 import {
   buildRings,
   dropSmallComponents,
@@ -101,7 +102,7 @@ function bucharestOffsetMinutes(date: Date): number {
     Number(p.hour === "24" ? "0" : p.hour),
     Number(p.minute),
     Number(p.second),
-  );
+);
   return Math.round((asUtc - date.getTime()) / 60000);
 }
 
@@ -172,7 +173,7 @@ function parseStops(all: OneToAllStop[]): TransitStop[] {
       lat > LAUNCH_BBOX.maxLat + STOP_MARGIN_DEG ||
       lng < LAUNCH_BBOX.minLng - STOP_MARGIN_DEG ||
       lng > LAUNCH_BBOX.maxLng + STOP_MARGIN_DEG
-    ) {
+) {
       continue;
     }
     stops.push({ lat, lng, dur });
@@ -182,8 +183,74 @@ function parseStops(all: OneToAllStop[]): TransitStop[] {
 
 // In-flight requests keyed by cache key: two concurrent cold callers for the
 // same origin+departure share ONE heavy one-to-all request (the ors.ts T3
-// pattern — fair use under bursts). Cleared on settle.
+// pattern — fair use under bursts). Cleared on settle. Shared across the legacy
+// and preset paths — their cache-key prefixes (transit:v5 vs transit:preset:v1)
+// keep the two families distinct.
 const inFlight = new Map<string, Promise<TransitIsochroneResult>>();
+
+/** Cache-first + single-flight wrapper shared by the legacy and preset paths. */
+async function runCached(
+  key: string,
+  producer: () => Promise<TransitIsochroneResult>,
+): Promise<TransitIsochroneResult> {
+  const hit = await getCachedSafe<TransitIsochroneResult>(key);
+  if (hit) return hit;
+  const existing = inFlight.get(key);
+  if (existing) return existing;
+  const promise = producer();
+  inFlight.set(key, promise);
+  try {
+    return await promise;
+  } finally {
+    inFlight.delete(key);
+  }
+}
+
+/**
+ * What varies between the two transit families. The legacy path extracts
+ * [15,30,45] and keeps its long-standing radial-origin fallback when the walk
+ * rings are unavailable. The phone-first preset path extracts [20,40] but keeps
+ * the FIELD at 45 (`fieldMaxMin`, exact-invariance — see `buildRings`) and
+ * **fails closed** (`failClosed`): the radial disc over-claims at barriers and has
+ * never been validated as a served reach, so a preset request with no
+ * street-routed walk union is a 502, never a silently-degraded answer.
+ */
+interface TransitVariant {
+  thresholds: readonly number[];
+  fieldMaxMin: number;
+  failClosed: boolean;
+  /** Street-routed walk rings labelled to match `thresholds`, or null on
+   *  failure/timeout (the legacy fallback trigger; a preset 502 trigger). */
+  fetchWalkRings: (latRaw: number, lngRaw: number, pace: Pace) => Promise<WalkRing[] | null>;
+}
+
+const LEGACY_VARIANT: TransitVariant = {
+  thresholds: THRESHOLDS,
+  fieldMaxMin: MAX_TRAVEL_MIN,
+  failClosed: false,
+  fetchWalkRings: (la, ln, pc) =>
+    walkingIsochrone(la, ln, pc)
+      .then((r) => r.rings as WalkRing[])
+      .catch((err: Error) => {
+        console.error(`[transit] walking rings unavailable, radial origin fallback: ${err.message}`);
+        return null;
+      }),
+};
+
+const PRESET_VARIANT: TransitVariant = {
+  thresholds: TRANSIT_PRESET_MIN, // [20,40]
+  fieldMaxMin: MAX_TRAVEL_MIN, // 45 — extract [20,40] from the shipped 45-field (exact invariance)
+  failClosed: true,
+  // The [20,40] slice of the one preset walk fetch [10,20,40]; on ORS failure the
+  // preset path 502s (fail-closed) rather than shipping the radial disc.
+  fetchWalkRings: (la, ln, pc) =>
+    walkingPresetIsochrone(la, ln, pc)
+      .then((r) => r.rings.filter((rr) => (TRANSIT_PRESET_MIN as readonly number[]).includes(rr.minutes)) as WalkRing[])
+      .catch((err: Error) => {
+        console.error(`[transit:preset] walking rings unavailable: ${err.message}`);
+        return null;
+      }),
+};
 
 /** Transit isochrone (15/30/45 min) from a point, via Transitous one-to-all, at
  * a walking `pace` and departure `timeContext`. Defaults reproduce the pre-051
@@ -202,20 +269,24 @@ export async function transitIsochrone(
   // both the MOTIS access walk and the egress stamping — v4 entries would serve
   // rings built at the old speed.
   const key = taggedCacheKey(`transit:v5:${pace}:${roundCoord(latRaw)},${roundCoord(lngRaw)}:${departure}`);
+  return runCached(key, () => fetchAndBuild(latRaw, lngRaw, pace, departure, key, LEGACY_VARIANT));
+}
 
-  const hit = await getCachedSafe<TransitIsochroneResult>(key);
-  if (hit) return hit;
-
-  const existing = inFlight.get(key);
-  if (existing) return existing;
-
-  const promise = fetchAndBuild(latRaw, lngRaw, pace, departure, key);
-  inFlight.set(key, promise);
-  try {
-    return await promise;
-  } finally {
-    inFlight.delete(key);
-  }
+/**
+ * PRESET transit isochrone (additive) — thresholds [20,40], the field
+ * built to 45 so the 40-contour is byte-identical to the shipped 45-field's
+ * 40-level. FAILS CLOSED: no street-routed walk union ⇒ ProviderError (502), no
+ * radial fallback, no cache write. Not in the live path until 2b requests it.
+ */
+export async function transitPresetIsochrone(
+  latRaw: number,
+  lngRaw: number,
+  pace: Pace = DEFAULT_PACE,
+  timeContext: TimeContext = DEFAULT_TIME_CONTEXT,
+): Promise<TransitIsochroneResult> {
+  const departure = representativeDeparture(new Date(), departureFields(timeContext));
+  const key = taggedCacheKey(`transit:preset:v1:${pace}:${roundCoord(latRaw)},${roundCoord(lngRaw)}:${departure}`);
+  return runCached(key, () => fetchAndBuild(latRaw, lngRaw, pace, departure, key, PRESET_VARIANT));
 }
 
 async function fetchAndBuild(
@@ -224,6 +295,7 @@ async function fetchAndBuild(
   pace: Pace,
   departure: string,
   key: string,
+  variant: TransitVariant,
 ): Promise<TransitIsochroneResult> {
   const lat = Number(roundCoord(latRaw));
   const lng = Number(roundCoord(lngRaw));
@@ -232,13 +304,9 @@ async function fetchAndBuild(
   // Street-routed origin walk AT THE ACTIVE PACE, fetched IN PARALLEL with
   // one-to-all (coalesced with /api/isochrone + amenities via ors.ts's
   // single-flight + 7d cache, so a fresh transit selection costs ≤1 marginal ORS
-  // call). Failure is non-fatal — the radial origin stamp takes over.
-  const walkPromise: Promise<WalkRing[] | null> = walkingIsochrone(latRaw, lngRaw, pace)
-    .then((r) => r.rings as WalkRing[])
-    .catch((err: Error) => {
-      console.error(`[transit] walking rings unavailable, radial origin fallback: ${err.message}`);
-      return null;
-    });
+  // call). Legacy: failure is non-fatal — the radial origin stamp takes over.
+  // Preset: failure ⇒ 502 (fail-closed, below) — the variant decides.
+  const walkPromise: Promise<WalkRing[] | null> = variant.fetchWalkRings(latRaw, lngRaw, pace);
 
   const { transitBase, intervals } = providerConfig();
 
@@ -279,7 +347,7 @@ async function fetchAndBuild(
         backoffMs: ONE_TO_ALL_RETRY_BACKOFF_MS,
         canRetry: () => Date.now() + ONE_TO_ALL_RETRY_MIN_REMAINING_MS < deadline,
       },
-    );
+);
   } catch (err) {
     if (err instanceof ProviderError) throw err;
     throw new ProviderError(`transitous request failed: ${(err as Error).message}`);
@@ -303,9 +371,22 @@ async function fetchAndBuild(
   const walkWaitMs = Math.max(0, Math.min(WALK_RINGS_TIMEOUT_MS, deadline - Date.now()));
   const timedWalk = await withTimeout(walkPromise, walkWaitMs);
   if (!timedWalk.ok) {
-    console.error("[transit] walking rings timed out; radial origin fallback (ORS call continues into cache)");
+    console.error(
+      variant.failClosed
+        ? "[transit:preset] walking rings timed out — failing closed (no radial fallback)"
+        : "[transit] walking rings timed out; radial origin fallback (ORS call continues into cache)",
+);
   }
   const walkRings = timedWalk.ok ? timedWalk.value : null;
+
+  // FAIL-CLOSED preset path: the preset reach is only honest as the
+  // street-routed walk UNION — the radial-origin disc over-claims at barriers and
+  // was never validated as a served reach. So a missing/failed/timed-out walk
+  // result, OR a union that can't be formed, is a 502 with NO cache write — never
+  // a silently-degraded answer cached for 7 days.
+  if (variant.failClosed && !walkRings) {
+    throw new ProviderError("preset transit reach unavailable: no street-routed walk rings to union (fail-closed)");
+  }
 
   // Geometry construction is CPU work on caller-supplied shapes — a failure here
   // is a provider-side data problem (→ 502), not an internal 500.
@@ -313,19 +394,35 @@ async function fetchAndBuild(
   try {
     // With street-routed walk rings in hand, skip the radial origin stamp and
     // union the walk geometry in per threshold. unionRings is all-or-nothing:
-    // any per-ring failure returns null and the WHOLE family is rebuilt with
-    // the radial origin stamp — a mixed family could exclude the origin from
-    // one of its own rings and break nesting (then sit in cache for 7 days).
+    // any per-ring failure returns null. Legacy then rebuilds the WHOLE family
+    // with the radial origin stamp (a mixed family could exclude the origin from
+    // one of its own rings and break nesting, then sit in cache for 7 days);
+    // the preset path instead FAILS CLOSED (502) rather than serve the radial disc.
     const egressMPerMin = paceModel.egressMPerMin;
-    const built = buildRings({ lat, lng }, stops, { stampOrigin: !walkRings, egressMPerMin });
-    rings = walkRings
-      ? (unionRings(built, walkRings) ??
-        buildRings({ lat, lng }, stops, { stampOrigin: true, egressMPerMin }))
-      : built;
+    const { thresholds, fieldMaxMin } = variant;
+    const built = buildRings({ lat, lng }, stops, {
+      stampOrigin: !walkRings,
+      egressMPerMin,
+      thresholds,
+      fieldMaxMin,
+    });
+    if (walkRings) {
+      const unioned = unionRings(built, walkRings);
+      if (unioned) {
+        rings = unioned;
+      } else if (variant.failClosed) {
+        throw new ProviderError("preset transit reach unavailable: walk-ring union failed (fail-closed)");
+      } else {
+        rings = buildRings({ lat, lng }, stops, { stampOrigin: true, egressMPerMin, thresholds, fieldMaxMin });
+      }
+    } else {
+      rings = built; // legacy radial path (preset already threw above)
+    }
   } catch (err) {
+    if (err instanceof ProviderError) throw err; // preserve the fail-closed message
     throw new ProviderError(`transit isochrone construction failed: ${(err as Error).message}`);
   }
-  if (rings.length !== THRESHOLDS.length || rings.some((r) => !r.geometry?.coordinates)) {
+  if (rings.length !== variant.thresholds.length || rings.some((r) => !r.geometry?.coordinates)) {
     throw new ProviderError("transit isochrone produced unexpected rings");
   }
 

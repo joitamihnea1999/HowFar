@@ -210,6 +210,20 @@ new walk minutes are OFF the only fitted anchor (15/30/45), so they were separat
 and transit did not need a new fit. The generator + constants live in `src/features/isochrones/
 preset-reach.ts`; the measurement harness + committed receipts live under `scripts/calibrate/`.
 
+**Serving (2026-09-03):** the preset reach is now served as an ADDITIVE capability — the isochrone /
+car / transit routes accept `?model=preset` (absent ⇒ the legacy 15/30/45 path, byte-identical); a
+strict enum rejects any other value with 400 before any provider call. The walk preset issues ONE ORS
+request of [10, 20, 40] cached under `iso:foot:preset:v1:` and slices it (the walk route returns 10/20;
+the transit street-walk union takes 20/40); car is time-of-day-aware exactly like the legacy path
+(`scaledCarRangesS` over the free-flow nominal, keyed `iso:car:preset:v1:…:{slotId}`); preset transit
+extracts contours at [20, 40] from the field built to the SAME max (45) as the shipped field and
+**fails closed** (502, no cache write) rather than ever serving the radial fallback. Each served preset
+was measured against the independent rulers below on the shipped serving code (walk against the served
+pace-rescaled ranges, transit through the served `transitPresetIsochrone`); the one inference is car,
+where the free-flow ranges are measured directly and the traffic scaling — which only shrinks the reach —
+is unit-tested rather than each slot re-measured. Two walk cells reached only 11/12 coverage (see below),
+so those are lower-bound, not full-coverage, samples.
+
 - **Walk (new fit).** The requested-seconds → real-street-minutes map is empirical and non-linear, so
   10/20/40 have no interpolatable point. Ruler = MOTIS `one-to-many` (`mode=WALK`, `withDistance=true`)
   street distance ÷ the 80 m/min anchor; 3 origins (Unirii central / Grozăvești river-barrier / Berceni
@@ -232,26 +246,54 @@ preset-reach.ts`; the measurement harness + committed receipts live under `scrip
   street-network anisotropy the shipped 15/30/45 rings show (the 45 control's worst sector was +5.9 min),
   and walk-40's periphery tail is materially larger than that — a caveat to carry when the reach is
   rendered. Receipt: `scripts/calibrate/receipts/walk-2026-09-02.json` (`acceptance.perTarget[*].perOrigin`).
-- **Car (no new fit).** Car ranges are nominal free-flow (`minutes × 60`); 25 → 1500 s interpolates
-  within the 2026-07 audited 10/20/30 band. A 2026-09-02 OSRM `driving` spot-check confirmed the ORS
-  driving isochrone at 600 s / 1500 s sits at ~9.3 / ~22.1 OSRM drive-minutes (accurate-to-conservative).
-  The per-time-of-day congestion factor (next section) applies on top, unchanged.
-- **Transit (no new fit; validated by inheritance, direct 20/40 deferred).** Transit rings are contours
-  of one monotone field at the `THRESHOLDS`; 20/40 are interior to the shipped-and-validated 15/45
-  envelope, so no new correction is needed. Because the served contours today are 15/30/45 (the
-  threshold set is not yet parameterised), the validation measured the field→journey conservatism **at
-  the real 15/30/45 walk-union contours** against MOTIS `/plan` best-journey ground truth (at the
-  contour's own departure): central origins **0 % over-claim** (medians ~0.85–0.90 × label, strongly
-  conservative). 20/40 are argued to inherit this as interior levels of the same field (15 is *more*
-  egress-dominated than 20, so it stress-tests the short-reach case harder) — but that is an inheritance
-  argument, not a direct measurement: **measuring the actual 20/40 contours belongs with the change that
-  parameterises `THRESHOLDS` and serves them**, and is recorded as a precondition there. **Known limitation (not new):** at the periphery, in specific directions with
-  infrequent service, a reachability contour can be optimistic versus a specific-departure journey — at
-  Berceni the shipped 30-min contour reaches a point that is really ~63 min by `/plan` (pooled over-claim
-  30 min 13 % / 45 min 8 %). This is a property of the transit field at every threshold (the earlier
-  audit used only central origins and missed it), NOT introduced by the 20/40 presets; the UI must not
-  overstate transit reach, and a transit-field re-calibration across more peripheral origins is a
-  tracked follow-up. Receipt: `scripts/calibrate/receipts/transit-2026-09-02.json`.
+- **Walk (served-range re-measurement, 2026-09-03).** The app serves the pace-RESCALED ranges, not the
+  80 m/min fit anchor (default `normal` pace: 10 → 546 s, 20 → 1135 s, 40 → 2159 s). Those exact served
+  ranges were measured directly against the same MOTIS street-distance ruler ÷ the `normal` pace speed
+  (5 km/h), on a FRESH bearing set (offset 15° from the fit) and a 4th origin the fit never used
+  (Militari, west). Result on the served chips (10 / 20): **clean at Unirii, Berceni and Militari**
+  (0 % over-claim); the ONE origin over the ±10 % / +8-min per-origin bar is **Grozăvești** (river
+  barrier), 10 min +9.9 / 18 % and 20 min +10.8 / 17 %. This is the same anisotropy **class** the shipped
+  rings show (a street detour around a river/rail barrier) — though its magnitude at 10/20 (worst +10.8)
+  is LARGER than the shipped 45-min control's +5.9-min worst sector, and was NOT re-measured against a
+  same-run 15/30/45 control on this bearing set. It is an **accepted, documented limitation**,
+  and the reach UI must state that times are typical street-walk estimates and can overstate near
+  barriers (rivers / rail). The 40-min range is not a served walk reach (it exists only for the transit
+  union); its lone over-bar sector, Militari +13.5 / 8 %, is the western rail + A1 corridor — the same
+  barrier class, and its transit role is validated directly below. Two `walk-served-2026-09-03` cells
+  (Unirii / Grozăvești at 10 min, 11/12 samples) are dropped where a boundary point falls in a
+  network-unroutable void; both reproduce identically across independent runs (structural, not noise),
+  so Grozăvești's 10-min 18 % over-claim is over n=11 (a lower bound on the sample, not a full-coverage
+  rate). The sampling instrument was hardened (marches to the OUTERMOST reachable point across every
+  MultiPolygon component + holes, never breaking at the first exit crossing — so a notch-then-lobe
+  barrier geometry cannot hide an over-claim); re-running under it left every number above unchanged,
+  confirming the reach polygons here carry no hidden outer lobe. Receipt:
+  `scripts/calibrate/receipts/walk-served-2026-09-03.json`.
+- **Car (no new fit; spot-checked on the served free-flow ranges).** Car ranges are nominal free-flow
+  (`minutes × 60`); 25 → 1500 s interpolates within the 2026-07 audited 10/20/30 band. A 2026-09-03 OSRM
+  `driving` spot-check on the served free-flow ranges (3 origins — Unirii/Berceni/Militari — × 8 bearings)
+  confirmed the ORS driving isochrone at 600 s / 1500 s sits **inside** the OSRM ruler's reach at every
+  sampled sector — median OSRM drive-time at the 10-min boundary 9.2 / 8.4 / 9.2 min, at the 25-min
+  boundary 22.2 / 22.1 / 22.7 min, **0 % over-claim** and mostly conservative (accurate-to-conservative),
+  coverage complete. The per-time-of-day congestion factor
+  (next section) applies on top, shrinking the served reach further, so served ⊆ free-flow ⊆ ruler.
+  Receipt: `scripts/calibrate/receipts/car-spotcheck-2026-09-03.json`.
+- **Transit (no new fit; 20/40 now measured DIRECTLY).** Transit rings are contours of one monotone
+  field at the `THRESHOLDS`; the served preset extracts [20, 40] from a field built to the same max (45)
+  as the shipped field, so the 40-contour is byte-identical to the shipped field's 40-level (the 20 is
+  an interior level). The 20/40 contours are now measured directly — not by inheritance — against MOTIS
+  `/plan` best-journey ground truth on the served preset code (street-routed walk-union provenance, never
+  the radial fallback), at **4 origins** (incl. Militari, the west/A1 barrier corridor): **Unirii
+  20/40 = 0 % / 0 % over-claim** (medians 18 / 35.5 min), **Grozăvești 0 % / 0 %** (18 / 36.5),
+  **Berceni 20 min 0 %, 40 min 13 %** (one SE sector really ~33 min over the label), **Militari 20 min
+  0 %, 40 min 13 %** (worst sector +6 min — the transit-40 walk-union across the western rail/A1
+  corridor, measured directly, not asserted). Pooled: 20 min 0 %, 40 min 6 % (n=32); the pre-declared
+  central-origin bar held; coverage complete. **Known limitation (not new):** at the periphery, in
+  specific directions with infrequent service, a reachability contour can be optimistic versus a
+  specific-departure journey — the Berceni SE and Militari tails are that, a property of the transit
+  field at every threshold (the earlier central-only audit missed it), NOT introduced by the 20/40
+  presets; the UI must not overstate transit reach, and a transit-field re-calibration across more
+  peripheral origins is a tracked follow-up. Receipt:
+  `scripts/calibrate/receipts/transit-2026-09-03.json`.
 
 ### Car traffic realism (task 058) — calibrated congestion factor over ORS free-flow ✅ PICKED
 

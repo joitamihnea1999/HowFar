@@ -320,9 +320,9 @@ describe("unionRings", () => {
           }
           return true;
         },
-      ),
+),
       { numRuns: 40 },
-    );
+);
   });
 });
 
@@ -394,5 +394,28 @@ describe("dropSmallComponents (task 052 — speck filter)", () => {
     const [out] = dropSmallComponents([justUnder], ORIG);
     expect(MIN_TRANSIT_COMPONENT_AREA_M2).toBeGreaterThan(17_000);
     expect(out.geometry.coordinates).toEqual([]);
+  });
+});
+
+// --- phone-first preset: preset contour thresholds [20,40] with the field kept at 45 -------
+describe("buildRings — preset thresholds [20,40], fieldMaxMin 45", () => {
+  it("extracts exactly [20,40], ascending + nested", () => {
+    const stops = [{ lat: 44.45, lng: 26.15, dur: 12 }];
+    const rings = buildRings(ORIGIN, stops, { egressMPerMin: EGRESS_M_PER_MIN, thresholds: [20, 40], fieldMaxMin: 45 });
+    expect(rings.map((r) => r.minutes)).toEqual([20, 40]);
+    expect(ringArea(rings[0]!)).toBeLessThanOrEqual(ringArea(rings[1]!));
+  });
+
+  it("a dur=41 source contributes NO area to the 40-contour, a dur=39 one does (a 40-min source has no ≤40 egress)", () => {
+    const far = { lat: 44.45, lng: 26.15 };
+    const at41 = buildRings(ORIGIN, [{ ...far, dur: 41 }], { stampOrigin: false, egressMPerMin: EGRESS_M_PER_MIN, thresholds: [20, 40], fieldMaxMin: 45 });
+    const at39 = buildRings(ORIGIN, [{ ...far, dur: 39 }], { stampOrigin: false, egressMPerMin: EGRESS_M_PER_MIN, thresholds: [20, 40], fieldMaxMin: 45 });
+    expect(ringArea(at41[1]!)).toBe(0); // 41 min > 40 → nothing reachable in ≤40
+    expect(ringArea(at39[1]!)).toBeGreaterThan(0); // 39 min ≤ 40 → a small reachable disc
+  });
+
+  it("legacy default (no thresholds/fieldMaxMin) is unchanged — still [15,30,45]", () => {
+    const rings = buildRings(ORIGIN, [{ lat: 44.45, lng: 26.15, dur: 12 }], { egressMPerMin: EGRESS_M_PER_MIN });
+    expect(rings.map((r) => r.minutes)).toEqual([...THRESHOLDS]);
   });
 });

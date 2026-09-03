@@ -1,0 +1,19 @@
+# CAR preset free-flow spot-check — 2026-09-03T20:43:36.770Z
+# served free-flow ranges: 10min=600s 25min=1500s  (ruler: public OSRM driving)
+
+## Unirii (44.4268,26.1025)
+  10min (600s free-flow): OSRM median 9.2min at boundary  over(>T+2) 0%  conservative(<T) 75%  range [8.1,10.4]  (n=8)
+  25min (1500s free-flow): OSRM median 22.2min at boundary  over(>T+2) 0%  conservative(<T) 100%  range [19.1,24.4]  (n=8)
+
+## Berceni (44.383,26.123)
+  10min (600s free-flow): OSRM median 8.4min at boundary  over(>T+2) 0%  conservative(<T) 88%  range [7.7,10.6]  (n=8)
+  25min (1500s free-flow): OSRM median 22.1min at boundary  over(>T+2) 0%  conservative(<T) 100%  range [20.3,23.1]  (n=8)
+
+## Militari (44.4319,26.0206)
+  10min (600s free-flow): OSRM median 9.4min at boundary  over(>T+2) 0%  conservative(<T) 75%  range [7.3,10.9]  (n=8)
+  25min (1500s free-flow): OSRM median 22.7min at boundary  over(>T+2) 0%  conservative(<T) 100%  range [18.8,23.7]  (n=8)
+
+PASS — free-flow contours with >10% over-claim samples: 0; coverage complete — receipt: scripts/calibrate/receipts/car-spotcheck-2026-09-03.json
+# 3 origins (Unirii/Berceni/Militari), sampled with the hardened instrument (outermost inside point
+# across all MultiPolygon components; truncated rays flagged as coverage gaps, MAX raised to 60km for
+# the 25-min free-flow motorway reach). All contours accurate-to-conservative vs OSRM; coverage complete.

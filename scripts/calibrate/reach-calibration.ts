@@ -40,6 +40,14 @@ import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  campaignExitCode,
+  coverageShortfalls,
+  perOriginFailures,
+  type CoverageCell,
+  type OriginTargetRate,
+} from "@/features/isochrones/calibration-acceptance";
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, "..", "..");
 
@@ -307,7 +315,7 @@ async function main(): Promise<number> {
   const measureOrigin = async (
     origin: { name: string; lat: number; lng: number },
     ranges: number[],
-  ): Promise<Map<number, Sample[]>> => {
+): Promise<Map<number, Sample[]>> => {
     const geoms = await orsWalk(origin.lat, origin.lng, ranges);
     // Gather every boundary point across every range, then ONE ruler call.
     const flat: { rangeS: number; bearing: number; held: boolean; pt: [number, number] }[] = [];
@@ -352,7 +360,7 @@ async function main(): Promise<number> {
       log(
         `  range ${rangeS}s -> fit ${fitMedMin.toFixed(2)} min / held ${heldMedMin.toFixed(2)} min ` +
           `(fit n=${fit.length}, held n=${held.length})`,
-      );
+);
     }
     curves[origin.name] = curve;
     (receipt.perOrigin as Record<string, unknown>)[origin.name] = { sweep: perRange };
@@ -413,7 +421,7 @@ async function main(): Promise<number> {
     log(
       `  ${t}min: median ${r.medMin.toFixed(2)}  over(>T+${TOL_MIN}) ${(r.overRate * 100).toFixed(0)}%  ` +
         `under ${(r.underRate * 100).toFixed(0)}%  maxOver +${r.maxOverMin.toFixed(1)}min  (n=${r.n})`,
-    );
+);
   }
   // The bar the new presets must MEET-OR-BEAT: the shipped over-claim rate.
   const overBar = Math.max(0.06, controlMaxOver); // >=6% per PROVIDERS "0-6% everywhere"
@@ -434,7 +442,7 @@ async function main(): Promise<number> {
         `  [${label}] ${t}min (${candidate[t]}s): median ${r.medMin.toFixed(2)}  ` +
           `over ${(r.overRate * 100).toFixed(0)}%  under ${(r.underRate * 100).toFixed(0)}%  ` +
           `maxOver +${r.maxOverMin.toFixed(1)}min  (n=${r.n})`,
-      );
+);
     }
     return { res, rates };
   };
@@ -483,13 +491,13 @@ async function main(): Promise<number> {
     log(
       `  RESULT ${t}min (${candidate[t]}s): pooled median ${r.medMin.toFixed(2)} [${medOk ? "ok" : "OFF"}]  ` +
         `over ${(r.overRate * 100).toFixed(0)}% vs bar ${(overBar * 100).toFixed(0)}% [${overOk ? "ok" : "OVER"}]  ${pass ? "PASS" : "FAIL"}`,
-    );
+);
     for (const origin of ORIGINS) {
       const pr = perOrigin[origin.name]!;
       log(
         `      ${origin.name}: median ${pr.medMin.toFixed(1)} over ${(pr.overRate * 100).toFixed(0)}% ` +
           `maxOver +${pr.maxOverMin.toFixed(1)}min${pr.overRate > overBar ? "  ⚠ per-origin over bar" : ""}`,
-      );
+);
     }
   }
   (receipt as Record<string, unknown>).acceptance = acceptance;
@@ -497,16 +505,60 @@ async function main(): Promise<number> {
   (receipt as Record<string, unknown>).allPass = allPass;
   (receipt as Record<string, unknown>).anyOriginOverBar = anyOriginOver;
 
+  // --- HARDENED GATES ---------------------------
+  // (1) COVERAGE: every (origin,target) held-out cell must carry the full bearing
+  //     count — a dropped sector (missing ORS geom / ray-miss / failed ruler) could
+  //     be the unsafe one, so a shortfall FAILS the campaign, never a silent pass.
+  const heldBearings = BEARINGS.filter((_, i) => i % 2 === 1).length;
+  const coverageCells: CoverageCell[] = [];
+  for (const origin of ORIGINS) {
+    for (const t of TARGET_MIN) {
+      coverageCells.push({ origin: origin.name, target: t, n: (evalResult.res.perOrigin[origin.name]?.[t] ?? []).length });
+    }
+  }
+  const coverageGaps = coverageShortfalls(coverageCells, heldBearings);
+  for (const g of coverageGaps) log(`  ✗ COVERAGE ${g}`);
+  // (2) PRE-DECLARED PER-ORIGIN BAR for the SERVED walk presets (10,20). 40 is the
+  //     transit-union helper, NOT a served walk reach — its correctness is proven by
+  //     the transit union validating (transit-validation.ts), so it is exempt here.
+  //     Magnitude ceiling = the shipped 15/30/45 control's worst per-origin over-claim
+  //     + 2 min: "no worse than the shipped rings' barrier tails, plus slack". Declared
+  //     from the control BEFORE inspecting the preset tails — not relaxable after.
+  let controlWorstPerOrigin = 0;
+  for (const origin of ORIGINS) {
+    for (const t of [15, 30, 45]) {
+      controlWorstPerOrigin = Math.max(controlWorstPerOrigin, claimRates(control.perOrigin[origin.name]?.[t] ?? [], t).maxOverMin);
+    }
+  }
+  const perOriginBar = { medTolerance: RESIDUAL_TOLERANCE, overRateBar: overBar, maxOverMinCeil: controlWorstPerOrigin + 2 };
+  const SERVED_WALK_MIN = [10, 20];
+  let servedFailures = 0;
+  for (const t of SERVED_WALK_MIN) {
+    const perOrigin: Record<string, OriginTargetRate> = {};
+    for (const origin of ORIGINS) perOrigin[origin.name] = claimRates(evalResult.res.perOrigin[origin.name]?.[t] ?? [], t);
+    for (const f of perOriginFailures(t, perOrigin, perOriginBar)) {
+      servedFailures++;
+      log(`  ✗ SERVED ${t}min @ ${f.origin}: ${f.reason}`);
+    }
+  }
+  const coverageOk = coverageGaps.length === 0;
+  (receipt as Record<string, unknown>).coverageGaps = coverageGaps;
+  (receipt as Record<string, unknown>).perOriginBar = perOriginBar;
+  (receipt as Record<string, unknown>).servedWalkFailures = servedFailures;
+
   const receiptPath = join(receiptDir, `walk-${stamp}.json`);
   writeFileSync(receiptPath, JSON.stringify(receipt, null, 2));
+  const exit = campaignExitCode(coverageOk, servedFailures);
   log(
-    `\n${allPass ? "POOLED PASS" : "POOLED FAILED"}` +
-      `${anyOriginOver ? " (with per-origin barrier exceedances — see ⚠ above)" : ""} — receipt: ${receiptPath}`,
-  );
-  // Exit non-zero if the pooled acceptance failed, so a cron/CI rerun cannot
-  // report a false success. Per-origin barrier exceedances are
-  // surfaced but do not by themselves fail (shipped-ring-consistent).
-  return allPass ? 0 : 1;
+    `\n${exit === 0 ? "PASS" : "FAILED"}` +
+      `${anyOriginOver ? " (pooled: per-origin barrier exceedances on non-served/union minutes surfaced above)" : ""}` +
+      ` — coverage ${coverageOk ? "complete" : `INCOMPLETE (${coverageGaps.length})`}, served-walk per-origin failures ${servedFailures}` +
+      ` — receipt: ${receiptPath}`,
+);
+  // Exit non-zero on a coverage gap OR a served-preset per-origin breach, so a
+  // cron/CI rerun cannot report a false success. walk-40 (union helper) tails are
+  // surfaced but do not fail here (validated via the transit union).
+  return exit;
 }
 
 main()

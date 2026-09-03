@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 
 import { carTrafficSlotFor } from "@/features/isochrones/car-traffic";
-import { drivingIsochrone } from "@/features/isochrones/server/ors";
+import { parseReachModelStrict } from "@/features/isochrones/preset-reach";
+import { drivingIsochrone, drivingPresetIsochrone } from "@/features/isochrones/server/ors";
 import { parseTimeContext } from "@/features/isochrones/time-context";
 import { errorResponse, jsonError, outOfAreaGuard, parseLatLng } from "@/lib/api-util";
 
@@ -33,9 +34,14 @@ export async function GET(request: Request) {
     time: url.searchParams.get("time"),
   });
   if (timeContext === null) return jsonError(400, "Invalid departure time");
+  const model = parseReachModelStrict(url.searchParams.get("model"));
+  if (model === null) return jsonError(400, "Invalid model");
   const slot = carTrafficSlotFor(timeContext);
   try {
-    const result = await drivingIsochrone(parsed.lat, parsed.lng, slot);
+    const result =
+      model === "preset"
+        ? await drivingPresetIsochrone(parsed.lat, parsed.lng, slot)
+        : await drivingIsochrone(parsed.lat, parsed.lng, slot);
     return NextResponse.json({
       ...result,
       car: { basis: "estimate" as const, slotId: slot.slotId, slotLabel: slot.label, factor: slot.factor },

@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 
 import { parsePaceStrict } from "@/features/isochrones/pace";
-import { transitIsochrone } from "@/features/isochrones/server/transit";
+import { parseReachModelStrict } from "@/features/isochrones/preset-reach";
+import { transitIsochrone, transitPresetIsochrone } from "@/features/isochrones/server/transit";
 import { parseTimeContext } from "@/features/isochrones/time-context";
 import { errorResponse, jsonError, outOfAreaGuard, parseLatLng } from "@/lib/api-util";
 
@@ -21,8 +22,13 @@ export async function GET(request: Request) {
     time: url.searchParams.get("time"),
   });
   if (timeContext === null) return jsonError(400, "Invalid departure time");
+  const model = parseReachModelStrict(url.searchParams.get("model"));
+  if (model === null) return jsonError(400, "Invalid model");
   try {
-    const result = await transitIsochrone(parsed.lat, parsed.lng, pace, timeContext);
+    const result =
+      model === "preset"
+        ? await transitPresetIsochrone(parsed.lat, parsed.lng, pace, timeContext)
+        : await transitIsochrone(parsed.lat, parsed.lng, pace, timeContext);
     return NextResponse.json(result);
   } catch (err) {
     return errorResponse(err, "transit");

@@ -55,7 +55,6 @@ export const EGRESS_M_PER_MIN = PACE_MODEL.normal.egressMPerMin;
 /** Reachability thresholds in minutes (ascending). */
 export const THRESHOLDS = [15, 30, 45] as const;
 
-const MAX_MIN = THRESHOLDS[THRESHOLDS.length - 1];
 const CELL_M = 120; // grid resolution; smaller = smoother contours, more cells (perf-checked in tests)
 const M_PER_DEG_LAT = 110540;
 // Offset so `d3-contour` region {value ≥ BIG − T} maps to {reach-minutes ≤ T}.
@@ -95,9 +94,24 @@ export interface Ring {
 export function buildRings(
   origin: { lat: number; lng: number },
   stops: TransitStop[],
-  opts: { stampOrigin?: boolean; egressMPerMin: number },
+  opts: {
+    stampOrigin?: boolean;
+    egressMPerMin: number;
+    /** Contour levels (minutes, ascending) to EXTRACT. Default = the shipped
+     *  [15,30,45]. The phone-first preset path passes [20,40]. */
+    thresholds?: readonly number[];
+    /** Field extent (minutes): stops/egress are stamped up to here and cells past
+     *  it sink to −∞. Default = the largest extracted threshold. The preset path
+     *  passes 45 while extracting [20,40] so its 40-contour is byte-identical to
+     *  the shipped 45-field's 40-level — `MAX_MIN` both truncates the grid AND sets
+     *  the finite/−∞ neighbours d3-contour interpolates the crossing against, so a
+     *  field truncated at 40 would yield a DIFFERENT (cell-snapped) 40-contour. */
+    fieldMaxMin?: number;
+  },
 ): Ring[] {
   const egressMPerMin = opts.egressMPerMin;
+  const thresholds = opts.thresholds ?? THRESHOLDS;
+  const maxMin = opts.fieldMaxMin ?? thresholds[thresholds.length - 1]!;
   const mPerDegLng = 111320 * Math.cos((origin.lat * Math.PI) / 180);
   const spanLng = LAUNCH_BBOX.maxLng - LAUNCH_BBOX.minLng;
   const spanLat = LAUNCH_BBOX.maxLat - LAUNCH_BBOX.minLat;
@@ -111,7 +125,7 @@ export function buildRings(
   // Stamp a walk source (a stop, or the origin at base 0) into every cell within
   // its remaining-walk radius, keeping the minimum reach-minutes per cell.
   const stamp = (lat: number, lng: number, baseMin: number) => {
-    const remaining = MAX_MIN - baseMin;
+    const remaining = maxMin - baseMin;
     if (remaining <= 0) return;
     const maxR = remaining * egressMPerMin; // crow-fly metres of egress budget left
     const di = Math.ceil(maxR / (dLng * mPerDegLng));
@@ -129,7 +143,7 @@ export function buildRings(
         const cellLng = LAUNCH_BBOX.minLng + (i + 0.5) * dLng;
         const dx = (cellLng - lng) * mPerDegLng;
         const val = baseMin + Math.hypot(dx, dy) / egressMPerMin;
-        if (val > MAX_MIN) continue;
+        if (val > maxMin) continue;
         const k = j * width + i;
         if (val < grid[k]) grid[k] = val;
       }
@@ -144,7 +158,7 @@ export function buildRings(
   const field = Array.from(grid, (r) => (Number.isFinite(r) ? BIG - r : -Infinity));
   const contourSet = contours()
     .size([width, height])
-    .thresholds(THRESHOLDS.map((t) => BIG - t))(field);
+    .thresholds(thresholds.map((t) => BIG - t))(field);
 
   // Clamp to the launch box so no vertex can escape the rendered tile extent
   // (matters only for an origin near the box edge; central origins never reach it).
@@ -158,8 +172,8 @@ export function buildRings(
           clampLng(LAUNCH_BBOX.minLng + (x + 0.5) * dLng),
           clampLat(LAUNCH_BBOX.minLat + (y + 0.5) * dLat),
         ]),
-      ),
-    );
+),
+);
 
   const byMinutes = new Map<number, Ring>();
   for (const c of contourSet) {
@@ -170,10 +184,12 @@ export function buildRings(
     });
   }
 
-  return THRESHOLDS.map(
-    (t): Ring =>
-      byMinutes.get(t) ?? { minutes: t, geometry: { type: "MultiPolygon", coordinates: [] } },
-  ).sort((a, b) => a.minutes - b.minutes);
+  return thresholds
+    .map(
+      (t): Ring =>
+        byMinutes.get(t) ?? { minutes: t, geometry: { type: "MultiPolygon", coordinates: [] } },
+)
+    .sort((a, b) => a.minutes - b.minutes);
 }
 
 /**
@@ -265,7 +281,7 @@ export function unionRings(transitRings: Ring[], walkRings: WalkRing[]): Ring[] 
   for (const [i, ring] of transitRings.entries()) {
     const walk = walkRings[i];
     if (!walk || walk.minutes !== ring.minutes || isEmptyGeometry(walk.geometry?.coordinates)) {
-      console.error(`[transit-grid] ring-${ring.minutes}: walk ring missing/empty — radial fallback`);
+      console.error(`[transit-grid] ring-${ring.minutes}: walk ring missing/empty — union returns null (caller: legacy→radial fallback, preset→fail-closed 502)`);
       return null;
     }
     try {
@@ -291,12 +307,12 @@ export function unionRings(transitRings: Ring[], walkRings: WalkRing[]): Ring[] 
       // returning valid-looking but smaller geometry. 1 m² of float slack.
       const mergedArea = area(merged);
       if (mergedArea + 1 < Math.max(area(transitFeature), walkArea)) {
-        console.error(`[transit-grid] ring-${ring.minutes}: union shrank — radial fallback`);
+        console.error(`[transit-grid] ring-${ring.minutes}: union shrank — union returns null (caller: legacy→radial fallback, preset→fail-closed 502)`);
         return null;
       }
       out.push({ minutes: ring.minutes, geometry: toMultiPolygon(merged.geometry) });
     } catch (err) {
-      console.error(`[transit-grid] ring-${ring.minutes} union failed — radial fallback:`, err);
+      console.error(`[transit-grid] ring-${ring.minutes} union failed — union returns null (caller: legacy→radial fallback, preset→fail-closed 502):`, err);
       return null;
     }
   }
