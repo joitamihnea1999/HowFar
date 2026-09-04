@@ -1,14 +1,16 @@
 import { expect, test, type Page } from "@playwright/test";
-import { innerBandCounts, WALK_CLIP } from "./amenity-fixtures";
+import { emptyAmenities } from "./amenity-fixtures";
 
 // Visual right-click journey (task 054; unified to public-transport-only in
-// task 060): a right-click in ANY mode auto-switches to Public transport and
-// DRAWS the trip on the map (`data-reach-journey`), DECLUTTERS the amenity
-// markers (`data-amenity-declutter=on`), and ties popup-step hover to on-map
-// highlight (`data-reach-hover`); closing / a new selection / a mode change
-// restores the markers and clears the draw. A plan with no transit leg is
-// reported as "No public-transport route" (no draw). Provider calls stubbed by
-// exact path; the right-click is a native right-button click → contextmenu.
+// task 060), migrated to the phone-first preset client (task 022): a right-click
+// in ANY mode auto-switches to Public transport and DRAWS the trip on the map
+// (`data-reach-journey`), and ties popup-step hover to on-map highlight
+// (`data-reach-hover`); closing / a new selection / a mode change clears the draw.
+// A plan with no transit leg is reported as "No public-transport route" (no draw).
+// The preset client suppresses amenity markers (deferred to a later pass), so the amenity
+// DECLUTTER half of task 054/061 is out of scope here — the journey draw/clear
+// behaviour is what this file now proves. Provider calls stubbed by exact path;
+// the right-click is a native right-button click → contextmenu.
 
 function polyRing(minutes: number, d: number) {
   return {
@@ -25,11 +27,12 @@ function polyRing(minutes: number, d: number) {
     },
   };
 }
-// Big rings so a centre click is deterministically inside the innermost band.
-const bigRings = [polyRing(15, 0.28), polyRing(30, 0.3), polyRing(45, 0.32)];
-const WALK = { origin: { lat: 44.4268, lng: 26.1025 }, rings: bigRings };
-const TRANSIT = { origin: { lat: 44.4268, lng: 26.1025 }, rings: bigRings, departure: "2026-07-29T05:30:00.000Z" };
-const CAR = { origin: { lat: 44.4268, lng: 26.1025 }, rings: [polyRing(10, 0.28), polyRing(20, 0.3), polyRing(30, 0.32)] };
+// The calibrated preset shapes served on ?model=preset (task 020): walk [10,20] /
+// transit [20,40] / car [10,25]. Sizes are exaggerated so a centre right-click is
+// deterministically inside the innermost band (the right-click band math).
+const WALK = { origin: { lat: 44.4268, lng: 26.1025 }, rings: [polyRing(10, 0.28), polyRing(20, 0.3)] };
+const TRANSIT = { origin: { lat: 44.4268, lng: 26.1025 }, rings: [polyRing(20, 0.28), polyRing(40, 0.3)], departure: "2026-07-29T05:30:00.000Z" };
+const CAR = { origin: { lat: 44.4268, lng: 26.1025 }, rings: [polyRing(10, 0.28), polyRing(25, 0.3)] };
 
 // A real WALK→BUS→WALK journey with coords + decoded paths (the server surfaces
 // these). journeyLegs → 3 lines; journeyStops → board + alight (2 dots).
@@ -88,32 +91,6 @@ async function reachRenderedCounts(page: Page) {
     return { lines: lineIdx.size, stops: stopIdx.size };
   });
 }
-/**
- * Every amenity MARK on screen: unclustered WebGL pins PLUS cluster donut DOM
- * markers.
- *
- * Counting only `amenity-markers` was correct before task 061, but under display
- * clustering a dense fixture collapses into donuts and that layer legitimately
- * reports 0 — so a declutter assertion of "drops to 0" would pass while proving
- * NOTHING, and would not notice donuts left painted over the journey (donuts are
- * DOM markers, outside the layer/filter system entirely). Both halves are counted,
- * and the callers assert a non-zero count BEFORE declutter so the proof cannot go
- * vacuous.
- */
-async function renderedAmenityMarkers(page: Page) {
-  return page.evaluate(() => {
-    const m = (window as unknown as { __hfMap?: { queryRenderedFeatures: (o: unknown) => unknown[] } }).__hfMap;
-    if (!m) return -1;
-    let pins = 0;
-    try {
-      pins = m.queryRenderedFeatures({ layers: ["amenity-markers"] }).length;
-    } catch {
-      pins = 0; // layer absent (pre-load) — donuts still counted below
-    }
-    const donuts = document.querySelectorAll(".hf-amenity-cluster").length;
-    return pins + donuts;
-  });
-}
 // The drawn journey's screen-space bbox (project every reach-path coord). Used to
 // prove the directions popup does not blanket the whole path (task 057 P1).
 async function journeyScreenBBox(page: Page) {
@@ -156,18 +133,10 @@ const PLAN_EXTENT: [number, number][] = [[26.1025, 44.4268], [26.087, 44.47]];
 
 async function setup(page: Page) {
   const reachCalls: string[] = [];
+  // Preset mode fetches no amenities; keep a defensive empty stub so a stray call
+  // never reaches the network (it should never fire in preset mode).
   await page.route("**/api/amenities**", (route) =>
-    route.fulfill({
-      json: {
-        origin: { lat: 44.4268, lng: 26.1025 },
-        clip: WALK_CLIP,
-        countsByBand: innerBandCounts({ groceries: 1, pharmacies: 1, parks: 0, schools: 0, transit: 0 }),
-        amenities: [
-          { name: "Mega Image", category: "groceries", lat: 44.427, lng: 26.103, osmType: "node", osmId: 1, band: 15 },
-          { name: "Farmacia Tei", category: "pharmacies", lat: 44.4265, lng: 26.1015, osmType: "node", osmId: 2, band: 15 },
-        ],
-      },
-    }),
+    route.fulfill({ json: emptyAmenities({ lat: 44.4268, lng: 26.1025 }) }),
   );
   await page.route("**/api/geocode**", (route) =>
     route.fulfill({ json: { lat: 44.4268, lng: 26.1025, label: "Piața Unirii, București" } }),
@@ -189,8 +158,7 @@ async function setup(page: Page) {
 async function search(page: Page, map: ReturnType<Page["getByTestId"]>) {
   await page.getByRole("combobox").fill("Piata Unirii");
   await page.getByRole("button", { name: "Go" }).click();
-  await expect(map).toHaveAttribute("data-isochrone-rings", "3");
-  await expect(map).toHaveAttribute("data-amenity-count", "2"); // markers present to declutter
+  await expect(map).toHaveAttribute("data-isochrone-rings", "2");
 }
 
 async function toTransit(page: Page, map: ReturnType<Page["getByTestId"]>) {
@@ -213,28 +181,20 @@ async function rightClickAt(page: Page, fx: number, fy: number) {
   await page.mouse.click(box.x + box.width * fx, box.y + box.height * fy, { button: "right" });
 }
 
-test("transit right-click DRAWS the journey and declutters the amenities", async ({ page }) => {
+test("transit right-click DRAWS the journey", async ({ page }) => {
   const { map } = await setup(page);
   await search(page, map);
   await toTransit(page, map);
-  // NON-VACUITY GUARD (task 061): prove marks are actually on screen BEFORE
-  // decluttering. Under display clustering a dense fixture renders as donut DOM
-  // markers and the `amenity-markers` LAYER legitimately reports 0, so an
-  // unguarded "drops to 0" assertion could pass without declutter doing anything.
-  await expect.poll(() => renderedAmenityMarkers(page)).toBeGreaterThan(0);
   await rightClickCentre(page);
 
   await expect(map).toHaveAttribute("data-reach-state", "transit");
   // 3 leg lines drawn (WALK + BUS + WALK), stamped once the source holds features.
   await expect(map).toHaveAttribute("data-reach-journey", "3", { timeout: 5000 });
-  await expect(map).toHaveAttribute("data-amenity-declutter", "on");
   await expect(page.getByTestId("reach-panel")).toContainText("By public transport");
 
   // RENDERED-state truth (not the code's own stamps): the map paints 3 leg lines
-  // + the 2 used stops (board + alight), and NO amenity marker while the journey
-  // shows — the check review required.
+  // + the 2 used stops (board + alight) — the check review required.
   await expect.poll(() => reachRenderedCounts(page)).toEqual({ lines: 3, stops: 2 });
-  await expect.poll(() => renderedAmenityMarkers(page)).toBe(0);
 
   // task 058: the camera fits the journey (data-reach-framed) and the directions
   // DOCK (result sheet) covers only a MINORITY of the drawn path, so the user can
@@ -269,24 +229,19 @@ test("supersede: a second right-click draws ONLY the latest plan", async ({ page
   await expect.poll(() => reachRenderedCounts(page)).toEqual({ lines: 2, stops: 2 });
 });
 
-test("starting a new selection mid-journey clears the draw and restores markers", async ({ page }) => {
+test("starting a new selection mid-journey clears the draw", async ({ page }) => {
   const { map } = await setup(page);
   await search(page, map);
   await toTransit(page, map);
   await rightClickCentre(page);
   await expect(map).toHaveAttribute("data-reach-journey", "3", { timeout: 5000 });
-  // Polled: cluster donuts are reconciled on an animation frame, so a single
-  // synchronous read can sample before the declutter has removed them.
-  await expect.poll(() => renderedAmenityMarkers(page)).toBe(0);
 
   // A new address selection is a fresh selection → teardownReach via closeStopPopup.
   await page.getByRole("combobox").fill("Another place");
   await page.getByRole("button", { name: "Go" }).click();
-  await expect(map).toHaveAttribute("data-isochrone-rings", "3");
+  await expect(map).toHaveAttribute("data-isochrone-rings", "2");
   await expect(map).not.toHaveAttribute("data-reach-journey", /.*/);
-  await expect(map).toHaveAttribute("data-amenity-declutter", "off");
   await expect.poll(() => reachRenderedCounts(page)).toEqual({ lines: 0, stops: 0 });
-  await expect.poll(() => renderedAmenityMarkers(page)).toBeGreaterThan(0); // markers back
 });
 
 test("hovering a popup step highlights its leg on the map", async ({ page }) => {
@@ -305,23 +260,20 @@ test("hovering a popup step highlights its leg on the map", async ({ page }) => 
   await expect(map).not.toHaveAttribute("data-reach-hover", /.*/);
 });
 
-test("closing the popup clears the drawn journey and restores the amenities", async ({ page }) => {
+test("closing the popup clears the drawn journey", async ({ page }) => {
   const { map } = await setup(page);
   await search(page, map);
   await toTransit(page, map);
   await rightClickCentre(page);
   await expect(map).toHaveAttribute("data-reach-journey", "3", { timeout: 5000 });
-  await expect(map).toHaveAttribute("data-amenity-declutter", "on");
 
   await page.getByRole("button", { name: "Back to your area" }).click();
   await expect(map).not.toHaveAttribute("data-reach-journey", /.*/);
-  await expect(map).toHaveAttribute("data-amenity-declutter", "off");
-  // Rendered truth: reach-path emptied and the amenity markers are back.
+  // Rendered truth: reach-path emptied.
   await expect.poll(() => reachRenderedCounts(page)).toEqual({ lines: 0, stops: 0 });
-  await expect.poll(() => renderedAmenityMarkers(page)).toBeGreaterThan(0);
 });
 
-test("switching mode mid-journey restores the amenities and clears the draw", async ({ page }) => {
+test("switching mode mid-journey clears the draw", async ({ page }) => {
   const { map } = await setup(page);
   await search(page, map);
   await toTransit(page, map);
@@ -331,7 +283,6 @@ test("switching mode mid-journey restores the amenities and clears the draw", as
   await page.getByRole("button", { name: "Walk", exact: true }).click();
   await expect(map).toHaveAttribute("data-mode", "walk");
   await expect(map).not.toHaveAttribute("data-reach-journey", /.*/);
-  await expect(map).toHaveAttribute("data-amenity-declutter", "off");
 });
 
 test("walk-mode right-click AUTO-SWITCHES to Public transport and draws the journey (task 060)", async ({ page }) => {
@@ -342,7 +293,6 @@ test("walk-mode right-click AUTO-SWITCHES to Public transport and draws the jour
   await expect(map).toHaveAttribute("data-mode", "transit");
   await expect(map).toHaveAttribute("data-reach-state", "transit");
   await expect(map).toHaveAttribute("data-reach-journey", "3", { timeout: 5000 });
-  await expect(map).toHaveAttribute("data-amenity-declutter", "on");
   expect(reachCalls).toHaveLength(1); // exactly one plan fetch
   // Rendered truth: the journey is actually drawn AND fully framed in view (the
   // cross-mode flyTo must not clip it).
@@ -361,7 +311,6 @@ test("car-mode right-click AUTO-SWITCHES to Public transport and draws the journ
   await rightClickCentre(page);
   await expect(map).toHaveAttribute("data-mode", "transit");
   await expect(map).toHaveAttribute("data-reach-journey", "3", { timeout: 5000 });
-  await expect(map).toHaveAttribute("data-amenity-declutter", "on");
   expect(reachCalls).toHaveLength(1);
   await expect.poll(() => reachRenderedCounts(page)).toEqual({ lines: 3, stops: 2 });
   // Car→transit runs the identical flyTo-vs-frame race as walk — assert it too (found in review).
@@ -399,10 +348,13 @@ test("a walk-only plan → 'No public-transport route' (task 060: no walk-band a
 
   await expect(page.getByTestId("reach-panel")).toContainText("No public-transport route");
   await expect(map).not.toHaveAttribute("data-reach-journey", /.*/);
-  await expect(map).not.toHaveAttribute("data-amenity-declutter", "on");
 });
 
-test("amenity Browse text filter SURVIVES opening + closing directions", async ({ page }) => {
+// QUARANTINED for a later pass (task 022): the amenity browser + text filter this test
+// drives is part of the amenity subsystem the phone-first preset client suppresses.
+// Kept VERBATIM so the "filter state survives a directions round-trip" regression
+// is restored when the amenity browser returns (a later pass).
+test.skip("amenity Browse text filter SURVIVES opening + closing directions", async ({ page }) => {
   const { map } = await setup(page);
   await search(page, map);
   await toTransit(page, map);

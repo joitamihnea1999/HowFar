@@ -24,16 +24,16 @@ function polyRing(minutes: number, d: number) {
 // Large rings so a click anywhere on the fitted viewport is deterministically
 // inside the innermost (15-min) band — the point-in-ring result must not depend
 // on exact camera projection (mock geometry, not realistic distances).
-const WALK = { origin: { lat: 44.4268, lng: 26.1025 }, rings: [polyRing(15, 0.28), polyRing(30, 0.3), polyRing(45, 0.32)] };
+const WALK = { origin: { lat: 44.4268, lng: 26.1025 }, rings: [polyRing(10, 0.28), polyRing(20, 0.3)] };
 const TRANSIT = {
   origin: { lat: 44.4268, lng: 26.1025 },
-  rings: [polyRing(15, 0.28), polyRing(30, 0.3), polyRing(45, 0.32)],
+  rings: [polyRing(20, 0.28), polyRing(40, 0.3)],
   departure: "2026-07-29T05:30:00.000Z",
 };
 // Empty rings ⇒ point-in-ring is always null ⇒ transit right-click is
 // "unreachable" with no /api/reach call (the T1 gate).
 const emptyRing = (minutes: number) => ({ minutes, geometry: { type: "MultiPolygon", coordinates: [] } });
-const TRANSIT_EMPTY = { origin: { lat: 44.4268, lng: 26.1025 }, rings: [emptyRing(15), emptyRing(30), emptyRing(45)], departure: "2026-07-29T05:30:00.000Z" };
+const TRANSIT_EMPTY = { origin: { lat: 44.4268, lng: 26.1025 }, rings: [emptyRing(20), emptyRing(40)], departure: "2026-07-29T05:30:00.000Z" };
 // Legs carry coords + decoded path (the server now surfaces these — task 054),
 // so the popup text AND the on-map journey draw are both exercised.
 const PLAN = {
@@ -71,7 +71,7 @@ async function setup(page: Page) {
 async function search(page: Page, map: ReturnType<Page["getByTestId"]>) {
   await page.getByRole("combobox").fill("Piata Unirii");
   await page.getByRole("button", { name: "Go" }).click();
-  await expect(map).toHaveAttribute("data-isochrone-rings", "3");
+  await expect(map).toHaveAttribute("data-isochrone-rings", "2");
 }
 
 // Native right-click near the centre of the map canvas (over the origin/rings).
@@ -185,13 +185,15 @@ test("public-transport mode: a point outside the drawn rings STILL plans the tri
   await expect(map).toHaveAttribute("data-mode", "transit");
 
   // Owner's new intent: right-click ALWAYS shows the PT way. With no ring to fall
-  // inside, the band defaults to the 45-min transit max and the planner IS called
-  // (honesty comes from the drawn path + band-honesty copy, not a silent no-fetch).
+  // inside, the band defaults to the SELECTED transit preset (default chip = 20;
+  // the client frames against the reach it actually draws, never a hidden 40/45
+  // contour — G2.7) and the planner IS called (honesty comes from the drawn path +
+  // band-honesty copy, not a silent no-fetch).
   await rightClickCentre(page);
   await expect(map).toHaveAttribute("data-reach-state", "transit");
   await expect(page.getByTestId("reach-panel")).toContainText("By public transport");
   expect(reachCalls).toHaveLength(1);
-  expect(decodeURIComponent(reachCalls[0])).toContain("maxMinutes=45");
+  expect(decodeURIComponent(reachCalls[0])).toContain("maxMinutes=20");
 });
 
 test("public-transport mode: no route found is reported", async ({ page }) => {
@@ -213,4 +215,35 @@ test("public-transport mode: no route found is reported", async ({ page }) => {
   await rightClickCentre(page);
   await expect(map).toHaveAttribute("data-reach-state", "none");
   await expect(page.getByTestId("reach-panel")).toContainText("No public-transport route");
+});
+
+test("a failed mode recompute clears the reach legend — no '~N min' claim over a blank map", async ({ page }) => {
+  // Desktop path (chromium project): the legend pill is shown whenever a reach is
+  // drawn. A mode toggle whose recompute FAILS sets status="error" (not "loading"),
+  // retains lastSelection, and clears the drawn reach — the legend must not keep
+  // claiming "~N min" over the now-blank map (impl review). On mobile the sheet
+  // expands on error and hides the legend anyway; this is the desktop guard.
+  await page.route("**/api/amenities**", (route) =>
+    route.fulfill({ json: emptyAmenities({ lat: 44.4268, lng: 26.1025 }) }),
+  );
+  await page.route("**/api/geocode**", (route) =>
+    route.fulfill({ json: { lat: 44.4268, lng: 26.1025, label: "Piața Unirii, București" } }),
+  );
+  await page.route("**/api/suggest**", (route) => route.fulfill({ json: { suggestions: [] } }));
+  await page.route("**/api/isochrone**", (route) => route.fulfill({ json: WALK }));
+  await page.route("**/api/transit**", (route) => route.fulfill({ status: 502, json: { error: "upstream" } }));
+  await page.goto("/");
+  const map = page.getByTestId("app-map");
+  await expect(map).toHaveAttribute("data-map-loaded", "true", { timeout: 30_000 });
+  await page.getByRole("combobox").fill("Piata Unirii");
+  await page.getByRole("button", { name: "Go" }).click();
+  // Walk resolved → a reach is drawn → the legend pill shows.
+  await expect(map).toHaveAttribute("data-preset-contours", "10");
+  await expect(page.getByTestId("legend-pill")).toBeVisible();
+
+  // Toggle to Public transport → its recompute 502s → error, reach cleared.
+  await page.getByRole("button", { name: "Public transport", exact: true }).click();
+  await expect(page.getByText(/Could not compute/i)).toBeVisible();
+  await expect(map).not.toHaveAttribute("data-preset-contours", /.*/);
+  await expect(page.getByTestId("legend-pill")).toHaveCount(0);
 });

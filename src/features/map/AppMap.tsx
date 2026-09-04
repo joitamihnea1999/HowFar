@@ -1239,10 +1239,13 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
         <RingHint
           mode={sel.mode}
           selectedMin={selectedMin}
-          // Gated on !loading so a mode toggle (which flips sel.mode + selectedMin
-          // immediately, then recomputes) never shows the NEW mode's reach copy
-          // while the map is mid-fetch and the reach is cleared (impl review).
-          active={isMobileShell && sheetPeek && !reachActive && sel.lastSelection !== null && sel.status !== "loading"}
+          // Gated on !loading AND !error so neither a mode toggle mid-fetch nor a
+          // FAILED recompute shows a reach claim over a cleared/blank map: a toggle
+          // flips sel.mode + selectedMin immediately then recomputes (loading), and a
+          // failed recompute leaves status="error" with lastSelection retained and the
+          // reach cleared — the copy must appear only over a successfully drawn reach
+          // (impl review: the honesty rider must never float over an empty map).
+          active={isMobileShell && sheetPeek && !reachActive && sel.lastSelection !== null && sel.status !== "loading" && sel.status !== "error"}
         />
         <div className="hf-command-dock absolute inset-x-3 top-[4.7rem] z-30 sm:inset-x-4 sm:top-[5.25rem] md:bottom-auto md:left-4 md:right-auto md:top-[5.15rem] md:w-[388px]">
           {shell.dock === "collapsed" && sel.lastSelection ? (
@@ -1333,7 +1336,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
             the labeled ramp and auto-collapses — never a permanent map cover. Shown
             once a reach is drawn and the map is mostly free (desktop, or the mobile
             peek sheet); hidden while directions occupy the sheet. */}
-        {sel.lastSelection && !reachActive && sel.status !== "loading" && (!isMobileShell || sheetPeek) ? (
+        {sel.lastSelection && !reachActive && sel.status !== "loading" && sel.status !== "error" && (!isMobileShell || sheetPeek) ? (
           <div className="absolute left-3 z-20 bottom-[max(3.7rem,calc(env(safe-area-inset-bottom)+3.2rem))] sm:left-4 md:bottom-6 md:left-auto md:right-4">
             <LegendPill mode={sel.mode} selectedMin={selectedMin} />
           </div>

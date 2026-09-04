@@ -21,7 +21,8 @@ function ring(minutes: number, distance: number) {
 
 const ISOCHRONE = {
   origin: { lat: 44.4268, lng: 26.1025 },
-  rings: [ring(15, 0.01), ring(30, 0.02), ring(45, 0.03)],
+  // The calibrated walk preset [10, 20] served on ?model=preset (task 020).
+  rings: [ring(10, 0.01), ring(20, 0.02)],
 };
 
 const AMENITIES = {
@@ -69,7 +70,13 @@ async function touchSwipe(page: Page, from: { x: number; y: number }, to: { x: n
   await session.detach();
 }
 
-test("touch journey stays usable through selection, results, inspection, map gestures, and orientation", async ({
+// QUARANTINED for a later pass (task 022): this end-to-end touch journey pivots on amenity
+// INSPECTION — the amenity count, category toggles, amenity browser, POI popup, and
+// transit-stop line popup — the amenity subsystem the phone-first preset client
+// suppresses. The surviving touch-shell contracts (suggestion scroll, sheet peek/
+// expand, orientation, map-reclaim) are covered by the migrated "collapsed dock +
+// peek sheet" test below and by preset-render.spec.ts. Restore when amenities return.
+test.skip("touch journey stays usable through selection, results, inspection, map gestures, and orientation", async ({
   page,
 }) => {
   await page.route("**/api/suggest**", (route) =>
@@ -471,7 +478,7 @@ test("mobile shell: collapsed dock + peek sheet reclaim the map; state stays vis
   await expect(pill).toBeVisible();
   await expect(pill).toContainText("Piața Unirii");
   await expect(pill).toContainText("Walk");
-  await expect(pill).toContainText("15 min");
+  await expect(pill).toContainText("10 min"); // the selected walk preset (default chip)
   await expect(map).toHaveAttribute("data-camera-pad-top", "140");
   await expect(map).toHaveAttribute("data-camera-pad-bottom", "124");
   const pillBox = await pill.boundingBox();
@@ -483,7 +490,9 @@ test("mobile shell: collapsed dock + peek sheet reclaim the map; state stays vis
   // behind the collapsed sheet, so a floating dismissible hint carries it.
   const hint = page.getByTestId("ring-hint");
   await expect(hint).toBeVisible();
-  await expect(hint).toContainText("everything you can walk to within 15 minutes");
+  // The mobile peek hint now carries the honest preset explainer (no "within"),
+  // naming the selected walk preset minute.
+  await expect(hint).toContainText("About a 10-minute walk");
   await hint.getByRole("button", { name: "Dismiss explanation" }).tap();
   await expect(hint).toHaveCount(0);
   // Dismissal persists (versioned key) — a returning user is not re-taught.
@@ -530,9 +539,12 @@ test("mobile shell: collapsed dock + peek sheet reclaim the map; state stays vis
   });
   expect(sampled).toBeGreaterThanOrEqual(60);
 
-  // Both attribution surfaces sit at the strip's bottom edge — never mid-map,
-  // never under the sheet.
-  for (const attribution of [page.locator(".hf-transit-attribution p"), page.locator(".maplibregl-ctrl-attrib")]) {
+  // The always-on basemap attribution sits at the strip's bottom edge — never
+  // mid-map, never under the sheet. (The Transitous credit is transit-gated, so in
+  // this walk state only the basemap attribution shows — presence/absence of the
+  // transit credit per mode is proven in preset-render.spec.ts.)
+  {
+    const attribution = page.locator(".maplibregl-ctrl-attrib");
     await expect(attribution).toBeVisible();
     const box = await attribution.boundingBox();
     if (!box) throw new Error("attribution has no box");
@@ -553,27 +565,15 @@ test("mobile shell: collapsed dock + peek sheet reclaim the map; state stays vis
   await pill.tap();
   await expect(page.getByTestId("command-surface")).toBeVisible();
   await expect(page.getByRole("combobox")).toBeFocused();
-  // Change the time budget, hand the map back with the collapse control, and
-  // the pill reflects the new state WITHOUT another resolution.
-  await page.getByRole("button", { name: "30 min" }).tap();
+  // Change the reach preset (the larger 20-min chip), hand the map back with the
+  // collapse control, and the pill reflects the new state WITHOUT another resolution
+  // (the chip is pure client-side visibility — the route already returned both contours).
+  await page.getByTestId("preset-chip-20").tap();
   await page.getByTestId("dock-collapse").tap();
-  await expect(pill).toContainText("30 min");
+  await expect(pill).toContainText("20 min");
 
-  // Peek chips deep-link into the sheet: filters chip opens the amenity panel.
-  await expect(page.getByTestId("peek-chip-filters")).toContainText("5/5");
-  await page.getByTestId("peek-chip-filters").tap();
-  await expect(shell).toHaveAttribute("data-sheet-state", "expanded");
-  const browse = page.getByTestId("amenity-browser-trigger");
-  await expect(browse).toBeVisible();
-  // The amenity browser's transient state survives a peek round-trip (the
-  // panel stays mounted, hidden+inert — task 058 pattern extended).
-  await browse.tap();
-  await page.getByPlaceholder("Filter places").fill("Mega");
-  await page.getByTestId("sheet-toggle").tap();
-  await expect(shell).toHaveAttribute("data-sheet-state", "peek");
-  await page.getByTestId("sheet-toggle").tap();
-  await expect(page.getByPlaceholder("Filter places")).toHaveValue("Mega");
-  await page.getByTestId("sheet-toggle").tap(); // back to peek for the pace chip
+  // (The amenity filters/browser peek chips are deferred to a later pass; the pace peek
+  // chip remains the one live refinement on the phone shell.)
 
   // Pace chip names the current pace and lands on the pace control.
   await expect(page.getByTestId("peek-chip-refine")).toContainText("Normal");

@@ -56,6 +56,9 @@ async function baseStubs(page: Page) {
 }
 
 async function waitForMap(page: Page) {
+  // Navigate AFTER the caller has registered its route stubs (every test sets up
+  // page.route(...) before calling this), then wait for MapLibre to finish loading.
+  await page.goto("/");
   const map = page.getByTestId("app-map");
   await expect(map).toHaveAttribute("data-map-loaded", "true", { timeout: 30_000 });
   return map;
@@ -185,14 +188,23 @@ test("first paint shows a realistic map placeholder, never a dark void", async (
   await page.route("**/api/isochrone**", (route) => route.fulfill({ json: WALK_PRESET }));
   await page.route("**/api/amenities**", (route) => route.fulfill({ json: emptyAmenities(ORIGIN) }));
 
-  // The placeholder is in the DOM from first paint (an inline SVG map texture),
-  // covered + hidden once MapLibre mounts — the "no dark void" contract.
+  // Navigate, then assert the placeholder is in the DOM from first paint (an
+  // inline SVG map texture) BEFORE the live map has a chance to load — the "no
+  // dark void" contract. (Not via waitForMap, which would first wait for load.)
+  await page.goto("/");
   const placeholder = page.getByTestId("map-placeholder");
   await expect(placeholder).toBeAttached();
-  const map = await waitForMap(page);
+  const map = page.getByTestId("app-map");
+  // BEFORE the live map loads the placeholder must be VISIBLE (not merely attached) —
+  // the "no dark void" contract is that its texture actually shows at first paint. A
+  // placeholder that initialised hidden would pass a bare attachment check (impl
+  // review), so assert the visible state (and toBeVisible) while the map is still loading.
+  await expect(map).not.toHaveAttribute("data-map-loaded", "true"); // still loading
+  await expect(placeholder).toHaveAttribute("data-map-placeholder", "visible");
+  await expect(placeholder).toBeVisible();
+  await expect(map).toHaveAttribute("data-map-loaded", "true", { timeout: 30_000 });
   // After the live map loads, the placeholder is marked covered.
   await expect(placeholder).toHaveAttribute("data-map-placeholder", "covered");
-  await expect(map).toHaveAttribute("data-map-loaded", "true");
 });
 
 test("degraded reach: a failed isochrone shows the error inline and keeps the map alive (no takeover, no void)", async ({
@@ -211,4 +223,33 @@ test("degraded reach: a failed isochrone shows the error inline and keeps the ma
   await expect(map).toHaveAttribute("data-map-loaded", "true");
   // No reach was drawn — the preset stamps stay unset.
   await expect(map).not.toHaveAttribute("data-selected-preset", /.*/);
+});
+
+test("a FAILED recompute hides the reach legend + hint — no reach claim over a blank map", async ({ page }) => {
+  await baseStubs(page);
+  await page.route("**/api/isochrone**", (route) => route.fulfill({ json: WALK_PRESET }));
+  // Transit recompute fails: status becomes "error" (not "loading"), lastSelection is
+  // retained and the drawn reach is cleared. The LegendPill/RingHint honesty surfaces
+  // must NOT keep claiming "~N min" over the now-blank map (impl review).
+  await page.route("**/api/transit**", (route) => route.fulfill({ status: 502, json: { error: "upstream" } }));
+  await page.route("**/api/amenities**", (route) => route.fulfill({ json: emptyAmenities(ORIGIN) }));
+
+  const map = await waitForMap(page);
+  await selectAddress(page);
+  // Walk resolved: a reach is drawn, so the legend is shown.
+  await expect(map).toHaveAttribute("data-preset-contours", "10");
+  await expect(page.getByTestId("legend-pill")).toBeVisible();
+
+  // Toggle to Public transport, whose recompute fails. On failure the render is
+  // cleared (status="error"), so the preset/mode stamps are UNSET — not "transit".
+  await openControls(page);
+  await page.getByRole("button", { name: "Public transport", exact: true }).click();
+
+  // The failure surfaces, the reach is cleared, and NO honesty surface lingers over
+  // the blank map — the legend and the mobile hint are both gone in the error state.
+  await expect(page.getByText(/Could not compute/i)).toBeVisible();
+  await expect(map).not.toHaveAttribute("data-preset-contours", /.*/);
+  await expect(map).not.toHaveAttribute("data-mode", /.*/);
+  await expect(page.getByTestId("legend-pill")).toHaveCount(0);
+  await expect(page.getByTestId("ring-hint")).toHaveCount(0);
 });

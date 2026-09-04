@@ -1,6 +1,15 @@
 import { expect, test, type Page } from "@playwright/test";
 import { innerBandCounts, WALK_CLIP } from "./amenity-fixtures";
 
+// QUARANTINED for a later pass (task 022, phone-first preset client). The preset UI
+// suppresses the amenity subsystem this whole file exercises (no /api/amenities
+// fetch, no markers, no category tiles) — an owner-approved deferral, re-added
+// with the band migration in a later pass. The tests are kept VERBATIM (not deleted) so
+// the amenity regressions they encode are restored intact when amenities return.
+test.beforeEach(() => {
+  test.skip(true, "a later pass: amenity subsystem deferred by the phone-first preset client (task 022).");
+});
+
 // Amenities slice (M2 slice 3). Providers STUBBED by EXACT path (never /api/**,
 // which would swallow /api/tiles). Amenity fetch identity is origin × mode ×
 // effectivePace × timeContext (task 065): the clip is the selected mode's reach area, so

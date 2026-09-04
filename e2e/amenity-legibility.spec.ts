@@ -1,6 +1,14 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { innerBandCounts, WALK_CLIP, withBands } from "./amenity-fixtures";
 
+// QUARANTINED for a later pass (task 022, phone-first preset client). The preset UI
+// renders no amenity markers, so the pin-overlap / clustering / aggregate-count
+// legibility proofs below have nothing to assert against. Kept VERBATIM so the
+// task-061 legibility regressions are restored intact when amenities return (a later pass).
+test.beforeEach(() => {
+  test.skip(true, "a later pass: amenity markers suppressed by the phone-first preset client (task 022).");
+});
+
 /**
  * Amenity legibility (task 061).
  *

@@ -1,6 +1,16 @@
 import { expect, test, type Page } from "@playwright/test";
 import { innerBandCounts, WALK_CLIP } from "./amenity-fixtures";
 
+// QUARANTINED for a later pass (task 022, phone-first preset client). Two removed
+// surfaces: (1) the 15/30/45/All ring-display-filter control is replaced by the
+// two-chip preset bar — the surviving "chip → visible contour, no refetch" intent
+// is now proven in preset-render.spec.ts; (2) the task-065 amenity-band cumulative
+// visibility test exercises amenity markers the preset UI suppresses. Kept VERBATIM
+// so the task-065 amenity-band regression is restored when amenities return (a later pass).
+test.beforeEach(() => {
+  test.skip(true, "a later pass: ring-filter control replaced by preset chips + amenity markers suppressed (task 022).");
+});
+
 // Ring display filter (task 024): the 15/30/45/All control flips per-minute
 // layer visibility — all three rings stay FETCHED (data-isochrone-rings=3),
 // only the displayed band changes. Default is the 15-min band (owner-picked).

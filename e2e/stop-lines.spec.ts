@@ -3,6 +3,14 @@ import { innerBandCounts, WALK_CLIP ,
   withBands,
 } from "./amenity-fixtures";
 
+// QUARANTINED for a later pass (task 022, phone-first preset client). Transit stops are
+// amenity markers, which the preset UI suppresses — there is no stop to click, so
+// the line-popup flow below cannot run. Kept VERBATIM so the task-021 stop-line
+// regressions are restored intact when amenity markers return (a later pass).
+test.beforeEach(() => {
+  test.skip(true, "a later pass: transit-stop markers suppressed by the phone-first preset client (task 022).");
+});
+
 // Transit-stop line popup (task 021). A click on a transit marker opens a popup
 // listing the lines that serve it — and must NOT start a new isochrone
 // selection (no reverse/isochrone request). Providers stubbed by EXACT path.
