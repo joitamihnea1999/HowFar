@@ -3,7 +3,7 @@
 import type maplibregl from "maplibre-gl";
 import type { Protocol as PmtilesProtocol } from "pmtiles";
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import "maplibre-gl/dist/maplibre-gl.css";
 
@@ -12,18 +12,18 @@ import {
   type Amenity,
   type AmenityCategoryKey,
 } from "@/features/amenities/amenities";
-import {
-  ALL_AMENITY_CATEGORY_KEYS,
-  AMENITY_PREFERENCE_KEY,
-  filterAmenityItems,
-  normalizeAmenitySelection,
-  parseAmenitySelection,
-  serializeAmenitySelection,
-} from "@/features/amenities/amenity-selection";
+// Amenities are DEFERRED in preset mode (phone-first) — the category
+// selection UI + its persistence return in a later amenity pass. Only the "all categories"
+// default is needed here for the dormant amenities controller.
+import { ALL_AMENITY_CATEGORY_KEYS } from "@/features/amenities/amenity-selection";
 import { LAUNCH_MAX_BOUNDS } from "@/lib/bounds";
 import { DEFAULT_RING_FILTER, type RingFilter } from "@/features/isochrones/isochrone-view";
-import { amenityBandsForFilter, amenityScopeLabel } from "@/features/isochrones/bands";
-import AmenityPanel from "@/features/map/AmenityPanel";
+import {
+  DEFAULT_PRESET_INDEX,
+  presetMinFor,
+  type PresetIndex,
+} from "@/features/isochrones/preset-reach";
+import { selectPresetRings } from "@/features/isochrones/preset-view";
 import { clusterMarkerSizePx, DONUT_HOVER_SCALE, MAP_MAX_ZOOM } from "@/features/amenities/amenity-cluster";
 import AttributionBadge from "@/features/map/AttributionBadge";
 import {
@@ -41,6 +41,7 @@ import {
   addAmenityLayers,
   addAmenitySpiderLayers,
   addIsochroneLayers,
+  addPresetReachLayers,
   addReachPathLayers,
   addRoutePathLayers,
   createMapStyle,
@@ -69,9 +70,10 @@ import { createSelectionRender } from "@/features/map/selection-render";
 import { createLongPress } from "@/features/map/long-press";
 import { reachBand } from "@/features/map/reach";
 import { teardownInOrder } from "@/features/map/teardown";
-import ModeToggle from "@/features/map/ModeToggle";
+import ModePresetBar from "@/features/map/ModePresetBar";
 import PaceControl from "@/features/map/PaceControl";
-import RingSelector from "@/features/map/RingSelector";
+import LegendPill from "@/features/map/LegendPill";
+import MapPlaceholder from "@/features/map/MapPlaceholder";
 import SearchForm from "@/features/map/SearchForm";
 import RingHint from "@/features/map/RingHint";
 import SelectionCard from "@/features/map/SelectionCard";
@@ -89,7 +91,6 @@ import {
   type SearchSuggestController,
 } from "@/features/search/search-suggest-controller";
 import {
-  effectivePace,
   initialSelectionState,
   sameTimeContext,
   selectionReducer,
@@ -207,9 +208,11 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
   const amenityClusterDisposeRef = useRef<(() => void) | null>(null);
   const applyAmenitySelectionRef = useRef<((categories: AmenityCategoryKey[]) => void) | null>(null);
   const [amenity, setAmenity] = useState<AmenityUi>({ status: "idle", counts: null, countsByBand: null, items: [] });
-  const [selectedAmenityCategories, setSelectedAmenityCategories] = useState<AmenityCategoryKey[]>(
-    ALL_AMENITY_CATEGORY_KEYS,
-  );
+  // The amenity category selection is DORMANT in preset mode (amenities are
+  // deferred to a later amenity pass). The ref is still handed to the amenities
+  // controller at construction, pinned at "all categories" — no UI reads or
+  // writes it while the client is preset-only. a later amenity pass restores the category
+  // preference UI + its localStorage persistence together with the markers.
   const selectedAmenityCategoriesRef = useRef<AmenityCategoryKey[]>(ALL_AMENITY_CATEGORY_KEYS);
   // Mirrored so the map effect's resize handler (empty deps) can read the latest
   // amenity status without re-binding listeners. Updated in an effect — not during
@@ -218,37 +221,6 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
   useEffect(() => {
     amenityRef.current = amenity;
   }, [amenity]);
-
-  useEffect(() => {
-    let frame: number | null = null;
-    try {
-      const stored = parseAmenitySelection(window.localStorage.getItem(AMENITY_PREFERENCE_KEY));
-      if (stored !== null) {
-        frame = window.requestAnimationFrame(() => {
-          selectedAmenityCategoriesRef.current = stored;
-          setSelectedAmenityCategories(stored);
-          applyAmenitySelectionRef.current?.(stored);
-        });
-      }
-    } catch {
-      // Storage may be unavailable in privacy-restricted browsing contexts.
-    }
-    return () => {
-      if (frame !== null) window.cancelAnimationFrame(frame);
-    };
-  }, []);
-
-  function selectAmenityCategories(categories: AmenityCategoryKey[]) {
-    const next = normalizeAmenitySelection(categories);
-    selectedAmenityCategoriesRef.current = next;
-    setSelectedAmenityCategories(next);
-    try {
-      window.localStorage.setItem(AMENITY_PREFERENCE_KEY, serializeAmenitySelection(next));
-    } catch {
-      // Selection still works for this session when persistence is unavailable.
-    }
-    applyAmenitySelectionRef.current?.(next);
-  }
 
   // The two extracted state machines drive the render via useState, but each is
   // mirrored in a ref so a dispatch can be read back synchronously in the same
@@ -260,28 +232,27 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
   const selRef = useRef<SelectionState>(initialSelectionState);
   const comboRef = useRef<ComboboxState>(initialComboboxState);
 
-  // Ring display filter (task 024): which time band(s) the isochrone layers
-  // show. State drives the control + legend; the ref-mirrored applier flips
-  // layer visibility imperatively (the layers persist across selections and
-  // mode toggles, so the filter survives both for free).
-  const [ringFilter, setRingFilter] = useState<RingFilter>(DEFAULT_RING_FILTER);
+  // Phone-first PRESET chip (phone-first): which of the two calibrated presets is the
+  // OUTER reach edge (index 0 = smaller/default — walk 10 / transit 20 / car 10;
+  // index 1 = larger). State drives the chip row + legend; the ref-mirrored
+  // repaint redraws the stashed served rings at the new index — NO refetch (the
+  // route returned BOTH contours), so the chip is pure client-side visibility.
+  const [presetIndex, setPresetIndex] = useState<PresetIndex>(DEFAULT_PRESET_INDEX);
+  const presetIndexRef = useRef<PresetIndex>(DEFAULT_PRESET_INDEX);
+  const reselectPresetRef = useRef<(() => void) | null>(null);
+  // The legacy ring filter is retired from the phone-first UI but the
+  // amenities controller (dormant in preset mode — amenities are deferred to
+  // a later amenity pass) still reads this ref at construction. Pinned at the default; never
+  // changes while the client is preset-only, so the legacy path stays untouched.
   const ringFilterRef = useRef<RingFilter>(DEFAULT_RING_FILTER);
-  const applyRingFilterRef = useRef<((filter: RingFilter) => void) | null>(null);
-  // Amenity visibility follows the SHADING (task 065): widening or narrowing the rings
-  // re-applies the marker/count subset through the recluster chokepoint. No refetch —
-  // all three bands arrived in one response.
-  const applyRingFilterToAmenitiesRef = useRef<(() => void) | null>(null);
 
-  function selectRingFilter(next: RingFilter) {
-    // No-op re-clicks of the active filter must not cancel an in-flight staged
-    // reveal (applyRingFilter snaps every band to full opacity).
-    if (next === ringFilterRef.current) return;
-    ringFilterRef.current = next;
-    setRingFilter(next);
-    applyRingFilterRef.current?.(next);
-    // Marker + chip visibility must move WITH the shading, or the map shows places
-    // outside the painted area (or hides places inside it).
-    applyRingFilterToAmenitiesRef.current?.();
+  function selectPreset(next: PresetIndex) {
+    if (next === presetIndexRef.current) return;
+    presetIndexRef.current = next;
+    setPresetIndex(next);
+    // Repaint the stashed served rings at the new index — no network, no camera
+    // move (the route already returned both calibrated contours).
+    reselectPresetRef.current?.();
   }
 
   // --- Mobile shell state (task 062): dock pill + sheet peek. The user flags
@@ -363,6 +334,9 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
   // "core flow survives degradation" invariant [node 1]. So: one silent auto-retry, then surface a
   // actionable error whose manual recovery is a full page reload (see the overlay below).
   const [mapLoadFailed, setMapLoadFailed] = useState(false);
+  // Flips true once the live map's `load` fires — the first-paint placeholder
+  // is then covered by the opaque MapLibre canvas and hidden.
+  const [mapReady, setMapReady] = useState(false);
   useEffect(() => {
     let cancelled = false;
     if (typeof performance !== "undefined" && performance.mark) {
@@ -479,9 +453,12 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       cancelPendingAmenityHover,
       resetAmenityHover,
     } = hover;
+    // The ring-reveal controller drives the LEGACY iso-* band layers, which the
+    // preset-only client leaves empty. Kept constructed so `cancelRingReveal`
+    // (selection-render teardown) and the on-load visibility pass stay defined;
+    // the staged `revealRings` is no longer used (the preset shells are the reach).
     const ring = createRingRevealController({ map, el, loadState, reducedMotion, ringFilterRef });
-    const { revealRings, applyRingFilter, cancelRingReveal } = ring;
-    applyRingFilterRef.current = applyRingFilter;
+    const { applyRingFilter, cancelRingReveal } = ring;
     const route = createRoutePathController({ map, el, loadState, reducedMotion, applyCameraPadding });
     const { hitsActiveRoutePath } = route;
     // The right-click journey draw (task 054). Created before the popup (no popup
@@ -556,8 +533,13 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       // just hid. Closing it is the honest answer.
       closeSpider: spider.close,
     });
-    const { renderAmenities, clearAmenities, fetchAmenities, maybeFetchAmenities, applyAmenitySelection } =
-      amenities;
+    // `maybeFetchAmenities` is intentionally NOT destructured: amenities are
+    // DEFERRED in preset mode (phone-first). The
+    // preset-only client runs NO amenity fetch — a later amenity pass re-adds amenities together
+    // with the band-model migration. The controller stays fully constructed
+    // (clusters/spider/popup depend on it) but dormant: its source never receives
+    // data, so every amenity pick/hover falls through to selection.
+    const { renderAmenities, clearAmenities, fetchAmenities, applyAmenitySelection } = amenities;
     // Donut clusters are created AFTER the amenities controller (they read its
     // source) and handed back through the holder, so the controller's single
     // visibility chokepoint can hide them along with the WebGL layers.
@@ -619,18 +601,18 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
     clearAmenitiesRef.current = clearAmenities;
     fetchAmenitiesRef.current = fetchAmenities;
     applyAmenitySelectionRef.current = applyAmenitySelection;
-    applyRingFilterToAmenitiesRef.current = amenities.applyRingFilterToAmenities;
     const selectionRender = createSelectionRender({
       map,
       el,
       loadState,
       reducedMotion,
-      revealRings,
+      presetIndexRef,
       cancelRingReveal,
       applyCameraPadding,
       closeStopPopup,
     });
-    const { renderSelection, clearSelection } = selectionRender;
+    const { renderSelection, reselectPreset, clearSelection } = selectionRender;
+    reselectPresetRef.current = reselectPreset;
     // Stash the rendered rings+mode+origin for the right-click reach popup, and
     // clear them whenever the selection is dropped, so a right-click never reads
     // stale geometry (task 052 D).
@@ -686,7 +668,10 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       abortRef,
       clearSelection: clearSelectionReach,
       clearAmenities,
-      maybeFetchAmenities,
+      // Amenities are deferred in preset mode (phone-first) — the select flow never
+      // fetches them. A no-op keeps the orchestrator generic (a later amenity pass restores a
+      // real fetch here with the band-model migration).
+      maybeFetchAmenities: () => {},
       renderSelection: renderSelectionStash,
     });
     selectRef.current = selectFlow.select;
@@ -704,6 +689,10 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       // order: isochrone fills, then a selected line's path, then the amenity
       // markers on top (their hover/click affordance stays primary).
       addIsochroneLayers(map);
+      // Phone-first PRESET reach layers (phone-first) — additive, alongside the legacy
+      // iso-* bands; the preset-only client paints these (the legacy bands stay
+      // for the byte-identical non-preset serving path + migrated e2e).
+      addPresetReachLayers(map);
       addRoutePathLayers(map);
       addReachPathLayers(map); // task 054: between the OSM route path and the markers
       addAmenityLayers(map);
@@ -741,9 +730,8 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
 
       loadState.styleLoaded = true;
       applyCameraPadding(false);
-      // Layers are born all-visible; bring them in line with the active filter
-      // (the ref reads the state mirror set by selectRingFilter — on first load
-      // that is the default).
+      // Legacy iso-* band layers are born all-visible; pin them to the default
+      // filter so they hold a defined (empty, in preset mode) visibility state.
       applyRingFilter(ringFilterRef.current);
       if (loadState.pending) {
         const p = loadState.pending;
@@ -761,6 +749,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       // dock open (review/review). No-op when nothing was drawn.
       reachDirections.reframe();
       el.dataset.mapLoaded = "true";
+      setMapReady(true); // cover + hide the first-paint placeholder
       // Symmetric with `hf:interactive` (task 017): marks when the deferred engine has finished
       // loading and the map is visible unprompted — the perf harness reports both, so shell-
       // interactive vs map-visible are separable on the emulator AND a real device.
@@ -827,7 +816,20 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
       const departureIso = sel.departure?.iso;
       const preset = sel.timeContext.preset;
       const stash = reachRef.current;
-      const band = stash && stash.mode === "transit" ? reachBand(coords, stash.rings) ?? 45 : 45;
+      // The reach CEILING the trip is framed against (task 057). It must be the
+      // reach the map ACTUALLY DRAWS — the SELECTED transit preset — not a hidden
+      // larger contour: the client paints only the selected chip, so a point beyond
+      // it is "beyond your ~{selected}-min reach", never framed against the 40-min
+      // contour when the 20 chip is showing (impl review). When transit rings are
+      // already drawn, refine to the point's own band within the DRAWN set. Always
+      // a number, so the honesty copy never renders "undefined".
+      const transitSelectedMin = presetMinFor("transit", presetIndexRef.current);
+      let band = transitSelectedMin;
+      if (stash && stash.mode === "transit") {
+        const drawn = selectPresetRings(stash.rings, "transit", transitSelectedMin);
+        const drawnRings = drawn ? [...drawn.interiorRings, drawn.outer] : stash.rings;
+        band = reachBand(coords, drawnRings) ?? transitSelectedMin;
+      }
       const params = new URLSearchParams({
         fromLat: String(origin.lat),
         fromLng: String(origin.lng),
@@ -1039,13 +1041,12 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
           () => document.removeEventListener("keydown", onKeyDown),
           () => {
             applyAmenitySelectionRef.current = null;
-            applyRingFilterToAmenitiesRef.current = null;
             clearAmenitiesRef.current = null;
             fetchAmenitiesRef.current = null;
             inspectAmenityRef.current = null;
             amenityClustersRef.current = null;
             amenityClusterDisposeRef.current = null;
-            applyRingFilterRef.current = null;
+            reselectPresetRef.current = null;
             selectRef.current = null;
             reachControllerRef.current = null;
           },
@@ -1145,23 +1146,8 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
     if (selRef.current.mode !== "walk") recomputeCurrent();
   }
 
-  // Manual retry from the AmenityPanel error state. Restarts the attempt
-  // counter (a fresh user gesture earns a fresh auto-retry); the origin is the
-  // one whose fetch failed — an error never clears it, only a new selection does.
-  function retryAmenities() {
-    const origin = amenityOriginRef.current;
-    // Same effective-pace rule as the main fetch (task 052 P4): a retry in a
-    // non-walk mode must use Normal, not a pace remembered from Walk.
-    if (origin) {
-      fetchAmenitiesRef.current?.(
-        origin,
-        0,
-        effectivePace(selRef.current.mode, selRef.current.pace),
-        selRef.current.mode,
-        selRef.current.timeContext,
-      );
-    }
-  }
+  // (Amenity manual-retry lived here; removed with the AmenityPanel in preset
+  // mode — amenities are deferred to a later amenity pass, which restores both.)
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -1192,16 +1178,10 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
 
   const sel = selState;
   const combo = comboState;
-  const amenityCounts = amenity.counts;
-  // The Browse list must show the SAME places as the map: those in the bands currently
-  // shaded (task 065). `amenity.items` is the raw all-band payload — kept whole so a
-  // ring-filter change needs no refetch — so the band restriction is applied here, at
-  // the one place the list is handed its data. Without this the chips and the map would
-  // narrow with the rings while the list kept listing places outside them.
-  const amenityVisibleItems = useMemo(
-    () => filterAmenityItems(amenity.items, ALL_AMENITY_CATEGORY_KEYS, "", amenityBandsForFilter(ringFilter)),
-    [amenity.items, ringFilter],
-  );
+  // The selected preset minute for the active mode (walk 10/20, transit 20/40,
+  // car 10/25) — the reach edge every label/legend/copy derives from, so they can
+  // never disagree with the painted contour.
+  const selectedMin = presetMinFor(sel.mode, presetIndex);
   const reachActive = reachView !== null;
   // The reach directions dock counts as a result surface (task 058): the sheet
   // renders — and camera padding holds — whenever there's a selection OR reach.
@@ -1240,7 +1220,12 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
 
   return (
     <div
-      className="hf-map-shell absolute inset-0"
+      // `isolate` establishes a stacking context so the first-paint placeholder's
+      // `-z-10` stays WITHIN this shell (above the shell's transparent backdrop,
+      // below the static map canvas) instead of escaping to the page's isolated
+      // <main> and painting behind its opaque background — where it was invisible
+      // during MapLibre load (impl review).
+      className="hf-map-shell absolute inset-0 isolate"
       data-has-results={hasResults ? "true" : "false"}
       data-dock-state={shell.dock}
       data-sheet-state={shell.sheet}
@@ -1253,15 +1238,18 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
             dismissible floating one-liner instead (see RingHint). */}
         <RingHint
           mode={sel.mode}
-          ringFilter={ringFilter}
-          active={isMobileShell && sheetPeek && !reachActive && sel.lastSelection !== null}
+          selectedMin={selectedMin}
+          // Gated on !loading so a mode toggle (which flips sel.mode + selectedMin
+          // immediately, then recomputes) never shows the NEW mode's reach copy
+          // while the map is mid-fetch and the reach is cleared (impl review).
+          active={isMobileShell && sheetPeek && !reachActive && sel.lastSelection !== null && sel.status !== "loading"}
         />
         <div className="hf-command-dock absolute inset-x-3 top-[4.7rem] z-30 sm:inset-x-4 sm:top-[5.25rem] md:bottom-auto md:left-4 md:right-auto md:top-[5.15rem] md:w-[388px]">
           {shell.dock === "collapsed" && sel.lastSelection ? (
             <StatePill
               label={sel.lastSelection.label}
               mode={sel.mode}
-              ringFilter={ringFilter}
+              selectedMin={selectedMin}
               loading={sel.status === "loading"}
               onExpand={() => {
                 setDockOpen(true);
@@ -1322,19 +1310,34 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
                 onHover={(index) => dispatchCombo({ type: "hover", index })}
               />
             </div>
-            {/* Stacked full-width rows by default so the 3-up mode toggle (task
-                053) keeps ≥44px-wide touch targets and "Public transport" never
-                clips on phones (375/412px). Two columns only at md+,
-                where the dock is a fixed 388px and MUST stay one settings row
-                tall to clear the result sheet pinned at md:top-[21.3rem]; on
-                mobile the result sheet is a bottom sheet, so the extra row is free. */}
-            <div className="hf-command-settings mt-3 grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,.82fr)_minmax(184px,1.18fr)]">
-              <ModeToggle mode={sel.mode} onSwitch={switchMode} />
-              <RingSelector value={ringFilter} mode={sel.mode} onSelect={selectRingFilter} />
+            {/* One compact ~48px bar (phone-first design): three mode icons +
+                the active mode's two calibrated presets, inline. Replaces the
+                stacked ModeToggle + 4-option RingSelector — the phone-first client
+                is preset-only, so the reach is a single selected time. A mode
+                whose reach failed is flagged on its icon (the degraded state — never a
+                takeover). */}
+            <div className="hf-command-settings mt-3">
+              <ModePresetBar
+                mode={sel.mode}
+                presetIndex={presetIndex}
+                onSwitchMode={switchMode}
+                onSelectPreset={selectPreset}
+                failedMode={sel.status === "error" ? sel.mode : null}
+              />
             </div>
           </section>
           )}
         </div>
+
+        {/* Slim legend pill (phone-first design): a map-corner pill that expands to
+            the labeled ramp and auto-collapses — never a permanent map cover. Shown
+            once a reach is drawn and the map is mostly free (desktop, or the mobile
+            peek sheet); hidden while directions occupy the sheet. */}
+        {sel.lastSelection && !reachActive && sel.status !== "loading" && (!isMobileShell || sheetPeek) ? (
+          <div className="absolute left-3 z-20 bottom-[max(3.7rem,calc(env(safe-area-inset-bottom)+3.2rem))] sm:left-4 md:bottom-6 md:left-auto md:right-4">
+            <LegendPill mode={sel.mode} selectedMin={selectedMin} />
+          </div>
+        ) : null}
 
         {hasResults ? (
           <section
@@ -1381,42 +1384,26 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
                   </svg>
                 )}
               </button>
+              {/* The refine chip summarises the one live control (walk pace /
+                  transit-car departure) and deep-links to it. The amenity-filters
+                  peek chip is gone in preset mode — amenities are deferred to
+                  a later amenity pass. */}
               {sheetPeek && !reachActive ? (
-                <>
-                  <button
-                    type="button"
-                    data-testid="peek-chip-refine"
-                    aria-label={`${
-                      sel.mode === "walk"
-                        ? `Walking pace: ${sel.pace === "normal" ? "Normal" : "Slow"}`
-                        : `Time: ${TIME_PRESETS[sel.timeContext.preset].label}`
-                    }. Open settings`}
-                    onClick={() => expandSheetTo("refine")}
-                    className="min-h-11 shrink-0 rounded-full border border-white/[.09] bg-white/[.045] px-3 text-[0.66rem] font-semibold text-[#9ca9a0] transition-colors hover:bg-white/[.08] hover:text-[#edf2ed]"
-                  >
-                    {sel.mode === "walk"
-                      ? (sel.pace === "normal" ? "Normal" : "Slow")
-                      : TIME_PRESETS[sel.timeContext.preset].label}
-                  </button>
-                  <button
-                    type="button"
-                    data-testid="peek-chip-filters"
-                    aria-label={`Amenity filters: ${selectedAmenityCategories.length} of ${ALL_AMENITY_CATEGORY_KEYS.length} categories shown (${selectedAmenityCategories.join(", ")}). Open filters`}
-                    onClick={() => expandSheetTo("amenities")}
-                    className="flex min-h-11 shrink-0 items-center gap-1.5 rounded-full border border-white/[.09] bg-white/[.045] px-3 text-[0.66rem] font-semibold text-[#9ca9a0] transition-colors hover:bg-white/[.08] hover:text-[#edf2ed]"
-                  >
-                    {/* WHICH categories are on, not just how many (found in
-                        review — the owner asked to always see what is
-                        selected): one dot per active category, in its map
-                        color. */}
-                    <span aria-hidden="true" className="flex items-center gap-0.5">
-                      {AMENITY_CATEGORIES.filter((c) => selectedAmenityCategories.includes(c.key)).map((c) => (
-                        <span key={c.key} className="size-1.5 rounded-full" style={{ background: c.color }} />
-                      ))}
-                    </span>
-                    {selectedAmenityCategories.length}/{ALL_AMENITY_CATEGORY_KEYS.length}
-                  </button>
-                </>
+                <button
+                  type="button"
+                  data-testid="peek-chip-refine"
+                  aria-label={`${
+                    sel.mode === "walk"
+                      ? `Walking pace: ${sel.pace === "normal" ? "Normal" : "Slow"}`
+                      : `Time: ${TIME_PRESETS[sel.timeContext.preset].label}`
+                  }. Open settings`}
+                  onClick={() => expandSheetTo("refine")}
+                  className="min-h-11 shrink-0 rounded-full border border-white/[.09] bg-white/[.045] px-3 text-[0.66rem] font-semibold text-[#9ca9a0] transition-colors hover:bg-white/[.08] hover:text-[#edf2ed]"
+                >
+                  {sel.mode === "walk"
+                    ? (sel.pace === "normal" ? "Normal" : "Slow")
+                    : TIME_PRESETS[sel.timeContext.preset].label}
+                </button>
               ) : null}
             </div>
             ) : null}
@@ -1428,7 +1415,7 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
                 label={sel.label}
                 message={sel.message}
                 mode={sel.mode}
-                ringFilter={ringFilter}
+                selectedMin={selectedMin}
                 loading={sel.status === "loading"}
                 departure={sel.departure}
                 car={sel.car}
@@ -1440,39 +1427,13 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
                   time-aware for traffic realism). They are never merged into one
                   non-walk wrapper (that would resurrect pace in car). Exactly one
                   control renders per mode, so the bordered cluster is never empty.
-                  Keeps the top command dock compact (no map-covering rail). */}
+                  Amenities are deferred to a later amenity pass, so this refine cluster is the
+                  whole expanded sheet body in preset mode. */}
               <div ref={refineBlockRef} className="mt-2.5 grid gap-2.5 border-t border-white/[.07] pt-2.5">
                 {sel.mode === "walk" ? <PaceControl pace={sel.pace} onSelect={setPace} /> : null}
                 {sel.mode === "transit" || sel.mode === "car" ? (
                   <TimeContextControl value={sel.timeContext} onSelect={setTimeContext} mode={sel.mode} />
                 ) : null}
-              </div>
-              <div ref={amenityBlockRef}>
-              <AmenityPanel
-                // Key on resolved origin + MODE + effective pace, NOT sel.token.
-                //
-                // Task 065 added `mode`: the clip is now the current mode's reach
-                // area, so a Walk↔Transit toggle genuinely replaces the place set and
-                // remounting to reset the open Browse list / text filter is CORRECT —
-                // that transient state described places that are no longer shown.
-                //
-                // The time context is deliberately NOT in this key even though it IS
-                // in the fetch key. Remounting on every crowded↔quiet tap would wipe
-                // the Browse list and filter mid-comparison, reversing the task-051
-                // rationale this key exists for — and task 069 is about to make that
-                // toggle a one-tap mobile control. The contents swap in place instead.
-                // Keyed on the EFFECTIVE pace (task 052 P4) so it matches the pace the
-                // amenities were actually fetched at.
-                key={`${sel.lastSelection?.lat ?? "x"},${sel.lastSelection?.lng ?? "x"}:${sel.mode}:${effectivePace(sel.mode, sel.pace)}`}
-                status={amenity.status}
-                counts={amenityCounts}
-                scopeLabel={amenityScopeLabel(sel.mode, ringFilter)}
-                items={amenityVisibleItems}
-                selectedCategories={selectedAmenityCategories}
-                onSelectedCategoriesChange={selectAmenityCategories}
-                onRetry={retryAmenities}
-                onInspect={(item) => inspectAmenityRef.current?.(item)}
-              />
               </div>
             </div>
           </section>
@@ -1527,6 +1488,11 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
 
       {utilityHeader}
 
+      {/* First-paint realistic map placeholder (phone-first design): sits behind the map
+          canvas so no state ever shows a dark void; covered + hidden once MapLibre
+          mounts. Inline SVG, no network/JS on the critical path (task-017 contract). */}
+      <MapPlaceholder hidden={mapReady} />
+
       {/* Kept after the command UI in DOM order so keyboard navigation starts
           with search, while the explicit overlay z-index still places the
           controls visually above this full-bleed canvas. */}
@@ -1566,7 +1532,13 @@ export default function AppMap({ utilityHeader }: AppMapProps) {
         </div>
       )}
 
-      <AttributionBadge elevated={hasResults} />
+      {/* Basemap attribution (OSM · ESA WorldCover · Natural Earth) is present in
+          EVERY state via the always-on MapLibre AttributionControl (map init).
+          The Transitous provider credit is the ADDITIONAL transit obligation
+          (phone-first design) — shown whenever transit data is displayed: a transit
+          reach, or a right-click journey (MOTIS/Transitous). Not on walk/car
+          states, where showing it would imply transit data that isn't there. */}
+      {sel.mode === "transit" || reachActive ? <AttributionBadge elevated={hasResults} /> : null}
     </div>
   );
 }

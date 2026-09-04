@@ -10,6 +10,15 @@ import {
 } from "@/features/amenities/amenity-cluster";
 import { amenityIconImageExpression } from "@/features/amenities/amenity-icons";
 import { RING_BANDS } from "@/features/isochrones/isochrone-view";
+import {
+  PRESET_EDGE_LAYER,
+  PRESET_FILL_LAYER,
+  PRESET_FILL_OPACITY,
+  PRESET_FILL_SOURCE,
+  PRESET_INTERIOR_LAYER,
+  PRESET_LINE_OPACITY,
+  PRESET_LINE_SOURCE,
+} from "@/features/isochrones/preset-view";
 
 /**
  * Pure MapLibre setup: the basemap style and the source/layer definitions,
@@ -107,6 +116,58 @@ export function addIsochroneLayers(map: LayerHost): void {
       },
     });
   }
+}
+
+/**
+ * PRESET reach layers (phone-first, task 022) — ADDITIVE, alongside the legacy
+ * `iso-*` band layers (which stay byte-identical). Two sources:
+ *  - `preset-reach-fill`: the DECORATIVE gradient shells (`buildPresetShellFeatures`), each a
+ *    flat translucent fill carrying its own ramp `fillColor`; stacked in source order they read
+ *    as one continuous light→dark ramp. NOT a per-minute time claim (see preset-view.ts).
+ *  - `preset-reach-line`: the honest contour LINES (`buildPresetContourFeatures`) — the outer
+ *    edge (solid) and the single calibrated interior line (dashed). `line-dasharray` is not
+ *    data-driven in MapLibre, so edge vs interior are TWO layers over one source, split by the
+ *    feature's `kind`.
+ * One mode's reach shows at a time, so — like the `iso-*` layers — the per-feature colour lets
+ * every mode reuse these layers. */
+export function addPresetReachLayers(map: LayerHost): void {
+  map.addSource(PRESET_FILL_SOURCE, { type: "geojson", data: EMPTY_FC as GeoJSON.FeatureCollection });
+  map.addSource(PRESET_LINE_SOURCE, { type: "geojson", data: EMPTY_FC as GeoJSON.FeatureCollection });
+  map.addLayer({
+    id: PRESET_FILL_LAYER,
+    type: "fill",
+    source: PRESET_FILL_SOURCE,
+    paint: {
+      "fill-color": ["get", "fillColor"],
+      "fill-opacity": PRESET_FILL_OPACITY,
+      "fill-opacity-transition": { duration: 320, delay: 0 },
+    },
+  });
+  map.addLayer({
+    id: PRESET_EDGE_LAYER,
+    type: "line",
+    source: PRESET_LINE_SOURCE,
+    filter: ["==", ["get", "kind"], "edge"] as maplibregl.FilterSpecification,
+    paint: {
+      "line-color": ["get", "lineColor"],
+      "line-width": 2,
+      "line-opacity": PRESET_LINE_OPACITY,
+      "line-opacity-transition": { duration: 320, delay: 0 },
+    },
+  });
+  map.addLayer({
+    id: PRESET_INTERIOR_LAYER,
+    type: "line",
+    source: PRESET_LINE_SOURCE,
+    filter: ["==", ["get", "kind"], "interior"] as maplibregl.FilterSpecification,
+    paint: {
+      "line-color": ["get", "lineColor"],
+      "line-width": 1.6,
+      "line-dasharray": [5, 4],
+      "line-opacity": 0.85,
+      "line-opacity-transition": { duration: 320, delay: 0 },
+    },
+  });
 }
 
 /** Highlighted transit-route color (task 024): near-white reads as "figure" on

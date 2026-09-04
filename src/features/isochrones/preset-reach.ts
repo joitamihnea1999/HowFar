@@ -70,6 +70,39 @@ export const TRANSIT_PRESET_MIN = [20, 40] as const;
 
 export type Mode = "walk" | "transit" | "car";
 
+/**
+ * The two selectable preset chips per mode, smaller→larger (the phone-first top
+ * bar). ONE home for the mapping, derived from the per-mode constants above so a
+ * chip list can never disagree with the served/calibrated minutes. Index 0 is the
+ * DEFAULT (walk 10 / transit 20 / car 10). Exhaustive `Record<Mode,…>` so a new
+ * mode is a compile error, not a silent inherit.
+ */
+export const PRESET_MIN_BY_MODE: Record<Mode, readonly number[]> = {
+  walk: WALK_PRESET_MIN,
+  transit: TRANSIT_PRESET_MIN,
+  car: CAR_PRESET_MIN,
+};
+
+/** A selectable preset index (0 = smaller/default, 1 = larger). The phone-first
+ * chip row is exactly these two, mode-independent, so the index survives a mode
+ * switch (index 0 = walk 10 / transit 20 / car 10; index 1 = walk 20 / transit
+ * 40 / car 25). */
+export type PresetIndex = 0 | 1;
+export const DEFAULT_PRESET_INDEX: PresetIndex = 0;
+
+/**
+ * The selected preset MINUTE for a mode + chip index. Clamps the index into
+ * range (the UI only ever passes 0/1, but a clamp keeps a stray value on the
+ * ramp rather than reading `undefined`). This is the single lookup the client
+ * render + fetch + chip labels derive the selected minute from, so they can
+ * never disagree.
+ */
+export function presetMinFor(mode: Mode, index: number): number {
+  const mins = PRESET_MIN_BY_MODE[mode];
+  const i = Math.max(0, Math.min(mins.length - 1, Math.trunc(index)));
+  return mins[i]!;
+}
+
 /** Which reach model a route serves. `legacy` = the shipped 15/30/45 (walk/transit)
  *  / 10/20/30 (car) bands; `preset` = the phone-first preset contours. */
 export type ReachModel = "legacy" | "preset";

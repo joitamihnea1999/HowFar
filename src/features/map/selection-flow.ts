@@ -160,17 +160,24 @@ export function effectivePace(mode: Mode, pace: Pace): Pace {
  * Walk carries only `pace`; transit carries `pace` + time; car carries time but
  * NO pace (task 058 — car is time-aware for traffic realism, but pace is a
  * walking concept that must never leak into a car request, plan-panel C-E).
+ *
+ * The phone-first client is PRESET-ONLY: every request carries
+ * `&model=preset`, so the server serves the calibrated preset contours (walk
+ * [10,20] / transit [20,40] / car [10,25]) instead of the legacy 15/30/45 bands.
+ * The `model` param is APPENDED to every mode's URL — the legacy path stays
+ * byte-identical for any caller that omits it (task 020's additive serving).
  * Pure + exported so the exact query contract is unit-testable. */
 export function isochroneUrl(mode: Mode, origin: Origin, pace: Pace, timeContext: TimeContext): string {
   const coords = `?lat=${origin.lat}&lng=${origin.lng}`;
   // Preset-only since task 059 (Custom weekday/time was removed).
   const withTime = (base: string) => `${base}&preset=${timeContext.preset}`;
+  const withModel = (base: string) => `${base}&model=preset`;
   // Car: time params only, NO pace (a Slow pace left over from Walk can
   // never reach /api/car — it doesn't accept pace and we don't emit it).
-  if (mode === "car") return withTime(`${isochronePath(mode)}${coords}`);
+  if (mode === "car") return withModel(withTime(`${isochronePath(mode)}${coords}`));
   const base = `${isochronePath(mode)}${coords}&pace=${pace}`;
-  if (mode !== "transit") return base; // walk: pace only
-  return withTime(base); // transit: pace + time
+  if (mode !== "transit") return withModel(base); // walk: pace only
+  return withModel(withTime(base)); // transit: pace + time
 }
 
 /**

@@ -16,9 +16,18 @@ import { amenityIconImageExpression } from "@/features/amenities/amenity-icons";
 import { RING_BANDS } from "@/features/isochrones/isochrone-view";
 
 import {
+  PRESET_EDGE_LAYER,
+  PRESET_FILL_LAYER,
+  PRESET_FILL_SOURCE,
+  PRESET_INTERIOR_LAYER,
+  PRESET_LINE_SOURCE,
+} from "@/features/isochrones/preset-view";
+
+import {
   addAmenityLayers,
   addAmenitySpiderLayers,
   addIsochroneLayers,
+  addPresetReachLayers,
   addRoutePathLayers,
   AMENITY_LABEL_MINZOOM,
   SPIDER_ICON_LAYER,
@@ -155,6 +164,32 @@ describe("addIsochroneLayers", () => {
         },
       });
     }
+  });
+});
+
+describe("addPresetReachLayers (phone-first — additive, alongside the legacy iso-* bands)", () => {
+  it("adds two empty geojson sources and a fill + edge-line + interior-line layer, split by kind", () => {
+    const { host, sources, layerSpecs } = recorder();
+    addPresetReachLayers(host);
+
+    expect(sources).toEqual([
+      [PRESET_FILL_SOURCE, { type: "geojson", data: EMPTY_FC }],
+      [PRESET_LINE_SOURCE, { type: "geojson", data: EMPTY_FC }],
+    ]);
+    expect(layerSpecs.map((l) => l.id)).toEqual([PRESET_FILL_LAYER, PRESET_EDGE_LAYER, PRESET_INTERIOR_LAYER]);
+
+    const fill = layerSpecs.find((l) => l.id === PRESET_FILL_LAYER)!;
+    expect(fill).toMatchObject({ type: "fill", source: PRESET_FILL_SOURCE, paint: { "fill-color": ["get", "fillColor"] } });
+    // The decorative shells carry NO band/kind filter — they are all painted (stacked → the ramp).
+    expect(fill.filter).toBeUndefined();
+
+    const edge = layerSpecs.find((l) => l.id === PRESET_EDGE_LAYER)!;
+    expect(edge).toMatchObject({ type: "line", source: PRESET_LINE_SOURCE, filter: ["==", ["get", "kind"], "edge"] });
+    expect((edge.paint as Record<string, unknown>)["line-dasharray"]).toBeUndefined(); // edge is SOLID
+
+    const interior = layerSpecs.find((l) => l.id === PRESET_INTERIOR_LAYER)!;
+    expect(interior).toMatchObject({ type: "line", source: PRESET_LINE_SOURCE, filter: ["==", ["get", "kind"], "interior"] });
+    expect((interior.paint as Record<string, unknown>)["line-dasharray"]).toEqual([5, 4]); // interior is DASHED
   });
 });
 
@@ -326,6 +361,7 @@ describe("addAmenityLayers", () => {
     // style-spec is the only unit-level check that would have caught it.
     const { host, sources, layerSpecs } = recorder();
     addIsochroneLayers(host);
+    addPresetReachLayers(host);
     addRoutePathLayers(host);
     addAmenityLayers(host);
     addAmenitySpiderLayers(host);

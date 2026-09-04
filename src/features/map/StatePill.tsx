@@ -1,6 +1,5 @@
 import type { Mode } from "@/features/map/selection-flow";
 import { MODE_LABELS } from "@/features/map/ModeToggle";
-import { bandMinutes, type RingFilter } from "@/features/isochrones/isochrone-view";
 
 /**
  * Collapsed command dock (task 062): a one-line, always-current summary of
@@ -15,14 +14,15 @@ interface StatePillProps {
   /** Resolved origin label (`sel.lastSelection.label` — survives recomputes). */
   label: string;
   mode: Mode;
-  ringFilter: RingFilter;
+  /** The selected preset minute (walk 10/20, transit 20/40, car 10/25). */
+  selectedMin: number;
   /** A recompute is in flight — show it, the pill stays interactive. */
   loading: boolean;
   onExpand: () => void;
 }
 
-export default function StatePill({ label, mode, ringFilter, loading, onExpand }: StatePillProps) {
-  const budget = ringFilter === "all" ? "All rings" : `${bandMinutes(mode, ringFilter)} min`;
+export default function StatePill({ label, mode, selectedMin, loading, onExpand }: StatePillProps) {
+  const budget = `${selectedMin} min`;
   return (
     <button
       type="button"

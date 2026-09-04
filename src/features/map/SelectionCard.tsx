@@ -1,25 +1,27 @@
+import { MODE_ACCENT, MODE_LABEL } from "@/features/isochrones/isochrone-view";
 import {
-  bandMinutes,
-  legendColor,
-  MODE_ACCENT,
-  MODE_LABEL,
-  reachExplainer,
-  visibleLegendBands,
-  type RingFilter,
-} from "@/features/isochrones/isochrone-view";
+  PRESET_GRADIENT_STOPS,
+  presetReachCaveat,
+  presetReachExplainer,
+} from "@/features/isochrones/preset-view";
 import type { CarMeta, Mode } from "@/features/map/selection-flow";
 
 /**
- * Selected-address card: the resolved label + per-mode ring legend, or the
- * failure message. Pure presentation of the selection machine's state. The
- * legend mirrors the ring filter — it never lists a band the map is hiding.
+ * Selected-address card: the resolved label + the phone-first PRESET reach legend
+ * and honest copy, or the failure message. Pure presentation of the selection
+ * machine's state. The legend + explainer derive from the SELECTED preset minute
+ * (walk 10/20, transit 20/40, car 10/25), so they can never claim a reach the map
+ * isn't drawing (phone-first). The honesty caveat (owner honesty requirement) states that the reach
+ * is a typical-street estimate that can overstate near barriers — a BINDING
+ * release blocker, reviewed for overstatement in neither direction.
  */
 
 interface SelectionCardProps {
   label: string | null;
   message: string | null;
   mode: Mode;
-  ringFilter: RingFilter;
+  /** The selected preset minute (the reach edge). */
+  selectedMin: number;
   loading: boolean;
   /** Transit only: the resolved representative departure + summary, so we can
    * honestly qualify the reach (schedule-based, no live traffic — task 051). */
@@ -29,9 +31,11 @@ interface SelectionCardProps {
   car?: CarMeta | null;
 }
 
-export default function SelectionCard({ label, message, mode, ringFilter, loading, departure, car }: SelectionCardProps) {
+export default function SelectionCard({ label, message, mode, selectedMin, loading, departure, car }: SelectionCardProps) {
   if (!label && !message && !loading) return null;
   const modeColor = MODE_ACCENT[mode];
+  const stops = PRESET_GRADIENT_STOPS[mode];
+  const caveat = presetReachCaveat(mode);
   return (
     <div
       aria-live="polite"
@@ -43,7 +47,7 @@ export default function SelectionCard({ label, message, mode, ringFilter, loadin
           <span className="hf-spinner size-5 shrink-0 rounded-full border-2 border-[#c7f36b]/25 border-t-[#c7f36b]" aria-hidden="true" />
           <div>
             <p className="text-sm font-semibold text-[#f4f7f2]">Mapping your everyday reach…</p>
-            <p className="mt-1 text-xs text-[#78857b]">Calculating routes and nearby essentials</p>
+            <p className="mt-1 text-xs text-[#78857b]">Calculating routes across the city</p>
           </div>
         </div>
       ) : message ? (
@@ -82,17 +86,23 @@ export default function SelectionCard({ label, message, mode, ringFilter, loadin
               <span className="size-1.5 rounded-full bg-current" />
               {MODE_LABEL[mode]}
             </span>
-            {visibleLegendBands(ringFilter).map((band) => (
-              <span key={band} className="flex items-center gap-1.5">
-                <span className="inline-block size-2 rounded-full ring-1 ring-white/20" style={{ background: legendColor(mode, band) }} />
-                {bandMinutes(mode, band)} min
-              </span>
-            ))}
+            <span className="flex items-center gap-1.5">
+              <span
+                className="inline-block h-2 w-8 rounded-full ring-1 ring-white/20"
+                style={{ background: `linear-gradient(90deg, ${stops.origin}, ${stops.mid}, ${stops.edge})` }}
+              />
+              <span data-testid="reach-minutes" className="tabular-nums">≤ {selectedMin} min</span>
+            </span>
             <span className="ml-auto text-[#667269]">shown on map</span>
           </div>
           <p data-testid="ring-explainer" className="mt-2 text-[0.68rem] leading-4 text-[#9ca9a0]">
-            {reachExplainer(mode, ringFilter)}
+            {presetReachExplainer(mode, selectedMin)}
           </p>
+          {caveat ? (
+            <p data-testid="reach-caveat" className="mt-2 text-[0.66rem] leading-4 text-[#667269]">
+              {caveat}
+            </p>
+          ) : null}
           {mode === "transit" && departure ? (
             <p data-testid="transit-departure-note" className="mt-2 text-[0.68rem] leading-4 text-[#667269]">
               Scheduled public transport for <span className="text-[#9ca9a0]">{departure.summary}</span> — from

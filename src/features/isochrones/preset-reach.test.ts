@@ -8,10 +8,13 @@ import {
   allPresetWalkRangesS,
   ALL_PRESET_WALK_MIN,
   assertSeparated,
+  CAR_PRESET_MIN,
   carPresetRangeS,
   carPresetRangeSetS,
   MIN_RANGE_SEPARATION_S,
   presetContourMinutes,
+  PRESET_MIN_BY_MODE,
+  presetMinFor,
   TRANSIT_PRESET_MIN,
   WALK_PRESET_MIN,
   walkPresetRangeS,
@@ -163,5 +166,35 @@ describe("preset-reach — allPresetWalkRangesS (the one [10,20,40] walk fetch, 
       (WALK_PRESET_MIN as readonly number[]).includes(m),
     );
     expect(sliced).toEqual([...WALK_PRESET_MIN]);
+  });
+});
+
+describe("PRESET_MIN_BY_MODE + presetMinFor (phone-first chip index → selected minute)", () => {
+  it("maps each mode to its two selectable chips smaller→larger, tied to the per-mode constants (one home)", () => {
+    expect(PRESET_MIN_BY_MODE.walk).toEqual([...WALK_PRESET_MIN]);
+    expect(PRESET_MIN_BY_MODE.transit).toEqual([...TRANSIT_PRESET_MIN]);
+    expect(PRESET_MIN_BY_MODE.car).toEqual([...CAR_PRESET_MIN]);
+  });
+
+  it("index 0 is the DESIGN default (walk 10 / transit 20 / car 10); index 1 is the larger chip", () => {
+    expect(presetMinFor("walk", 0)).toBe(10);
+    expect(presetMinFor("walk", 1)).toBe(20);
+    expect(presetMinFor("transit", 0)).toBe(20);
+    expect(presetMinFor("transit", 1)).toBe(40);
+    expect(presetMinFor("car", 0)).toBe(10);
+    expect(presetMinFor("car", 1)).toBe(25);
+  });
+
+  it("every selected minute is an exact selectable preset — presetContourMinutes accepts it (never throws)", () => {
+    for (const mode of ["walk", "transit", "car"] as const) {
+      for (const index of [0, 1] as const) {
+        expect(() => presetContourMinutes(mode, presetMinFor(mode, index))).not.toThrow();
+      }
+    }
+  });
+
+  it("clamps a stray index into range rather than reading undefined", () => {
+    expect(presetMinFor("walk", -1)).toBe(10);
+    expect(presetMinFor("walk", 5)).toBe(20);
   });
 });

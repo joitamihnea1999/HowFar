@@ -58,6 +58,21 @@ export const MODE_LABELS: Record<Mode, string> = {
   car: "Car",
 };
 
+/** The mode glyphs, shared so the compact phone-first bar (`ModePresetBar`)
+ * reuses the exact icons this toggle draws rather than a second, drifting copy. */
+export const MODE_ICONS: Record<Mode, ReactNode> = {
+  walk: WalkIcon,
+  transit: TransitIcon,
+  car: CarIcon,
+};
+
+/** Per-mode active-state classes (hue tint), shared with the compact bar. */
+export const MODE_ACTIVE_CLASS: Record<Mode, string> = {
+  walk: "bg-[#2dd4bf] text-[#07221d] shadow-[0_5px_16px_rgba(45,212,191,.16)]",
+  transit: "bg-[#a78bfa] text-[#1d1238] shadow-[0_5px_16px_rgba(167,139,250,.18)]",
+  car: "bg-[#3b82f6] text-[#0a1633] shadow-[0_5px_16px_rgba(59,130,246,.2)]",
+};
+
 const MODES: ModeDef[] = [
   {
     id: "walk",

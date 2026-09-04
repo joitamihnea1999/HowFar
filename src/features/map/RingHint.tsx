@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { reachExplainer, type RingFilter } from "@/features/isochrones/isochrone-view";
+import { presetReachCaveat, presetReachExplainer } from "@/features/isochrones/preset-view";
 import type { Mode } from "@/features/map/selection-flow";
 
 /**
@@ -19,13 +19,14 @@ export const RING_HINT_DISMISSED_KEY = "hf:ring-hint-dismissed:v1";
 
 interface RingHintProps {
   mode: Mode;
-  ringFilter: RingFilter;
+  /** The selected preset minute (walk 10/20, transit 20/40, car 10/25). */
+  selectedMin: number;
   /** The surface condition: mobile shell + peek sheet + resolved selection +
    * no directions open. Evaluated by AppMap, which owns the shell state. */
   active: boolean;
 }
 
-export default function RingHint({ mode, ringFilter, active }: RingHintProps) {
+export default function RingHint({ mode, selectedMin, active }: RingHintProps) {
   // Read the persisted dismissal AFTER mount: SSR has no localStorage, and
   // reading it lazily during render would hydration-mismatch a dismissed user.
   // `null` = not yet known → render nothing (no flash for returning users).
@@ -61,7 +62,16 @@ export default function RingHint({ mode, ringFilter, active }: RingHintProps) {
       role="status"
       className="pointer-events-auto absolute inset-x-10 bottom-[calc(var(--hf-sheet-clearance,0px)+0.5rem)] z-20 mx-auto flex max-w-[26rem] items-center gap-1 rounded-xl border border-white/[.1] bg-[#0d110e]/92 py-1 pl-3 pr-1 shadow-[0_10px_30px_rgba(0,0,0,.35)] backdrop-blur-xl md:hidden"
     >
-      <p className="min-w-0 flex-1 text-[0.68rem] leading-4 text-[#c9d3cc]">{reachExplainer(mode, ringFilter)}</p>
+      {/* The barrier caveat rides HERE on the mobile peek surface — the SelectionCard
+          that also carries it is `hidden` while the sheet is peeked (the phone-first
+          default), so without this the honesty rider would never reach a phone user
+          (impl review). */}
+      <p className="min-w-0 flex-1 text-[0.68rem] leading-4 text-[#c9d3cc]">
+        {presetReachExplainer(mode, selectedMin)}
+        {presetReachCaveat(mode) ? (
+          <span className="mt-0.5 block text-[0.62rem] leading-4 text-[#8b978e]">{presetReachCaveat(mode)}</span>
+        ) : null}
+      </p>
       <button
         type="button"
         aria-label="Dismiss explanation"

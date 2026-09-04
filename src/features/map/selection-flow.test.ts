@@ -361,7 +361,7 @@ describe("effectivePace (task 052 — pace is walk-only)", () => {
     // Slow was chosen in Walk; switching to transit must request Normal.
     const req = effectivePace("transit", "slow");
     expect(isochroneUrl("transit", ORIGIN, req, { kind: "preset", preset: "quiet" })).toBe(
-      "/api/transit?lat=44.4268&lng=26.1025&pace=normal&preset=quiet",
+      "/api/transit?lat=44.4268&lng=26.1025&pace=normal&preset=quiet&model=preset",
     );
     expect(`/api/amenities?lat=${ORIGIN.lat}&lng=${ORIGIN.lng}&pace=${req}`).toBe(
       "/api/amenities?lat=44.4268&lng=26.1025&pace=normal",
@@ -372,29 +372,33 @@ describe("effectivePace (task 052 — pace is walk-only)", () => {
 });
 
 describe("isochroneUrl (task 051 query contract)", () => {
-  it("walk carries only pace", () => {
+  // The phone-first client is preset-only: EVERY isochrone URL carries
+  // `&model=preset` so the server serves the calibrated preset contours (walk
+  // [10,20], transit [20,40], car [10,25]). The legacy 15/30/45 path is what a
+  // caller that omits `model` still gets (proven server-side), byte-identical.
+  it("walk carries pace + &model=preset", () => {
     expect(isochroneUrl("walk", ORIGIN, "slow", { kind: "preset", preset: "crowded" })).toBe(
-      "/api/isochrone?lat=44.4268&lng=26.1025&pace=slow",
+      "/api/isochrone?lat=44.4268&lng=26.1025&pace=slow&model=preset",
     );
   });
-  it("transit preset adds &preset (both options)", () => {
+  it("transit carries pace + &preset + &model=preset (both time options)", () => {
     expect(isochroneUrl("transit", ORIGIN, "normal", { kind: "preset", preset: "crowded" })).toBe(
-      "/api/transit?lat=44.4268&lng=26.1025&pace=normal&preset=crowded",
+      "/api/transit?lat=44.4268&lng=26.1025&pace=normal&preset=crowded&model=preset",
     );
     expect(isochroneUrl("transit", ORIGIN, "normal", { kind: "preset", preset: "quiet" })).toBe(
-      "/api/transit?lat=44.4268&lng=26.1025&pace=normal&preset=quiet",
+      "/api/transit?lat=44.4268&lng=26.1025&pace=normal&preset=quiet&model=preset",
     );
   });
-  it("car carries the preset TIME but NEVER pace (task 058: time-aware for traffic, pace stays a walk concept)", () => {
+  it("car carries the preset TIME + &model=preset but NEVER pace (task 058: time-aware for traffic, pace stays a walk concept)", () => {
     // Even with a Slow pace left over from Walk, the car URL must not emit pace
     // (a walk concept /api/car doesn't accept) — but it DOES carry the preset so
-    // the traffic slot can be resolved (task 058).
+    // the traffic slot can be resolved (task 058) plus the preset reach model.
     const crowded = isochroneUrl("car", ORIGIN, "slow", { kind: "preset", preset: "crowded" });
-    expect(crowded).toBe("/api/car?lat=44.4268&lng=26.1025&preset=crowded");
+    expect(crowded).toBe("/api/car?lat=44.4268&lng=26.1025&preset=crowded&model=preset");
     expect(crowded).not.toMatch(/pace/);
 
     const quiet = isochroneUrl("car", ORIGIN, "slow", { kind: "preset", preset: "quiet" });
-    expect(quiet).toBe("/api/car?lat=44.4268&lng=26.1025&preset=quiet");
+    expect(quiet).toBe("/api/car?lat=44.4268&lng=26.1025&preset=quiet&model=preset");
     expect(quiet).not.toMatch(/pace/);
   });
 });
